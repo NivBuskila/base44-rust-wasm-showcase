@@ -190,6 +190,13 @@ impl OpticalFlow {
     }
 
     /// Flow field in grid cells per second.
+    ///
+    /// "Cells" here are cells of *this* grid ([`FLOW_W` x `FLOW_H`][crate::config],
+    /// 128x72), not of the fluid grid: a consumer that resamples the field onto
+    /// the 256x144 fluid needs to scale the vectors by the resolution ratio for
+    /// physically exact velocities. `params.flow_force` absorbs that constant
+    /// today, which is why the drive path in [`crate::spells`] samples the field
+    /// without rescaling it.
     #[inline]
     pub fn flow(&self) -> &VecField {
         &self.flow
