@@ -37,6 +37,8 @@ uniform vec3 u_camTint;
 uniform vec3 u_camEdge;
 /** How hard the camera's toe is crushed: 1 buries the room, 0 leaves it linear. */
 uniform float u_camToe;
+/** 1 shows the feed as a plain colour camera; 0 applies the treated look. */
+uniform float u_camRaw;
 uniform float u_dyeAmount;
 uniform float u_bgAmount;
 uniform float u_hasVideo;
@@ -139,6 +141,11 @@ vec3 dyeRadiance(vec2 uv) {
  * camera view mixes most of it back out, because there the feed is the point.
  */
 vec3 treatedCamera(vec2 iuv) {
+  if (u_camRaw >= 1.0) {
+    // A regular camera: the feed's own colour, sRGB-decoded so the linear
+    // chain and the transfer at the end hand it back unchanged.
+    return pow(texture(u_video, iuv).rgb, vec3(2.2));
+  }
   vec2 o = u_videoTexel * 2.0;
   float c = luma(texture(u_video, iuv).rgb);
   float xl = luma(texture(u_video, iuv - vec2(o.x, 0.0)).rgb);

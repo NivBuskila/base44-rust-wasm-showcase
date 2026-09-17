@@ -104,6 +104,10 @@ interface ModeStyle {
   camEdge: readonly [number, number, number];
   /** Camera toe strength; 1 buries the room, 0 leaves the feed linear. */
   camToe: number;
+  /** 1 shows the feed as a plain colour camera, bypassing tint, toe and rim. */
+  camRaw: number;
+  /** 1 applies the filmic tone map and grade in the composite; 0 passes through. */
+  grade: number;
   particles: number;
   /** Hand skeleton overlay alpha. */
   overlay: number;
@@ -127,6 +131,8 @@ const STYLES: Record<ViewMode, ModeStyle> = {
     camTint: [0.0065, 0.0105, 0.0215],
     camEdge: [0.018, 0.048, 0.088],
     camToe: 1,
+    camRaw: 0,
+    grade: 1,
     particles: 1,
     overlay: 0.35,
     bloom: 0.95,
@@ -135,21 +141,24 @@ const STYLES: Record<ViewMode, ModeStyle> = {
     aberration: 0.55,
     vignette: 0.52,
   },
-  // Camera-forward: the feed is still treated, just not crushed, and the fluid
-  // becomes the faint overlay instead of the subject.
+  // A regular camera: the feed in its own colour with no tint, toe, bloom,
+  // grade, fringe or vignette. The fluid stays as a faint overlay and the
+  // hand skeleton is drawn in full so tracking can be checked against the feed.
   camera: {
-    bg: 0.45,
-    dye: 0.34,
-    camTint: [0.85, 0.96, 1.18],
-    camEdge: [0.05, 0.13, 0.24],
-    camToe: 0.3,
-    particles: 0.4,
+    bg: 0,
+    dye: 0.25,
+    camTint: [1, 1, 1],
+    camEdge: [0, 0, 0],
+    camToe: 0,
+    camRaw: 1,
+    grade: 0,
+    particles: 0,
     overlay: 1.0,
-    bloom: 0.45,
-    threshold: 0.9,
+    bloom: 0,
+    threshold: 1,
     exposure: 1.0,
-    aberration: 0.3,
-    vignette: 0.42,
+    aberration: 0,
+    vignette: 0,
   },
   // Particles on black, with the bloom pushed: this is the mode where the
   // point cloud has to carry the whole image on its own.
@@ -159,6 +168,8 @@ const STYLES: Record<ViewMode, ModeStyle> = {
     camTint: [0, 0, 0],
     camEdge: [0, 0, 0],
     camToe: 1,
+    camRaw: 0,
+    grade: 1,
     particles: 1.3,
     overlay: 0,
     bloom: 1.25,
@@ -175,6 +186,8 @@ const STYLES: Record<ViewMode, ModeStyle> = {
     camTint: [0, 0, 0],
     camEdge: [0, 0, 0],
     camToe: 1,
+    camRaw: 0,
+    grade: 1,
     particles: 0,
     overlay: 0,
     bloom: 0,
@@ -622,6 +635,7 @@ export class Renderer {
     p.f3('u_camTint', style.camTint[0], style.camTint[1], style.camTint[2]);
     p.f3('u_camEdge', style.camEdge[0], style.camEdge[1], style.camEdge[2]);
     p.f1('u_camToe', style.camToe);
+    p.f1('u_camRaw', style.camRaw);
     p.f2('u_videoTexel', 1 / Math.max(1, this.videoTexW), 1 / Math.max(1, this.videoTexH));
 
     // Cover fit: crop the long axis so the feed fills the canvas at its own
@@ -765,9 +779,11 @@ export class Renderer {
     // makes the whole frame pump, while pushing bloom makes the bright parts
     // bloom harder, which is what "a burst of movement blazes" should feel like.
     p.f1('u_bloomAmount', style.bloom * (0.72 + 0.75 * intensity));
-    p.f1('u_exposure', style.exposure * (0.96 + 0.22 * intensity));
+    // The camera view is ungraded and must not breathe with motion.
+    p.f1('u_exposure', style.exposure * (style.grade > 0 ? 0.96 + 0.22 * intensity : 1));
     p.f1('u_aberration', style.aberration);
     p.f1('u_vignette', style.vignette);
+    p.f1('u_grade', style.grade);
     p.f1('u_frame', this.frameIndex);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
