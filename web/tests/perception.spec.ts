@@ -57,14 +57,19 @@ test('the vision models load and run', async ({ page }) => {
   const after = await page.evaluate(() => window.__aether!.diagnostics());
   console.log(
     `[perception] inference ${after.inferenceCostMs.toFixed(0)} ms, ` +
-      `cadence ${after.perceptionHz.toFixed(2)} Hz, fps ${after.fps.toFixed(1)}`,
+      `cadence ${after.perceptionHz.toFixed(2)} Hz, fps ${after.fps.toFixed(1)}, ` +
+      `status ${after.perception.kind}`,
   );
+  // Deliberately no assertion that it is *still* ready: on hardware where
+  // inference cannot fit the frame budget, standing down is the correct
+  // outcome and the next test covers it. What this test proves is that the
+  // models resolved, loaded and ran at all.
 
   expect(after.stats[13], 'inference fed values that broke the simulation').toBe(0);
   expect(errors, `perception logged errors:\n${errors.join('\n')}`).toEqual([]);
 });
 
-test('inference cost does not collapse the render loop', async ({ page }) => {
+test('inference never reclaims the frame budget', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(
     () => window.__aether?.diagnostics().perception.kind === 'ready',
@@ -75,26 +80,44 @@ test('inference cost does not collapse the render loop', async ({ page }) => {
     timeout: 120_000,
   });
 
-  const { inferenceCostMs, perceptionHz } = await page.evaluate(() =>
-    window.__aether!.diagnostics(),
-  );
+  // Two outcomes are correct, and which one you get depends on the hardware:
+  //
+  //  - inference is affordable, so it is throttled to a bounded share of wall
+  //    time and keeps running;
+  //  - inference is too slow to fit that share even at the maximum interval,
+  //    so it is switched off and the app falls back to the model-free optical
+  //    flow path, with the HUD saying why.
+  //
+  // What is *not* correct is the middle ground this used to sit in: clamping
+  // the interval at its ceiling and carrying on regardless, which measured at
+  // 61% of wall time on a 1224 ms inference — the duty target silently broken
+  // by the very cap meant to bound staleness. The invariant below is the one
+  // that actually matters, and it now holds either way.
+  const diag = await page.evaluate(() => window.__aether!.diagnostics());
+  const duty = (diag.inferenceCostMs * diag.perceptionHz) / 1000;
 
-  // The cadence is derived from measured cost so inference occupies a bounded
-  // share of wall time. A fixed 30 Hz cadence against a 750 ms inference means
-  // every frame starts a call that takes 22 frames, and the loop runs at
-  // inference speed — which is exactly what this used to do.
-  const dutyCycle = (inferenceCostMs * perceptionHz) / 1000;
-  expect(
-    dutyCycle,
-    `inference is consuming ${(dutyCycle * 100).toFixed(0)}% of wall time ` +
-      `(${inferenceCostMs.toFixed(0)} ms at ${perceptionHz.toFixed(2)} Hz)`,
-  ).toBeLessThan(0.55);
+  if (diag.perception.kind === 'ready') {
+    expect(
+      duty,
+      `inference is consuming ${(duty * 100).toFixed(0)}% of wall time ` +
+        `(${diag.inferenceCostMs.toFixed(0)} ms at ${diag.perceptionHz.toFixed(2)} Hz) ` +
+        `while still reporting ready`,
+    ).toBeLessThan(0.55);
+  } else {
+    expect(diag.perception.kind).toBe('unavailable');
+    if (diag.perception.kind === 'unavailable') {
+      // The reason has to be specific enough for a user to act on.
+      expect(diag.perception.reason).toMatch(/ms|slow|motion/i);
+      console.log(`[perception] stood down: ${diag.perception.reason}`);
+    }
+  }
 
-  // And the loop must keep advancing while inference runs.
-  const before = await page.evaluate(() => window.__aether!.diagnostics().frames);
+  // Either way the loop must keep advancing.
+  const before = diag.frames;
   await page.waitForFunction((f) => (window.__aether?.diagnostics().frames ?? 0) > f + 20, before, {
     timeout: 60_000,
   });
+  expect(await page.evaluate(() => window.__aether!.diagnostics().stats[13])).toBe(0);
 });
 
 test('the app is fully usable before the models finish loading', async ({ page }) => {

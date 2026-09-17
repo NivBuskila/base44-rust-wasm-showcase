@@ -31,10 +31,29 @@ const PERCEPTION_MIN_INTERVAL_MS = 1000 / 30;
 
 /**
  * Ceiling on the interval, in ms. Past this, gestures are too stale to feel
- * connected to the hand, and the honest thing is to say perception is degraded
- * rather than keep pretending.
+ * connected to the hand.
+ *
+ * Reaching it is not a stable operating point but a verdict: if the duty
+ * target below cannot be met *within* this interval, inference is too
+ * expensive for this device, full stop. Capping the interval and carrying on
+ * would silently break the duty guarantee — measured at 61% of wall time on a
+ * 1224 ms inference, which is what `PERCEPTION_GIVE_UP_STRIKES` exists to
+ * catch.
  */
 const PERCEPTION_MAX_INTERVAL_MS = 2000;
+
+/**
+ * Consecutive inferences too slow to fit the duty budget before perception is
+ * switched off for the session.
+ *
+ * More than one because the first call includes MediaPipe's own warm-up and is
+ * not representative, and a single slow frame should not cost the user hand
+ * tracking for the rest of the session. When it does trip, the app keeps
+ * working on the Rust optical-flow path and the HUD says why — which is a far
+ * better outcome than a technically-alive gesture layer eating two thirds of
+ * every frame.
+ */
+const PERCEPTION_GIVE_UP_STRIKES = 3;
 
 /**
  * Share of wall-clock time inference is allowed to consume.
@@ -92,6 +111,8 @@ class App {
   private perceptionIntervalMs = PERCEPTION_MIN_INTERVAL_MS;
   /** Smoothed wall time one `process` call costs the render loop. */
   private inferenceCostMs = 0;
+  /** Consecutive inferences too slow to fit the duty budget. */
+  private perceptionStrikes = 0;
   private cameraAvailable = false;
 
   private mode: ViewMode = 'aether';
@@ -293,10 +314,30 @@ class App {
     const cost = performance.now() - start;
     if (result) {
       this.inferenceCostMs = this.inferenceCostMs * 0.8 + cost * 0.2;
+      const wanted = this.inferenceCostMs / PERCEPTION_DUTY;
       this.perceptionIntervalMs = Math.min(
         PERCEPTION_MAX_INTERVAL_MS,
-        Math.max(PERCEPTION_MIN_INTERVAL_MS, this.inferenceCostMs / PERCEPTION_DUTY),
+        Math.max(PERCEPTION_MIN_INTERVAL_MS, wanted),
       );
+
+      if (wanted > PERCEPTION_MAX_INTERVAL_MS) {
+        this.perceptionStrikes++;
+        if (this.perceptionStrikes >= PERCEPTION_GIVE_UP_STRIKES) {
+          const ms = Math.round(this.inferenceCostMs);
+          const reason =
+            `Inference takes ${ms} ms on this device — too slow to run without ` +
+            `stalling the simulation. Running on motion detection only.`;
+          console.warn(`[aether] ${reason}`);
+          this.perception.close();
+          this.perception = null;
+          this.perceptionStatus = { kind: 'unavailable', reason };
+          this.lastHands = null;
+          this.engine.clear_perception();
+          return;
+        }
+      } else {
+        this.perceptionStrikes = 0;
+      }
     }
     if (!result) return;
 
@@ -395,6 +436,7 @@ class App {
     // an injected test source throttled to once every two seconds.
     this.perceptionIntervalMs = PERCEPTION_MIN_INTERVAL_MS;
     this.inferenceCostMs = 0;
+    this.perceptionStrikes = 0;
   }
 
   /**
