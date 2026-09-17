@@ -72,7 +72,7 @@ const DELTA_EPS: f32 = 1e-4;
 const MAX_EDGE_SPEED: f32 = 600.0;
 
 /// Solid fraction below which the silhouette is segmentation speckle, not a
-/// body. ~0.5% of a 256x144 frame is 184 cells, i.e. a 14x14 blob.
+/// body. ~0.5% of the frame is a blob roughly 14 cells on a side.
 const MIN_COVERAGE: f32 = 0.005;
 
 /// Solid fraction above which the mask is treated as a failed segmentation.
@@ -519,9 +519,20 @@ impl SaturatingAddTime for f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{FLUID_H, FLUID_W};
 
-    const CELLS: usize = FLUID_W * FLUID_H;
+    /// Grid the tests run `BodyMask` on, deliberately **not**
+    /// `config::W/H`.
+    ///
+    /// `BodyMask::new` takes its dimensions explicitly, so a unit test for it
+    /// has no business depending on the app's current display resolution — and
+    /// these tests pick their cells for a reason (clear of the walls, straddling
+    /// a specific edge). Tying them to a tunable meant that changing the fluid
+    /// grid for the frame budget turned every carefully chosen coordinate into
+    /// either an out-of-bounds index or a different part of the frame.
+    const W: usize = 256;
+    const H: usize = 144;
+
+    const CELLS: usize = W * H;
     const DT30: f32 = 1.0 / 30.0;
 
     /// Config with the temporal EMA disabled, so one update lands the raw mask
@@ -534,19 +545,48 @@ mod tests {
     }
 
     fn body(cfg: MaskConfig) -> BodyMask {
-        BodyMask::new(FLUID_W, FLUID_H, cfg)
+        BodyMask::new(W, H, cfg)
     }
 
     /// A mask at grid resolution with a filled rectangle. Same resolution means
     /// the resample is a copy, so cell indices are directly comparable.
+    ///
+    /// Coordinates are clamped: these tests are written against grid fractions
+    /// (see [`fx`] / [`fy`]) rather than absolute cells, and a clamp here means
+    /// a future resolution change degrades a rectangle instead of panicking
+    /// with an out-of-bounds index.
     fn rect_mask(x0: usize, x1: usize, y0: usize, y1: usize) -> Vec<f32> {
         let mut m = vec![0.0f32; CELLS];
-        for y in y0..y1 {
-            for x in x0..x1 {
-                m[y * FLUID_W + x] = 1.0;
+        for y in y0..y1.min(H) {
+            for x in x0..x1.min(W) {
+                m[y * W + x] = 1.0;
             }
         }
         m
+    }
+
+    /// Vertical grid coordinate from a fraction of the frame height, for the
+    /// tests whose geometry is naturally proportional (a mask that covers most
+    /// of the frame) rather than a specific cell.
+    fn fy(frac: f32) -> usize {
+        ((H as f32 * frac) as usize).min(H - 1)
+    }
+
+    /// The standard test silhouette: a solid block left of centre, well clear
+    /// of every domain wall so border effects cannot be mistaken for the
+    /// behaviour under test.
+    fn body_rect() -> Vec<f32> {
+        rect_mask(100, 140, 40, 100)
+    }
+
+    /// [`body_rect`] translated `cells` to the right, for boundary-motion tests.
+    fn body_rect_shifted(cells: usize) -> Vec<f32> {
+        rect_mask(100 + cells, 140 + cells, 40, 100)
+    }
+
+    /// A point inside [`body_rect`], safely away from its edges.
+    fn body_interior() -> (usize, usize) {
+        (120, 70)
     }
 
     fn all_finite(m: &BodyMask) -> bool {
@@ -562,10 +602,10 @@ mod tests {
     #[test]
     fn a_rectangle_becomes_the_same_rectangle_of_solid_cells() {
         let mut m = body(sharp());
-        m.update_f32(&rect_mask(100, 140, 40, 100), FLUID_W, FLUID_H, false, DT30);
+        m.update_f32(&body_rect(), W, H, false, DT30);
 
-        for y in 0..FLUID_H {
-            for x in 0..FLUID_W {
+        for y in 0..H {
+            for x in 0..W {
                 let inside = (100..140).contains(&x) && (40..100).contains(&y);
                 let want = if inside { 1.0 } else { 0.0 };
                 assert_eq!(m.obstacle().get(x, y), want, "cell {x},{y}");
@@ -626,8 +666,8 @@ mod tests {
         let mut flipped = body(sharp());
         flipped.update_f32(&src, mw, mh, true, DT30);
 
-        let mid = FLUID_H / 2;
-        let right = FLUID_W - 11;
+        let mid = H / 2;
+        let right = W - 11;
         assert_eq!(plain.obstacle().get(10, mid), 1.0);
         assert_eq!(plain.obstacle().get(right, mid), 0.0);
         assert_eq!(
@@ -649,13 +689,13 @@ mod tests {
         let empty = vec![0.0f32; CELLS];
         let mut coarse = body(MaskConfig::default());
         let mut fine = body(MaskConfig::default());
-        coarse.update_f32(&mask, FLUID_W, FLUID_H, false, DT30);
-        fine.update_f32(&mask, FLUID_W, FLUID_H, false, DT30);
+        coarse.update_f32(&mask, W, H, false, DT30);
+        fine.update_f32(&mask, W, H, false, DT30);
 
         // One 100 ms decay against ten 10 ms decays of the same input.
-        coarse.update_f32(&empty, FLUID_W, FLUID_H, false, 0.1);
+        coarse.update_f32(&empty, W, H, false, 0.1);
         for _ in 0..10 {
-            fine.update_f32(&empty, FLUID_W, FLUID_H, false, 0.01);
+            fine.update_f32(&empty, W, H, false, 0.01);
         }
 
         let worst = coarse
@@ -673,12 +713,12 @@ mod tests {
     #[test]
     fn single_cell_speckle_does_not_survive_the_close() {
         let speckle = [(10usize, 10usize), (200, 20), (30, 120), (240, 130)];
-        let mut src = rect_mask(100, 140, 40, 100);
+        let mut src = body_rect();
         for &(x, y) in &speckle {
-            src[y * FLUID_W + x] = 1.0;
+            src[y * W + x] = 1.0;
         }
         let mut m = body(sharp());
-        m.update_f32(&src, FLUID_W, FLUID_H, false, DT30);
+        m.update_f32(&src, W, H, false, DT30);
 
         for &(x, y) in &speckle {
             assert_eq!(
@@ -687,7 +727,8 @@ mod tests {
                 "speckle at {x},{y} reached the solver"
             );
         }
-        assert_eq!(m.obstacle().get(120, 70), 1.0, "the body was eroded away");
+        let (bx, by) = body_interior();
+        assert_eq!(m.obstacle().get(bx, by), 1.0, "the body was eroded away");
         let expect = (40 * 60) as f32 / CELLS as f32;
         assert!((m.coverage() - expect).abs() < 1e-6);
     }
@@ -700,8 +741,8 @@ mod tests {
             ..MaskConfig::default()
         };
         let mut m = body(cfg);
-        m.update_f32(&rect_mask(100, 140, 40, 100), FLUID_W, FLUID_H, false, DT30);
-        m.update_f32(&rect_mask(102, 142, 40, 100), FLUID_W, FLUID_H, false, DT30);
+        m.update_f32(&body_rect(), W, H, false, DT30);
+        m.update_f32(&body_rect_shifted(2), W, H, false, DT30);
 
         let e = m.edge_velocity();
         let row = 70;
@@ -735,9 +776,9 @@ mod tests {
     fn a_stationary_silhouette_produces_no_edge_velocity() {
         for cfg in [sharp(), MaskConfig::default()] {
             let mut m = body(cfg);
-            let mask = rect_mask(100, 140, 40, 100);
+            let mask = body_rect();
             for _ in 0..8 {
-                m.update_f32(&mask, FLUID_W, FLUID_H, false, DT30);
+                m.update_f32(&mask, W, H, false, DT30);
             }
             assert!(
                 m.edge_velocity().max_speed() < 1e-3,
@@ -758,8 +799,8 @@ mod tests {
         let mut slow = body(cfg);
         let mut fast = body(cfg);
         for (m, dt) in [(&mut slow, DT30), (&mut fast, DT30 * 0.5)] {
-            m.update_f32(&rect_mask(100, 140, 40, 100), FLUID_W, FLUID_H, false, dt);
-            m.update_f32(&rect_mask(102, 142, 40, 100), FLUID_W, FLUID_H, false, dt);
+            m.update_f32(&body_rect(), W, H, false, dt);
+            m.update_f32(&body_rect_shifted(2), W, H, false, dt);
         }
         let (a, b) = (
             slow.edge_velocity().u.get(141, 70),
@@ -779,8 +820,8 @@ mod tests {
             push_gain: 1e6,
             ..MaskConfig::default()
         });
-        m.update_f32(&rect_mask(100, 140, 40, 100), FLUID_W, FLUID_H, false, 1e-9);
-        m.update_f32(&rect_mask(120, 160, 40, 100), FLUID_W, FLUID_H, false, 1e-9);
+        m.update_f32(&body_rect(), W, H, false, 1e-9);
+        m.update_f32(&body_rect_shifted(20), W, H, false, 1e-9);
         assert!(all_finite(&m));
         assert!(
             m.edge_velocity().max_speed() <= MAX_EDGE_SPEED + 1e-3,
@@ -793,8 +834,8 @@ mod tests {
     fn a_lost_body_fades_out_completely_and_clears_present() {
         let cfg = MaskConfig::default();
         let mut m = body(cfg);
-        m.update_f32(&rect_mask(100, 140, 40, 100), FLUID_W, FLUID_H, false, DT30);
-        m.update_f32(&rect_mask(102, 142, 40, 100), FLUID_W, FLUID_H, false, DT30);
+        m.update_f32(&body_rect(), W, H, false, DT30);
+        m.update_f32(&body_rect_shifted(2), W, H, false, DT30);
         let full = m.obstacle().sum();
         assert!(full > 0.0);
         assert!(m.edge_velocity().max_speed() > 0.0);
@@ -826,11 +867,11 @@ mod tests {
 
     #[test]
     fn the_fade_is_framerate_independent() {
-        let mask = rect_mask(100, 140, 40, 100);
+        let mask = body_rect();
         let mut coarse = body(MaskConfig::default());
         let mut fine = body(MaskConfig::default());
-        coarse.update_f32(&mask, FLUID_W, FLUID_H, false, DT30);
-        fine.update_f32(&mask, FLUID_W, FLUID_H, false, DT30);
+        coarse.update_f32(&mask, W, H, false, DT30);
+        fine.update_f32(&mask, W, H, false, DT30);
         for _ in 0..12 {
             coarse.decay(1.0 / 60.0);
         }
@@ -846,9 +887,9 @@ mod tests {
     fn a_30hz_mask_against_a_60hz_loop_barely_dips() {
         // Two render frames of staleness is the normal case, not a lost body:
         // a linear fade would pulse the obstacle by ~10% every mask period.
-        let mask = rect_mask(100, 140, 40, 100);
+        let mask = body_rect();
         let mut m = body(MaskConfig::default());
-        m.update_f32(&mask, FLUID_W, FLUID_H, false, DT30);
+        m.update_f32(&mask, W, H, false, DT30);
         let full = m.obstacle().sum();
         m.decay(1.0 / 60.0);
         m.decay(1.0 / 60.0);
@@ -857,7 +898,7 @@ mod tests {
             "obstacle dipped to {} of {full} between mask frames",
             m.obstacle().sum()
         );
-        m.update_f32(&mask, FLUID_W, FLUID_H, false, DT30);
+        m.update_f32(&mask, W, H, false, DT30);
         assert!((m.obstacle().sum() - full).abs() < 1e-6, "not restored");
     }
 
@@ -865,7 +906,7 @@ mod tests {
     fn an_almost_solid_mask_is_rejected() {
         let solid = vec![1.0f32; CELLS];
         let mut fresh = body(sharp());
-        fresh.update_f32(&solid, FLUID_W, FLUID_H, false, DT30);
+        fresh.update_f32(&solid, W, H, false, DT30);
         assert_eq!(
             fresh.obstacle().sum(),
             0.0,
@@ -876,9 +917,9 @@ mod tests {
 
         // And a bogus frame must not destroy a good silhouette.
         let mut m = body(sharp());
-        m.update_f32(&rect_mask(100, 140, 40, 100), FLUID_W, FLUID_H, false, DT30);
+        m.update_f32(&body_rect(), W, H, false, DT30);
         let (good, cov) = (m.obstacle().sum(), m.coverage());
-        m.update_f32(&solid, FLUID_W, FLUID_H, false, DT30);
+        m.update_f32(&solid, W, H, false, DT30);
         assert!(
             (m.obstacle().sum() - good).abs() < 1e-6,
             "bogus mask overwrote a good one"
@@ -887,17 +928,19 @@ mod tests {
 
         // Just under the limit is a legitimate close-up body.
         let mut big = body(sharp());
+        let rows = fy(0.8);
         big.update_f32(
-            &rect_mask(0, FLUID_W, 0, 115),
-            FLUID_W,
-            FLUID_H,
+            &rect_mask(0, W, 0, rows),
+            W,
+            H,
             false,
             DT30,
         );
         assert!(big.present());
+        let expected = rows as f32 / H as f32;
         assert!(
-            (big.coverage() - 115.0 / 144.0).abs() < 1e-3,
-            "coverage {}",
+            (big.coverage() - expected).abs() < 1e-3,
+            "coverage {} expected {expected}",
             big.coverage()
         );
     }
@@ -905,7 +948,7 @@ mod tests {
     #[test]
     fn a_tiny_blob_is_noise_rather_than_a_body() {
         let mut m = body(sharp());
-        m.update_f32(&rect_mask(100, 110, 40, 50), FLUID_W, FLUID_H, false, DT30);
+        m.update_f32(&rect_mask(100, 110, 40, 50), W, H, false, DT30);
         // 100 cells of 36864 is 0.27%, below the noise floor: the field has to
         // be empty, not merely "not present" (see the module invariant).
         assert!(!m.present());
@@ -918,7 +961,7 @@ mod tests {
     fn degenerate_input_never_panics_and_never_writes_nan() {
         let mut m = body(MaskConfig::default());
         // Established body first, so there is state to corrupt.
-        m.update_f32(&rect_mask(100, 140, 40, 100), FLUID_W, FLUID_H, false, DT30);
+        m.update_f32(&body_rect(), W, H, false, DT30);
         let good = m.obstacle().sum();
 
         m.update_f32(&[], 0, 0, false, DT30);
@@ -933,7 +976,7 @@ mod tests {
         );
 
         // Garbage confidences, mixed with a real block.
-        let mut junk = rect_mask(100, 140, 40, 100);
+        let mut junk = body_rect();
         for (i, v) in junk.iter_mut().enumerate() {
             match i % 5 {
                 0 if *v == 0.0 => *v = f32::NAN,
@@ -942,7 +985,7 @@ mod tests {
                 _ => {}
             }
         }
-        m.update_f32(&junk, FLUID_W, FLUID_H, false, 1e9);
+        m.update_f32(&junk, W, H, false, 1e9);
         assert!(all_finite(&m), "NaN reached the obstacle or velocity field");
         m.decay(f32::NAN);
         m.decay(-1.0);
@@ -958,7 +1001,7 @@ mod tests {
             push_gain: f32::INFINITY,
             fade_seconds: f32::NAN,
         });
-        m.update_f32(&rect_mask(100, 140, 40, 100), FLUID_W, FLUID_H, false, DT30);
+        m.update_f32(&body_rect(), W, H, false, DT30);
         m.decay(1.0 / 60.0);
         assert!(all_finite(&m));
     }
@@ -986,12 +1029,12 @@ mod tests {
 
     #[test]
     fn the_u8_path_matches_the_float_path() {
-        let float = rect_mask(100, 140, 40, 100);
+        let float = body_rect();
         let bytes: Vec<u8> = float.iter().map(|&v| (v * 255.0) as u8).collect();
         let mut a = body(sharp());
         let mut b = body(sharp());
-        a.update_f32(&float, FLUID_W, FLUID_H, false, DT30);
-        b.update_u8(&bytes, FLUID_W, FLUID_H, false, DT30);
+        a.update_f32(&float, W, H, false, DT30);
+        b.update_u8(&bytes, W, H, false, DT30);
         assert_eq!(a.obstacle().data, b.obstacle().data);
         assert_eq!(a.coverage(), b.coverage());
     }
@@ -999,8 +1042,8 @@ mod tests {
     #[test]
     fn reset_forgets_everything() {
         let mut m = body(MaskConfig::default());
-        m.update_f32(&rect_mask(100, 140, 40, 100), FLUID_W, FLUID_H, false, DT30);
-        m.update_f32(&rect_mask(104, 144, 40, 100), FLUID_W, FLUID_H, false, DT30);
+        m.update_f32(&body_rect(), W, H, false, DT30);
+        m.update_f32(&body_rect_shifted(4), W, H, false, DT30);
         assert!(m.present() && m.obstacle().sum() > 0.0);
         m.reset();
         assert!(!m.present());
@@ -1012,7 +1055,7 @@ mod tests {
         m.decay(1.0 / 60.0);
         assert_eq!(m.obstacle().sum(), 0.0);
         // And the next body still engages on its first frame.
-        m.update_f32(&rect_mask(100, 140, 40, 100), FLUID_W, FLUID_H, false, DT30);
+        m.update_f32(&body_rect(), W, H, false, DT30);
         assert!(m.present());
     }
 

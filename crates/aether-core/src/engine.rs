@@ -615,6 +615,9 @@ fn sane_dt(dt: f32) -> f32 {
     dt.clamp(1.0 / 480.0, 1.0 / 20.0)
 }
 
+/// The exact tone-mapping curve. Only the table is used in anger; this is kept
+/// as the reference the table is asserted against.
+#[cfg(test)]
 #[inline]
 fn tonemap(x: f32) -> f32 {
     if !x.is_finite() || x <= 0.0 {

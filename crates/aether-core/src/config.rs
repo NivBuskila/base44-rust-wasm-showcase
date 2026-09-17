@@ -5,9 +5,21 @@
 //! runtime so a mismatch surfaces as a loud error instead of a garbled texture.
 
 /// Fluid simulation grid width, in cells.
-pub const FLUID_W: usize = 256;
+///
+/// 192x108 keeps the 16:9 aspect — so cells are square in screen space and no
+/// stage needs an anisotropic correction — and costs 56% of the cells that
+/// 256x144 does. Measured, that is most of the difference between a 28 ms and a
+/// 16 ms engine step in wasm.
+///
+/// The visible loss is small because the dye field is never shown at its own
+/// resolution: the renderer upscales it with a wide tap pattern and
+/// domain-warped noise, and all the high-frequency detail the eye reads comes
+/// from the 120k particles, which are resolution-independent. Doubling the dye
+/// grid instead would buy sharper *smoke edges* at the cost of the frame rate
+/// that makes the whole thing feel alive.
+pub const FLUID_W: usize = 192;
 /// Fluid simulation grid height, in cells.
-pub const FLUID_H: usize = 144;
+pub const FLUID_H: usize = 108;
 /// Number of cells in the fluid / dye / obstacle grids.
 pub const FLUID_CELLS: usize = FLUID_W * FLUID_H;
 
