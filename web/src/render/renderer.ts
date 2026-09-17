@@ -141,21 +141,23 @@ const STYLES: Record<ViewMode, ModeStyle> = {
     aberration: 0.55,
     vignette: 0.52,
   },
-  // A regular camera: the feed in its own colour with no tint, toe, bloom,
-  // grade, fringe or vignette. The fluid stays as a faint overlay and the
-  // hand skeleton is drawn in full so tracking can be checked against the feed.
+  // A regular camera: the feed in its own colour with no tint, toe, grade,
+  // fringe or vignette. The fluid and particles are drawn at full strength on
+  // top of it, since an additive layer over a bright feed reads far dimmer
+  // than over black. The bloom threshold sits above the feed's own range so
+  // only the fluid's dense cores glow, never the room.
   camera: {
     bg: 0,
-    dye: 0.25,
+    dye: 1.1,
     camTint: [1, 1, 1],
     camEdge: [0, 0, 0],
     camToe: 0,
     camRaw: 1,
     grade: 0,
-    particles: 0,
+    particles: 1.2,
     overlay: 1.0,
-    bloom: 0,
-    threshold: 1,
+    bloom: 0.6,
+    threshold: 1.05,
     exposure: 1.0,
     aberration: 0,
     vignette: 0,
