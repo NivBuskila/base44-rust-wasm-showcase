@@ -685,7 +685,9 @@ export class Renderer {
     // Energy normalisation: the pool is user-adjustable from 2k to 220k, and
     // without this the 220k setting is a white screen and the 2k setting is
     // nearly invisible. Total emitted light stays roughly constant instead.
-    p.f1('u_gain', style.particles * clamp(90_000 / count, 0.3, 2.0));
+    // The floor sits low enough that the 1M overdrive pool reads as dense
+    // dust rather than a saturated sheet.
+    p.f1('u_gain', style.particles * clamp(90_000 / count, 0.1, 2.0));
     // Point size follows the target, not the canvas: the scene can be drawn
     // below canvas resolution, and a size in canvas pixels would then make the
     // dust swell into blobs when the composite scales it back up.

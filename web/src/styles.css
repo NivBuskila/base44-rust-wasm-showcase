@@ -1156,6 +1156,122 @@ input[type='range']:focus-visible::-webkit-slider-thumb {
   }
 }
 
+/* Overdrive ------------------------------------------------------------- */
+
+.row-btn.is-overdrive[aria-pressed='true'] {
+  border-color: rgba(255, 94, 168, 0.55);
+  background: rgba(255, 94, 168, 0.1);
+  color: var(--magenta);
+}
+
+.row-btn.is-overdrive[aria-pressed='true'] b {
+  color: var(--magenta);
+}
+
+.od-banner {
+  position: absolute;
+  left: 50%;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  padding: 10px 18px 11px;
+  background: linear-gradient(180deg, var(--panel-a), var(--panel-b));
+  border: 1px solid rgba(255, 94, 168, 0.4);
+  border-radius: var(--r);
+  box-shadow:
+    0 0 0 1px rgba(255, 94, 168, 0.08),
+    0 0 32px rgba(255, 94, 168, 0.22),
+    0 12px 40px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.od-banner.is-in {
+  animation: od-in 520ms cubic-bezier(0.2, 0.9, 0.2, 1.1) both;
+}
+
+@keyframes od-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(18px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+}
+
+.od-tag {
+  font-size: 9px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--magenta);
+  padding-right: 18px;
+  border-right: 1px solid var(--edge);
+  animation: od-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes od-pulse {
+  50% {
+    text-shadow: 0 0 14px rgba(255, 94, 168, 0.9);
+  }
+}
+
+.od-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 84px;
+}
+
+.od-cell b {
+  font-weight: 500;
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.od-cell i {
+  font-style: normal;
+  font-size: 8px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.od-src {
+  font-size: 8px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--accent);
+  padding-left: 18px;
+  border-left: 1px solid var(--edge);
+}
+
+#hud.is-hidden .od-banner {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .od-banner {
+    gap: 12px;
+    padding: 8px 12px;
+  }
+
+  .od-src {
+    display: none;
+  }
+
+  .od-cell b {
+    font-size: 15px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

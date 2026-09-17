@@ -18,6 +18,12 @@ import './styles.css';
 import init, { AetherEngine } from './wasm/aether';
 import { Camera, CameraError } from './camera';
 import { Hud } from './hud';
+import {
+  DEFAULT_SPAWN_RATE,
+  OVERDRIVE_PARTICLES,
+  OVERDRIVE_SPAWN_RATE,
+  OverdriveBanner,
+} from './overdrive';
 import { MediaPipePerception } from './perception';
 import { Renderer } from './render/renderer';
 import { PARTICLE_STRIDE, STAT, assertLayout } from './constants';
@@ -87,6 +93,9 @@ class App {
   private readonly memory: WebAssembly.Memory;
   private readonly renderer: Renderer;
   private readonly hud: Hud;
+  private readonly overdrive: OverdriveBanner;
+  /** Particle count to return to when overdrive is switched off. */
+  private particlesBeforeOverdrive = 0;
   private readonly camera = new Camera();
 
   private perception: PerceptionSource | null = null;
@@ -140,6 +149,7 @@ class App {
         this.engine.set_particle_count(n);
         this.views = this.makeViews();
       },
+      onOverdrive: (on) => this.setOverdrive(on),
       onViewMode: (mode) => {
         this.mode = mode;
       },
@@ -151,6 +161,8 @@ class App {
         this.views = this.makeViews();
       },
     });
+    // After the HUD, which owns and rewrites #hud's markup.
+    this.overdrive = new OverdriveBanner(document.getElementById('hud')!);
   }
 
   /**
@@ -260,6 +272,7 @@ class App {
     this.renderer.render(this.buildFrame(stats));
     this.renderMs = performance.now() - renderStart;
 
+    this.overdrive.update(stats, this.fps, this.stepMs);
     this.hud.update({
       fps: this.fps,
       stepMs: this.stepMs,
@@ -486,6 +499,25 @@ class App {
   setParticleCount(n: number): void {
     this.engine.set_particle_count(n);
     this.views = this.makeViews();
+  }
+
+  /**
+   * Overdrive: the full 1M pool plus a spawn rate that fills it. Off restores
+   * the pool size the user had and the default spawn rate. Reallocation
+   * detaches views, hence the rebuild.
+   */
+  setOverdrive(on: boolean): void {
+    if (on === this.overdrive.active) return;
+    if (on) {
+      this.particlesBeforeOverdrive = this.engine.particle_count();
+      this.engine.set_particle_count(OVERDRIVE_PARTICLES);
+      this.engine.set_param('spawn_rate', OVERDRIVE_SPAWN_RATE);
+    } else {
+      this.engine.set_particle_count(this.particlesBeforeOverdrive);
+      this.engine.set_param('spawn_rate', DEFAULT_SPAWN_RATE);
+    }
+    this.views = this.makeViews();
+    this.overdrive.setActive(on);
   }
 
   /**
