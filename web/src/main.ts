@@ -48,6 +48,13 @@ class App {
 
   private perception: PerceptionSource | null = null;
   private perceptionStatus: PerceptionStatus = { kind: 'loading' };
+  /**
+   * The most recent packed hand buffer, kept for the renderer's landmark
+   * overlay. Held by reference — perception reuses its own arrays, so this
+   * tracks the live values rather than a snapshot, which is what the overlay
+   * wants anyway.
+   */
+  private lastHands: Float32Array | null = null;
 
   private views: Views;
 
@@ -236,6 +243,7 @@ class App {
     if (!result) return;
 
     this.inferenceMs = result.latencyMs;
+    this.lastHands = result.hands;
     this.engine.push_hands(result.hands, dt);
     this.engine.push_pose(result.pose, dt);
 
@@ -260,7 +268,7 @@ class App {
       particleCount: this.engine.particle_count(),
       debug: this.mode === 'debug' ? this.readDebug() : null,
       video: this.cameraAvailable ? this.camera.video : null,
-      hands: null,
+      hands: stats[STAT.HANDS_PRESENT] > 0 ? this.lastHands : null,
       time: this.frames / 60,
       intensity,
       mode: this.mode,
@@ -293,6 +301,7 @@ class App {
     this.perception = source;
     this.perceptionStatus = source?.status ?? { kind: 'unavailable', reason: 'detached' };
     this.engine.clear_perception();
+    this.lastHands = null;
     this.lastPerceptionMs = 0;
   }
 
@@ -320,6 +329,17 @@ class App {
   forceMode(mode: ViewMode): void {
     this.mode = mode;
   }
+
+  /**
+   * Resizes the particle pool through the same path the HUD uses. Exposed to
+   * tests because this is the one operation that reallocates engine buffers and
+   * so detaches every typed-array view — the interesting thing to verify is
+   * that the next frame still works.
+   */
+  setParticleCount(n: number): void {
+    this.engine.set_particle_count(n);
+    this.views = this.makeViews();
+  }
 }
 
 /** Surface exposed on `window.__aether` for the Playwright suite. */
@@ -328,6 +348,7 @@ export interface AetherTestHooks {
   diagnostics(): App['diagnostics'];
   setPerception(source: PerceptionSource | null): void;
   setParam(key: string, value: number): boolean;
+  setParticleCount(n: number): void;
   forceMode(mode: ViewMode): void;
   reset(): void;
 }
@@ -369,6 +390,7 @@ async function boot(): Promise<void> {
       diagnostics: () => app.diagnostics,
       setPerception: (source) => app.setPerception(source),
       setParam: (key, value) => engine.set_param(key, value),
+      setParticleCount: (n) => app.setParticleCount(n),
       forceMode: (mode) => app.forceMode(mode),
       reset: () => engine.reset(),
     };

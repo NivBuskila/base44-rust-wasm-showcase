@@ -32,6 +32,8 @@ interface AetherTestHooks {
   /** Swaps in a scripted perception source; null detaches perception. */
   setPerception(source: unknown): void;
   setParam(key: string, value: number): boolean;
+  /** Resizes the particle pool, which reallocates engine buffers. */
+  setParticleCount(n: number): void;
   forceMode(mode: 'aether' | 'camera' | 'debug' | 'particles'): void;
   reset(): void;
 }
