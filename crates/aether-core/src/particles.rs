@@ -44,13 +44,32 @@
 
 use crate::config::{Params, PARTICLE_STRIDE};
 use crate::field::{Grid, VecField};
-use crate::math::{decay, lerp, normalize, smoothstep};
+use crate::math::{decay, length, lerp, normalize, smoothstep};
 use crate::rng::Rng;
 
 /// Per-second decay applied to `heat`. Fast enough that an `Ignite` trail
 /// cools within about a second of the hand leaving, slow enough that the
 /// colour ramp still reads as a gradient along the trail.
 const HEAT_DECAY: f32 = 0.85;
+
+/// Transport speed, in grid cells per second, that reads as fully hot.
+///
+/// `heat` is the colour-ramp coordinate, and decaying it to zero everywhere
+/// meant that the overwhelming majority of particles — the ones the fluid is
+/// simply carrying, with no spell on them — sat at the cold end of the ramp
+/// and rendered near-black. Screenshots showed beautiful vortex filaments in
+/// almost invisible deep blue.
+///
+/// So heat has a floor derived from how fast the particle is actually moving:
+/// the flow colours itself, fast filaments read hot, still regions stay cool,
+/// and spells add heat on top of that rather than being the only source of it.
+/// In a still field the floor is zero and the decay is unchanged.
+const HEAT_SPEED_FULL: f32 = 220.0;
+
+/// Rate, per second, at which `heat` rises toward the speed-derived floor.
+/// Slower than the decay so a cooling trail still reads as a gradient rather
+/// than snapping to the ambient value.
+const HEAT_RISE: f32 = 3.5;
 
 /// Ceiling on a particle's own velocity, in grid cells per second.
 ///
@@ -147,6 +166,10 @@ struct Frame<'a> {
     keep: f32,
     /// Fraction of `heat` surviving this step.
     heat_keep: f32,
+    /// Fraction of the gap to the speed-derived heat floor closed this step.
+    heat_rise: f32,
+    /// `1 / dt`, for turning this step's displacement into a speed.
+    inv_dt: f32,
     /// `curl_influence * dt`.
     swirl: f32,
     /// `gravity * dt`.
@@ -317,6 +340,8 @@ impl Particles {
             // and makes the 30 fps session look different from the 144 fps one.
             keep: decay(finite_or(cfg.damping, 0.0).max(0.0), dt),
             heat_keep: decay(HEAT_DECAY, dt),
+            heat_rise: 1.0 - decay(HEAT_RISE, dt),
+            inv_dt: 1.0 / dt,
             swirl: finite_or(cfg.curl_influence, 0.0) * dt,
             gravity: finite_or(cfg.gravity, 0.0) * dt,
         };
@@ -362,11 +387,27 @@ impl Particles {
     #[inline(always)]
     fn commit(&mut self, i: usize, adv: Advance, life: f32, f: &Frame, credit: &mut f32) -> bool {
         if life > 0.0 && adv.ok {
+            // Speed from the displacement actually applied, which already
+            // includes fluid transport, the particle's own residual velocity
+            // and the curl swirl — no extra field sample needed.
+            let speed = length(
+                (adv.nx - self.x[i]) * f.inv_dt,
+                (adv.ny - self.y[i]) * f.inv_dt,
+            );
+            let floor = (speed * (1.0 / HEAT_SPEED_FULL)).min(1.0);
+
             self.x[i] = adv.nx;
             self.y[i] = adv.ny;
             self.vx[i] = adv.ox;
             self.vy[i] = adv.oy;
-            self.heat[i] *= f.heat_keep;
+            let cooled = self.heat[i] * f.heat_keep;
+            // Whichever is hotter: a spell's heat decaying away, or the
+            // ambient heat this particle's own motion earns it.
+            self.heat[i] = if floor > cooled {
+                cooled + (floor - cooled) * f.heat_rise
+            } else {
+                cooled
+            };
             self.life[i] = life;
             return true;
         }
@@ -1366,6 +1407,83 @@ mod tests {
         assert!(prev > 0.0);
     }
 
+    #[test]
+    fn a_fast_flow_makes_particles_glow() {
+        // The counterpart to `heat_decays_toward_zero`: heat is the colour-ramp
+        // coordinate, so a particle the fluid is carrying quickly has to earn
+        // colour on its own. Without this, the only coloured particles are the
+        // ones a spell touched, and the flow renders as near-black filaments.
+        //
+        // The grid is wide enough that neither particle reaches the far edge in
+        // the measured second. A narrow one recycles the fast particle
+        // mid-test, and respawn resets heat — which is how this test failed
+        // the first time, reporting 0 for a particle that was in fact glowing.
+        let (w, h) = (256, 32);
+        let obs = Grid::new(w, h);
+        let p_params = params(1.0, 100.0, 0.0);
+        let p_cfg = cfg(0.0, 0.0, 0.6);
+        let steps = 60;
+
+        let run = |speed: f32, seed: u64| {
+            let field = const_field(w, h, speed, 0.0);
+            let mut p = Particles::new(1, seed);
+            p.set_active(1);
+            p.place(0, 1.0, 16.0, 0.0, 0.0, 100.0);
+            for _ in 0..steps {
+                p.step(&field, &obs, DT, &p_params, &p_cfg);
+            }
+            // Confirm it never recycled, or the heat reading means nothing.
+            assert!(p.position(0).0 > 1.0, "particle did not move");
+            p.heat_of(0)
+        };
+
+        let hot = run(HEAT_SPEED_FULL, 31);
+        let warm = run(HEAT_SPEED_FULL * 0.25, 32);
+
+        // Well into the hot half of the ramp. Not tighter than that: the
+        // actual figure depends on how far the rise converges in the measured
+        // second and on the particle's own velocity relaxing, and pinning the
+        // bar to the current output would make this a test of today's
+        // arithmetic rather than of the intended behaviour.
+        assert!(
+            hot > 0.6,
+            "a particle at the full-heat speed stayed cold: {hot}"
+        );
+        // A quarter of the speed must read as distinctly cooler, or the ramp
+        // carries no information and every moving particle is one colour.
+        assert!(
+            warm < hot - 0.4,
+            "heat does not discriminate speed: {warm} vs {hot}"
+        );
+        assert!(warm > 0.0, "a moving particle should have some heat: {warm}");
+    }
+
+    #[test]
+    fn heat_never_leaves_the_unit_interval() {
+        // The renderer indexes a colour ramp with this, so a value outside
+        // [0, 1] is a garbage pixel. An absurd field is the stress case.
+        let (w, h) = (32, 32);
+        let obs = Grid::new(w, h);
+        let p_params = params(1.0, 100.0, 0.0);
+        let p_cfg = cfg(8.0, 0.0, 0.6);
+        let violent = const_field(w, h, 50_000.0, -50_000.0);
+
+        let mut p = Particles::new(64, 33);
+        p.set_active(64);
+        p.seed_uniform(w, h, 100.0);
+        p.impulse(16.0, 16.0, 40.0, 5000.0, 1.0);
+        for _ in 0..120 {
+            p.step(&violent, &obs, DT, &p_params, &p_cfg);
+        }
+        for i in 0..64 {
+            let heat = p.heat_of(i);
+            assert!(
+                (0.0..=1.0).contains(&heat),
+                "particle {i} heat {heat} outside the colour ramp"
+            );
+        }
+    }
+
     /// A `Frame` that does nothing but look up obstacles, for unit-testing the
     /// cull predicate directly.
     fn obstacle_frame<'a>(vel: &'a VecField, obs: &'a Grid) -> Frame<'a> {
@@ -1381,6 +1499,8 @@ mod tests {
             drag: 1.0,
             keep: 1.0,
             heat_keep: 1.0,
+            heat_rise: 0.0,
+            inv_dt: 1.0 / DT,
             swirl: 0.0,
             gravity: 0.0,
         }

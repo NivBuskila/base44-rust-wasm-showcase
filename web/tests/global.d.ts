@@ -21,8 +21,6 @@ interface AetherDiagnostics {
   stats: number[];
   /** Latched spell name per hand slot. */
   spells: [string, string];
-  /** Mean luminance of the last rendered frame, `[0, 1]`. */
-  luminance: number;
   particleCount: number;
   mode: 'aether' | 'camera' | 'debug' | 'particles';
   /** Effective inference cadence in Hz, after adaptive throttling. */
@@ -38,6 +36,13 @@ interface AetherTestHooks {
   setParam(key: string, value: number): boolean;
   /** Resizes the particle pool, which reallocates engine buffers. */
   setParticleCount(n: number): void;
+  /**
+   * Mean luminance of the last rendered frame, `[0, 1]`.
+   *
+   * A framebuffer readback: never poll it from `waitForFunction`, which runs
+   * on every animation frame. Doing so measurably slows the app down.
+   */
+  luminance(): number;
   forceMode(mode: 'aether' | 'camera' | 'debug' | 'particles'): void;
   reset(): void;
 }

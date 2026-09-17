@@ -41,7 +41,7 @@ test('every view mode renders without errors', async ({ page }) => {
     const diag = await page.evaluate(() => window.__aether!.diagnostics());
     expect(diag.mode, `forceMode('${mode}') did not take`).toBe(mode);
     expect(diag.stats[13], `mode '${mode}' produced non-finite values`).toBe(0);
-    luminance[mode] = diag.luminance;
+    luminance[mode] = await page.evaluate(() => window.__aether!.luminance());
 
     await page.screenshot({ path: `test-results/view-${mode}.png` });
   }
