@@ -10,8 +10,8 @@
 # Google's CDN when these are absent.
 /web/public/models/*.task
 
-# Playwright artefacts and the generated synthetic camera feed.
+# Playwright artefacts and the generated synthetic camera feed (55 MB).
 /web/test-results/
 /web/playwright-report/
 /web/.cache/
-/tests/fixtures/*.y4m
+/web/tests/fixtures/*.y4m
