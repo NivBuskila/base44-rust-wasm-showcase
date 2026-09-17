@@ -53,6 +53,19 @@ import type {
 /** Vendored WASM runtime, served from our own origin by `sync-mp-assets.mjs`. */
 const WASM_PATH = '/mp-wasm';
 
+/**
+ * Public copy of the same runtime, used when the vendored one is not there.
+ *
+ * `sync-mp-assets.mjs` copies it out of node_modules on install, so it is
+ * missing whenever that has not run: a partial install, a network that blocks
+ * the npm registry, or any deployment of `dist/` that did not carry the 24 MB
+ * along. The models already fall back this way and the runtime did not, which
+ * meant perception died with a 404 while a byte-identical copy sat one
+ * hostname away. The version is pinned to the installed package so the
+ * fallback can never be a different build than the loader expects.
+ */
+const WASM_CDN = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm';
+
 /** Google's public model host, used when the local copy is absent. */
 const CDN = 'https://storage.googleapis.com/mediapipe-models';
 
@@ -458,6 +471,28 @@ export async function resolveModel(
 }
 
 /**
+ * Probes for the vendored WASM runtime and falls back to jsdelivr.
+ *
+ * Mirrors [`resolveModel`], including why a 200 is not proof: a dev server with
+ * an SPA fallback answers a missing file with `index.html`. The loader script
+ * is the thing probed because `FilesetResolver` fetches it first, so if it is
+ * there the binary beside it is too.
+ */
+export async function resolveWasmPath(probe: typeof fetch = fetch): Promise<string> {
+  try {
+    const res = await probe(`${WASM_PATH}/vision_wasm_internal.js`, {
+      method: 'HEAD',
+      cache: 'no-store',
+    });
+    const type = res.headers.get('content-type') ?? '';
+    if (res.ok && !type.includes('html')) return WASM_PATH;
+  } catch {
+    // A blocked or failed probe is not an error; the CDN is the answer.
+  }
+  return WASM_CDN;
+}
+
+/**
  * Demotes the runtime's `INFO:` chatter for the duration of a load, and
  * returns the undo.
  *
@@ -571,7 +606,7 @@ export class MediaPipePerception implements PerceptionSource {
     let reason: string;
     try {
       const vision = await import('@mediapipe/tasks-vision');
-      const fileset = await vision.FilesetResolver.forVisionTasks(WASM_PATH);
+      const fileset = await vision.FilesetResolver.forVisionTasks(await resolveWasmPath());
       const [handModel, poseModel] = await Promise.all([
         resolveModel(HAND_MODEL),
         resolveModel(POSE_MODEL),
