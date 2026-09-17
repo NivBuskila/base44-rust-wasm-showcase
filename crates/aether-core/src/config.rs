@@ -107,7 +107,11 @@ impl Default for Params {
     fn default() -> Self {
         Self {
             velocity_dissipation: 0.15,
-            dye_dissipation: 0.55,
+            // Raised from 0.55 after looking at it: dye accumulates wherever a
+            // gesture dwells, and at 0.55 a held vortex pinned a whole plume at
+            // the tone-map ceiling — one flat saturated blob with none of the
+            // filament structure the solver is actually producing underneath.
+            dye_dissipation: 1.0,
             pressure_iters: 28,
             vorticity: 14.0,
             viscosity: 0.000_02,

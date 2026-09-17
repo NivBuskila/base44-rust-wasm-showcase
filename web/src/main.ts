@@ -397,6 +397,17 @@ class App {
     this.inferenceCostMs = 0;
   }
 
+  /**
+   * A cheap snapshot, safe to poll every frame.
+   *
+   * Luminance is deliberately NOT in here. It reads back the framebuffer, and
+   * with `preserveDrawingBuffer` that forces a pipeline flush — which on
+   * software rasterisation cost ~250 ms. Playwright's `waitForFunction` polls
+   * on every animation frame, so including it made the frame-rate test destroy
+   * the frame rate it was measuring: it read 3.9 fps where the app was really
+   * running at 16.5. Instrumentation that perturbs what it measures is worse
+   * than none. Call `luminance()` explicitly when you want it.
+   */
   get diagnostics() {
     return {
       frames: this.frames,
@@ -408,7 +419,6 @@ class App {
       perception: this.perceptionStatus,
       stats: Array.from(this.engine.stats()),
       spells: [this.engine.spell_name(0), this.engine.spell_name(1)] as [string, string],
-      luminance: this.renderer.sampleLuminance(),
       particleCount: this.engine.particle_count(),
       mode: this.mode,
       /** Effective inference cadence in Hz, after adaptive throttling. */
@@ -435,6 +445,13 @@ class App {
     this.engine.set_particle_count(n);
     this.views = this.makeViews();
   }
+
+  /**
+   * Mean luminance of the last rendered frame. Expensive — see `diagnostics`.
+   */
+  luminance(): number {
+    return this.renderer.sampleLuminance();
+  }
 }
 
 /** Surface exposed on `window.__aether` for the Playwright suite. */
@@ -445,6 +462,8 @@ export interface AetherTestHooks {
   setParam(key: string, value: number): boolean;
   setParticleCount(n: number): void;
   forceMode(mode: ViewMode): void;
+  /** Framebuffer readback; do not poll this on every frame. */
+  luminance(): number;
   reset(): void;
 }
 
@@ -487,6 +506,7 @@ async function boot(): Promise<void> {
       setParam: (key, value) => engine.set_param(key, value),
       setParticleCount: (n) => app.setParticleCount(n),
       forceMode: (mode) => app.forceMode(mode),
+      luminance: () => app.luminance(),
       reset: () => engine.reset(),
     };
 
