@@ -1,0 +1,20 @@
+[workspace]
+members = ["crates/aether-core", "crates/aether-wasm"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+repository = "https://github.com/nivbuskila/base44test"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+# Profile used for the wasm artifact shipped to the browser.
+[profile.wasm-release]
+inherits = "release"
+opt-level = 3
+strip = true
