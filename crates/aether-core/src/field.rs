@@ -82,23 +82,29 @@ impl Grid {
     /// Bilinear sample in grid space, clamped at the borders.
     ///
     /// This is the hottest function in the engine — MacCormack advection alone
-    /// calls it several million times per frame — so the bounds handling is
-    /// deliberately branch-free. `f32::max` and `f32::min` ignore NaN and
-    /// return the other operand, so `x.max(0.0).min(hi)` maps NaN to 0,
-    /// `-inf` to 0 and `+inf` to `hi` in two instructions, where an explicit
-    /// `is_nan` test costs a mispredictable branch on every call.
-    #[inline]
+    /// calls it several million times per frame — so both the bounds handling
+    /// and the integer split are written for the instruction count.
+    ///
+    /// `f32::max` and `f32::min` ignore NaN and return the other operand, so
+    /// `x.max(0.0).min(hi)` maps NaN to 0, `-inf` to 0 and `+inf` to `hi` in
+    /// two instructions, where an explicit `is_nan` test costs a
+    /// mispredictable branch on every call.
+    ///
+    /// The integer part comes from truncation rather than `floor`. They agree
+    /// for a non-negative argument, which the clamp above guarantees, and
+    /// `f32::floor` compiles to a *libm call* on the SSE2 baseline this crate
+    /// targets — there is no `roundss` without SSE4.1. (wasm32 has a native
+    /// `f32.floor`, so this is a native-only win, but it is free either way.)
+    #[inline(always)]
     pub fn sample(&self, x: f32, y: f32) -> f32 {
         let x = x.max(0.0).min((self.w - 1) as f32);
         let y = y.max(0.0).min((self.h - 1) as f32);
 
-        let x0 = x.floor();
-        let y0 = y.floor();
-        let tx = x - x0;
-        let ty = y - y0;
+        let ix0 = x as usize;
+        let iy0 = y as usize;
+        let tx = x - ix0 as f32;
+        let ty = y - iy0 as f32;
 
-        let ix0 = x0 as usize;
-        let iy0 = y0 as usize;
         let ix1 = (ix0 + 1).min(self.w - 1);
         let iy1 = (iy0 + 1).min(self.h - 1);
 

@@ -7,10 +7,15 @@
 //! the frame budget actually goes, which is the only honest way to decide what
 //! to optimise.
 //!
-//! Native numbers are a lower bound on the wasm cost, not a prediction of it.
-//! wasm32 with SIMD128 lands within roughly 2x of native for this kind of
-//! dense float work, so a stage that is already 8 ms here has no chance of
-//! fitting a 16 ms browser frame.
+//! Native numbers are an imperfect proxy for the wasm cost, in both
+//! directions. wasm32 with SIMD128 lands within roughly 2x of native for dense
+//! float work, so a stage that is already 8 ms here has no chance of fitting a
+//! 16 ms browser frame. But native is also *penalised* in one specific way:
+//! `f32::floor` is a libm call on the SSE2 baseline (no `roundss` without
+//! SSE4.1) whereas wasm has a native `f32.floor` opcode, so anything
+//! rounding-heavy looks worse here than it will in the browser. Treat the
+//! breakdown as a guide to what to look at, and confirm wins against
+//! `diagnostics().stepMs` in a real browser.
 
 use aether_core::config::{FLOW_CELLS, FLUID_H, FLUID_W};
 use aether_core::engine::Engine;
