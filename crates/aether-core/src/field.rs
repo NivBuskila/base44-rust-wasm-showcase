@@ -80,12 +80,17 @@ impl Grid {
     }
 
     /// Bilinear sample in grid space, clamped at the borders.
+    ///
+    /// This is the hottest function in the engine — MacCormack advection alone
+    /// calls it several million times per frame — so the bounds handling is
+    /// deliberately branch-free. `f32::max` and `f32::min` ignore NaN and
+    /// return the other operand, so `x.max(0.0).min(hi)` maps NaN to 0,
+    /// `-inf` to 0 and `+inf` to `hi` in two instructions, where an explicit
+    /// `is_nan` test costs a mispredictable branch on every call.
     #[inline]
     pub fn sample(&self, x: f32, y: f32) -> f32 {
-        // NaN-safe: clamp() with a NaN input yields the lower bound here
-        // because the comparisons all fail, which beats indexing out of range.
-        let x = if x.is_nan() { 0.0 } else { x.clamp(0.0, (self.w - 1) as f32) };
-        let y = if y.is_nan() { 0.0 } else { y.clamp(0.0, (self.h - 1) as f32) };
+        let x = x.max(0.0).min((self.w - 1) as f32);
+        let y = y.max(0.0).min((self.h - 1) as f32);
 
         let x0 = x.floor();
         let y0 = y.floor();
