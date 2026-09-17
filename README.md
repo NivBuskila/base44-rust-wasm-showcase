@@ -141,7 +141,7 @@ in a pipeline like this:
 - The user sees a **mirrored** camera view, so landmarks and the luma plane are
   mirrored to match. Otherwise moving your hand right would push the fluid left.
 
-The fluid grid is 256 × 144 for a 16:9 frame, so cells are square in screen
+The fluid grid is 192 × 108 for a 16:9 frame, so cells are square in screen
 space and no anisotropic correction is needed anywhere.
 
 ## Measured
