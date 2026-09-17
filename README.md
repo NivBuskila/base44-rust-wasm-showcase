@@ -116,8 +116,14 @@ of app stutter:
 - **Render, ~60 Hz.** `engine.step(dt)` then draw. Never waits on anything.
 - **Camera, ~30 Hz.** Luma readback for optical flow, and only when the video
   element has actually advanced.
-- **Inference, ~30 Hz best effort.** Can overrun a frame; the loop does not care.
-  The last known landmarks keep driving the simulation until new ones arrive.
+- **Inference, adaptive.** `PerceptionSource.process` is synchronous —
+  MediaPipe's video API has no async form — so its cost lands in the frame that
+  calls it. The cadence is therefore derived from measured latency, spending a
+  bounded share of wall time and leaving the rest to the simulation. If
+  inference cannot fit that share even at the maximum interval, it is too
+  expensive for the device: perception stands down with a reason the user can
+  act on, and the optical-flow path carries the app at full responsiveness.
+  Between inferences the last known landmarks keep driving the simulation.
 
 ### Coordinate conventions
 
@@ -138,11 +144,37 @@ in a pipeline like this:
 The fluid grid is 256 × 144 for a 16:9 frame, so cells are square in screen
 space and no anisotropic correction is needed anywhere.
 
+## Measured
+
+Native release, on a 4-core container, from
+`cargo test --release -p aether-core --test perf -- --nocapture`:
+
+| stage | cost |
+| --- | --- |
+| fluid step (advect, diffuse, vorticity, project) | 5.1 ms |
+| + 120k particles | 13.6 ms |
+| optical flow, per camera frame | 1.5 ms |
+| one 60 fps frame | 16.7 ms |
+
+In-browser engine step: **17.8 ms** with 120k particles, 9.7 ms with none.
+
+Two numbers that are *not* the engine, recorded so they are not misread:
+
+- **Headless frame rate is fill-rate bound on SwiftShader.** fps tracks pixel
+  count almost exactly (922k px → 3.7 fps, 518k → 5.5, 230k → 8.8, 58k → 12.1)
+  while turning off all 120k particles moves it only 3.7 → 4.8. That is a
+  software rasteriser shading ~20 texture fetches per pixel across the bloom
+  chain, which a GPU does in single-digit milliseconds. The suite therefore
+  asserts on `stepMs` and on the loop not stalling, never on fps.
+- **Headless inference is ~1200 ms per call.** MediaPipe's GPU delegate on
+  SwiftShader is software. The app measures this and stands down rather than
+  stalling — see the frame loop section.
+
 ## Testing
 
 ```bash
-cargo test --workspace     # the simulation, on the host
-cd web && npm run test:e2e # the browser, headless, no webcam
+cargo test --workspace     # 196 tests: the simulation, on the host
+cd web && npm run test:e2e # 24 tests: the browser, headless, no webcam
 ```
 
 The end-to-end suite runs the real app in headless Chromium with **no camera and
