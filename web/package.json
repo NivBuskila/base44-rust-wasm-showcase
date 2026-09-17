@@ -1,0 +1,22 @@
+{
+  "name": "aether-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "postinstall": "node ../scripts/sync-mp-assets.mjs",
+    "fetch:models": "node ../scripts/fetch-models.mjs",
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "1.0.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "typescript": "5.9.3",
+    "vite": "8.3.0"
+  }
+}

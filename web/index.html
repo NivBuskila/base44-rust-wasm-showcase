@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Aether - a gesture-driven fluid reality engine. Rust and WebAssembly physics, real-time hand and body tracking, in your browser."
+    />
+    <title>Aether — gesture-driven fluid</title>
+  </head>
+  <body>
+    <!-- The simulation surface. Sized to the device pixel ratio by the renderer. -->
+    <canvas id="stage" aria-label="Aether fluid simulation"></canvas>
+
+    <!-- Populated by hud.ts. Empty here so the HUD owns its own markup. -->
+    <div id="hud"></div>
+
+    <!-- Shown before WASM and the models finish loading, and on fatal errors. -->
+    <div id="boot" role="status" aria-live="polite">
+      <div class="boot-inner">
+        <h1>AETHER</h1>
+        <p id="boot-status">waking the engine…</p>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

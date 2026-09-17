@@ -1,0 +1,17 @@
+/target
+**/node_modules/
+/web/dist/
+/web/src/wasm/
+
+# Vendored at install time by scripts/sync-mp-assets.mjs (24 MB).
+/web/public/mp-wasm/
+
+# Downloaded by `npm run fetch:models` (14 MB); the app falls back to
+# Google's CDN when these are absent.
+/web/public/models/*.task
+
+# Playwright artefacts and the generated synthetic camera feed.
+/web/test-results/
+/web/playwright-report/
+/web/.cache/
+/tests/fixtures/*.y4m
