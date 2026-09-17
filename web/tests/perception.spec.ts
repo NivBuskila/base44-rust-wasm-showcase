@@ -91,8 +91,26 @@ test('inference never reclaims the frame budget', async ({ page }) => {
   // What is *not* correct is the middle ground this used to sit in: clamping
   // the interval at its ceiling and carrying on regardless, which measured at
   // 61% of wall time on a 1224 ms inference — the duty target silently broken
-  // by the very cap meant to bound staleness. The invariant below is the one
-  // that actually matters, and it now holds either way.
+  // by the very cap meant to bound staleness.
+  //
+  // The invariant is about the settled state, not the first measurement. The
+  // opening inferences necessarily overrun the budget: the cost cannot be known
+  // before it has been paid once, and the stand-down deliberately waits for
+  // three consecutive overruns so MediaPipe's warm-up call does not cost a user
+  // hand tracking for the session. So poll until it settles either way — an
+  // earlier version of this test sampled once and read 63%, which was the
+  // mechanism working, caught mid-decision.
+  await page.waitForFunction(
+    (limit) => {
+      const d = window.__aether?.diagnostics();
+      if (!d) return false;
+      if (d.perception.kind !== 'ready') return true;
+      return (d.inferenceCostMs * d.perceptionHz) / 1000 <= limit;
+    },
+    0.55,
+    { timeout: 120_000 },
+  );
+
   const diag = await page.evaluate(() => window.__aether!.diagnostics());
   const duty = (diag.inferenceCostMs * diag.perceptionHz) / 1000;
 
