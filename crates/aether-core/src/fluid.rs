@@ -1328,10 +1328,18 @@ mod tests {
         // re-injected every frame, not one huge one-off splat. Speed
         // accumulates over frames while the divergence each frame has to
         // remove stays bounded, which is the regime the HUD number lives in.
+        //
+        // The path is a fraction of the grid, not absolute cells: this is the
+        // one test that deliberately runs at the app's real resolution, so
+        // hard-coded coordinates would drift into the domain walls the next
+        // time that resolution changes — and a wall is exactly where the
+        // projection has the least freedom to correct divergence, so the test
+        // would fail for a reason that has nothing to do with the solver.
+        let (w, h) = (FLUID_W as f32, FLUID_H as f32);
         for k in 0..120 {
             let t = k as f32 / 60.0;
-            let x = 128.0 + 70.0 * (t * 1.7).sin();
-            let y = 72.0 + 40.0 * (t * 2.3).cos();
+            let x = w * (0.5 + 0.27 * (t * 1.7).sin());
+            let y = h * (0.5 + 0.28 * (t * 2.3).cos());
             let dir = t * 3.1;
             f.add_force(x, y, 12.0 * dir.cos(), 12.0 * dir.sin(), 12.0);
             f.add_dye(x, y, [0.6, 0.3, 0.1], 9.0);

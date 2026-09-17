@@ -26,8 +26,32 @@ import type { PerceptionSource, PerceptionStatus, RenderFrame, ViewMode } from '
 /** Engine seed; fixed so a session is reproducible given the same input. */
 const SEED = 0xa37e5eed;
 
-/** Don't run inference more often than this, in ms. */
-const PERCEPTION_INTERVAL_MS = 1000 / 30;
+/** Floor on the interval between inferences, in ms. */
+const PERCEPTION_MIN_INTERVAL_MS = 1000 / 30;
+
+/**
+ * Ceiling on the interval, in ms. Past this, gestures are too stale to feel
+ * connected to the hand, and the honest thing is to say perception is degraded
+ * rather than keep pretending.
+ */
+const PERCEPTION_MAX_INTERVAL_MS = 2000;
+
+/**
+ * Share of wall-clock time inference is allowed to consume.
+ *
+ * `PerceptionSource.process` is synchronous — MediaPipe's video API has no
+ * async form — so its cost lands directly in the frame it runs on. On a real
+ * GPU that is 10-20 ms and invisible at a 30 Hz cadence. On software
+ * rasterisation it measured **753 ms**, which at a fixed 30 Hz cadence means
+ * every frame tries to run an inference that takes 22 frames, and the render
+ * loop collapses to inference speed.
+ *
+ * So the cadence is derived from measured latency rather than assumed: spend at
+ * most this fraction of the time in inference and leave the rest to the
+ * simulation. Aether stays responsive through the Rust optical-flow path, which
+ * is exactly the case that path exists for; gestures just update more slowly.
+ */
+const PERCEPTION_DUTY = 0.3;
 
 /** Rolling window for the fps readout. */
 const FPS_SMOOTHING = 0.9;
@@ -64,6 +88,10 @@ class App {
   private lastCameraTime = -1;
   private lastCameraMs = 0;
   private lastPerceptionMs = 0;
+  /** Current inference cadence, adapted from measured cost. */
+  private perceptionIntervalMs = PERCEPTION_MIN_INTERVAL_MS;
+  /** Smoothed wall time one `process` call costs the render loop. */
+  private inferenceCostMs = 0;
   private cameraAvailable = false;
 
   private mode: ViewMode = 'aether';
@@ -130,6 +158,17 @@ class App {
     );
   }
 
+  /**
+   * Brings the app up, then returns — without waiting for the vision models.
+   *
+   * Loading them means fetching a 12 MB WASM runtime plus 14 MB of model
+   * bundles and letting MediaPipe warm up, which took ~25 s on software
+   * rasterisation. Awaiting that before the first frame means the user watches
+   * a boot screen for half a minute while a fully working simulation sits
+   * behind it: optical flow, the fluid, particles and the ambient drive all
+   * need nothing from MediaPipe. So the loop starts as soon as the camera is
+   * up, and perception attaches itself whenever it is ready.
+   */
   async start(setStatus: (text: string) => void): Promise<void> {
     setStatus('opening the camera…');
     try {
@@ -148,18 +187,19 @@ class App {
     }
 
     if (this.cameraAvailable) {
-      setStatus('loading the vision models…');
-      const perception = new MediaPipePerception();
-      try {
-        await perception.init();
-        this.perception = perception;
-        this.perceptionStatus = perception.status;
-      } catch (err) {
-        // Optical flow still drives the fluid, so this is a downgrade rather
-        // than a failure. The HUD says so instead of the app dying.
-        const reason = `Vision models unavailable: ${String(err)}`;
-        console.warn(`[aether] ${reason}`);
-        this.perceptionStatus = { kind: 'unavailable', reason };
+      // `?perception=off` runs the app on the model-free path only. The headless
+      // suite uses it for everything that is not specifically about MediaPipe:
+      // on software rasterisation one inference costs ~770 ms, which would make
+      // every unrelated assertion wait on a model it does not care about.
+      const disabled = new URLSearchParams(location.search).get('perception') === 'off';
+      if (disabled) {
+        this.perceptionStatus = {
+          kind: 'unavailable',
+          reason: 'Disabled by ?perception=off — optical flow only.',
+        };
+      } else {
+        this.perceptionStatus = { kind: 'loading' };
+        void this.attachPerception();
       }
     }
 
@@ -173,9 +213,14 @@ class App {
     if (!this.running) return;
     this.rafId = requestAnimationFrame(this.frame);
 
-    const dt = Math.min(0.05, Math.max(1 / 480, (nowMs - this.lastFrameMs) / 1000));
+    // Two different quantities, and conflating them is how a frame-rate readout
+    // ends up unable to report the problem it exists to report. `simDt` is
+    // clamped so one long stall does not blow the integrator apart; `realDt` is
+    // what actually elapsed, and is the only honest input to an fps number.
+    const realDt = Math.max(1e-4, (nowMs - this.lastFrameMs) / 1000);
+    const simDt = Math.min(0.05, Math.max(1 / 480, realDt));
     this.lastFrameMs = nowMs;
-    this.fps = this.fps * FPS_SMOOTHING + (1 / dt) * (1 - FPS_SMOOTHING);
+    this.fps = this.fps * FPS_SMOOTHING + (1 / realDt) * (1 - FPS_SMOOTHING);
     this.frames++;
 
     if (this.views.buffer !== this.memory.buffer || this.views.dye.length === 0) {
@@ -186,7 +231,7 @@ class App {
     this.pumpPerception(nowMs);
 
     const stepStart = performance.now();
-    this.engine.step(dt);
+    this.engine.step(simDt);
     this.stepMs = performance.now() - stepStart;
 
     const stats = this.engine.stats();
@@ -221,15 +266,16 @@ class App {
     this.lastCameraMs = nowMs;
   }
 
-  /** Runs inference at most every `PERCEPTION_INTERVAL_MS`. */
+  /** Runs inference at a cadence derived from its own measured cost. */
   private pumpPerception(nowMs: number): void {
     if (!this.perception || !this.cameraAvailable || !this.camera.hasFrame) return;
-    if (nowMs - this.lastPerceptionMs < PERCEPTION_INTERVAL_MS) return;
+    if (nowMs - this.lastPerceptionMs < this.perceptionIntervalMs) return;
 
     const dt = this.lastPerceptionMs === 0 ? 1 / 30 : (nowMs - this.lastPerceptionMs) / 1000;
     this.lastPerceptionMs = nowMs;
 
     let result;
+    const start = performance.now();
     try {
       result = this.perception.process(this.camera.video, nowMs);
     } catch (err) {
@@ -239,6 +285,18 @@ class App {
       this.perception.close();
       this.perception = null;
       return;
+    }
+
+    // Measured here rather than trusting the source's own `latencyMs`: what
+    // matters for pacing is the wall time this call cost *the render loop*,
+    // including anything the source does around the inference itself.
+    const cost = performance.now() - start;
+    if (result) {
+      this.inferenceCostMs = this.inferenceCostMs * 0.8 + cost * 0.2;
+      this.perceptionIntervalMs = Math.min(
+        PERCEPTION_MAX_INTERVAL_MS,
+        Math.max(PERCEPTION_MIN_INTERVAL_MS, this.inferenceCostMs / PERCEPTION_DUTY),
+      );
     }
     if (!result) return;
 
@@ -292,9 +350,38 @@ class App {
   // ------------------------------------------------------------ test hooks
 
   /**
-   * Replaces the perception source at runtime. The headless test uses this to
+   * Loads the vision models off the critical path and attaches them.
+   *
+   * Never rejects: a failure here is a capability downgrade, not an error. The
+   * Rust optical-flow path keeps driving the fluid, so the app stays fully
+   * responsive and the HUD explains what is missing.
+   */
+  private async attachPerception(): Promise<void> {
+    const perception = new MediaPipePerception();
+    try {
+      await perception.init();
+      // A scripted source may have been injected while the models loaded
+      // (the headless suite does exactly this), and it must win — otherwise a
+      // slow load silently overwrites the test's perception mid-run.
+      if (this.perception !== null) {
+        perception.close();
+        return;
+      }
+      this.perception = perception;
+      this.perceptionStatus = perception.status;
+    } catch (err) {
+      const reason = `Vision models unavailable: ${String(err)}`;
+      console.warn(`[aether] ${reason}`);
+      this.perceptionStatus = { kind: 'unavailable', reason };
+      perception.close();
+    }
+  }
+
+  /**
+   * Replaces the perception source at runtime. The headless suite uses this to
    * feed scripted landmarks, which is what makes the gesture pipeline testable
-   * without a real hand in front of a real camera.
+   * without a real hand in front of a real camera. Passing null detaches
+   * perception entirely, leaving the model-free optical-flow path in charge.
    */
   setPerception(source: PerceptionSource | null): void {
     this.perception?.close();
@@ -303,6 +390,11 @@ class App {
     this.engine.clear_perception();
     this.lastHands = null;
     this.lastPerceptionMs = 0;
+    // A scripted source has nothing to do with the real one's cost, so the
+    // adaptive cadence has to start over or a slow MediaPipe load would leave
+    // an injected test source throttled to once every two seconds.
+    this.perceptionIntervalMs = PERCEPTION_MIN_INTERVAL_MS;
+    this.inferenceCostMs = 0;
   }
 
   get diagnostics() {
@@ -319,6 +411,9 @@ class App {
       luminance: this.renderer.sampleLuminance(),
       particleCount: this.engine.particle_count(),
       mode: this.mode,
+      /** Effective inference cadence in Hz, after adaptive throttling. */
+      perceptionHz: 1000 / this.perceptionIntervalMs,
+      inferenceCostMs: this.inferenceCostMs,
     };
   }
 

@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn buffer_lengths_agree_with_the_layout() {
-        let mut e = AetherEngine::new(2.0);
+        let e = AetherEngine::new(2.0);
         let layout = e.layout();
         let (w, h) = (layout[0] as usize, layout[1] as usize);
         assert_eq!(e.dye_len(), w * h * 4);

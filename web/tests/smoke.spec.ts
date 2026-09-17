@@ -25,7 +25,7 @@ test('boots, runs the engine, and draws something', async ({ page }) => {
     if (m.type() === 'error') errors.push(`console.error: ${m.text()}`);
   });
 
-  await page.goto('/');
+  await page.goto('/?perception=off');
   await waitForEngine(page, 60);
 
   const diag = await page.evaluate(() => window.__aether!.diagnostics());
@@ -40,13 +40,13 @@ test('boots, runs the engine, and draws something', async ({ page }) => {
 });
 
 test('the boot overlay clears', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?perception=off');
   await waitForEngine(page);
   await expect(page.locator('#boot')).toHaveClass(/done/);
 });
 
 test('renders a non-black frame', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?perception=off');
   await waitForEngine(page, 120);
 
   // Ambient mode injects colour within a couple of seconds even with no
@@ -61,7 +61,7 @@ test('renders a non-black frame', async ({ page }) => {
 });
 
 test('the fake camera stream is picked up', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?perception=off');
   await waitForEngine(page, 90);
 
   const diag = await page.evaluate(() => window.__aether!.diagnostics());
@@ -69,7 +69,7 @@ test('the fake camera stream is picked up', async ({ page }) => {
 });
 
 test('holds a usable frame rate', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?perception=off');
   await waitForEngine(page, 60);
   // Let the smoothed average settle before reading it.
   await page.waitForFunction(() => (window.__aether?.diagnostics().frames ?? 0) >= 240, null, {
