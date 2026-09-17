@@ -13,7 +13,7 @@ import { expect, test, type Page } from '@playwright/test';
 const MODES = ['aether', 'camera', 'debug', 'particles'] as const;
 
 async function boot(page: Page, minFrames = 150): Promise<void> {
-  await page.goto('/');
+  await page.goto('/?perception=off');
   await page.waitForFunction(() => window.__aether !== undefined, null, { timeout: 60_000 });
   await page.waitForFunction((n) => (window.__aether?.diagnostics().frames ?? 0) >= n, minFrames, {
     timeout: 60_000,

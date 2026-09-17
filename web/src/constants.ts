@@ -8,9 +8,9 @@
  */
 
 /** Fluid / dye / obstacle grid width, in cells. */
-export const FLUID_W = 256;
+export const FLUID_W = 192;
 /** Fluid / dye / obstacle grid height, in cells. */
-export const FLUID_H = 144;
+export const FLUID_H = 108;
 /** Optical-flow working width; the camera luma plane is downscaled to this. */
 export const FLOW_W = 128;
 /** Optical-flow working height. */
