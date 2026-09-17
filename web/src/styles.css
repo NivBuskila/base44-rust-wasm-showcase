@@ -259,6 +259,11 @@ body {
   box-shadow: 0 0 6px currentColor;
 }
 
+.hud-badge.is-engine {
+  grid-row: 3;
+  color: var(--accent);
+}
+
 /* Body ------------------------------------------------------------------- */
 
 .hud-body {

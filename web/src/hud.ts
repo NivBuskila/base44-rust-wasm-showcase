@@ -28,6 +28,7 @@
  */
 
 import { FLUID_H, FLUID_W, MAX_PARTICLES, STAT } from './constants';
+import type { EngineTier } from './engine-loader';
 import type { HudCallbacks, HudStats, PerceptionStatus, ViewMode } from './types';
 
 /**
@@ -106,6 +107,7 @@ interface CellSpec {
 }
 
 const CELLS: readonly CellSpec[] = [
+  { id: 'engine', label: 'engine' },
   { id: 'particles', label: 'particles' },
   { id: 'energy', label: 'energy' },
   { id: 'speed', label: 'max speed' },
@@ -377,6 +379,7 @@ export class Hud {
   private readonly collapseBtn: HTMLButtonElement;
   private readonly fpsEl: HTMLElement;
   private readonly ambientEl: HTMLElement;
+  private readonly engineBadge: HTMLElement;
   private readonly meters: Meter[] = [];
   private readonly spark: HTMLCanvasElement;
   private readonly sparkCtx: CanvasRenderingContext2D | null;
@@ -431,6 +434,7 @@ export class Hud {
     this.collapseBtn = this.q('[data-act="collapse"]');
     this.fpsEl = this.q('[data-fps]');
     this.ambientEl = this.q('[data-ambient]');
+    this.engineBadge = this.q('[data-engine]');
     this.spark = this.q('canvas.hud-spark');
     this.sparkCtx = this.spark.getContext('2d');
     this.warpValue = this.q('[data-warp-value]');
@@ -591,6 +595,18 @@ export class Hud {
     }
 
     this.paintPerception(s.perception);
+  }
+
+  /**
+   * Shows which engine build is running. Static for the session, so it is set
+   * once rather than re-derived on every `update`.
+   */
+  setEngineTier(tier: EngineTier): void {
+    const label = tier.name === 'threads' ? `${tier.threads} thr · simd` : '1 thr · simd';
+    this.cell('engine', label);
+    this.engineBadge.hidden = tier.name !== 'threads';
+    this.setText(this.engineBadge, `${tier.threads} threads`);
+    this.engineBadge.title = `Rust engine on ${tier.threads} worker threads (${tier.reason})`;
   }
 
   /** Detaches global listeners. Not used by `main.ts`; here for teardown. */
@@ -977,6 +993,7 @@ function markup(): string {
         </button>
       </div>
       <span class="hud-badge" data-ambient hidden>ambient</span>
+      <span class="hud-badge is-engine" data-engine hidden></span>
     </header>
 
     <div class="hud-body">

@@ -15,8 +15,9 @@
 
 import './styles.css';
 
-import init, { AetherEngine } from './wasm/aether';
+import type { AetherEngine } from './wasm/aether';
 import { Camera, CameraError } from './camera';
+import { loadEngine, type EngineTier } from './engine-loader';
 import { Hud } from './hud';
 import {
   DEFAULT_SPAWN_RATE,
@@ -93,6 +94,8 @@ class App {
   private readonly memory: WebAssembly.Memory;
   private readonly renderer: Renderer;
   private readonly hud: Hud;
+  /** Which engine build is running and on how many threads. */
+  readonly tier: EngineTier;
   private readonly overdrive: OverdriveBanner;
   /** Particle count to return to when overdrive is switched off. */
   private particlesBeforeOverdrive = 0;
@@ -133,10 +136,16 @@ class App {
   private inferenceMs = 0;
   private frames = 0;
 
-  constructor(engine: AetherEngine, memory: WebAssembly.Memory, renderer: Renderer) {
+  constructor(
+    engine: AetherEngine,
+    memory: WebAssembly.Memory,
+    renderer: Renderer,
+    tier: EngineTier,
+  ) {
     this.engine = engine;
     this.memory = memory;
     this.renderer = renderer;
+    this.tier = tier;
     this.views = this.makeViews();
     this.hud = new Hud(document.getElementById('hud')!, {
       onParam: (key, value) => {
@@ -162,7 +171,8 @@ class App {
       },
     });
     // After the HUD, which owns and rewrites #hud's markup.
-    this.overdrive = new OverdriveBanner(document.getElementById('hud')!);
+    this.overdrive = new OverdriveBanner(document.getElementById('hud')!, tier);
+    this.hud.setEngineTier(tier);
   }
 
   /**
@@ -476,6 +486,7 @@ class App {
       spells: [this.engine.spell_name(0), this.engine.spell_name(1)] as [string, string],
       particleCount: this.engine.particle_count(),
       mode: this.mode,
+      engine: this.tier,
       /** Effective inference cadence in Hz, after adaptive throttling. */
       perceptionHz: 1000 / this.perceptionIntervalMs,
       inferenceCostMs: this.inferenceCostMs,
@@ -561,9 +572,8 @@ async function boot(): Promise<void> {
   };
 
   try {
-    setStatus('loading the engine…');
-    const wasm = await init();
-    const engine = new AetherEngine(SEED);
+    const loaded = await loadEngine(setStatus);
+    const engine = new loaded.module.AetherEngine(SEED);
     assertLayout(engine.layout());
 
     const canvas = document.getElementById('stage');
@@ -572,7 +582,7 @@ async function boot(): Promise<void> {
     setStatus('starting the renderer…');
     const renderer = new Renderer(canvas);
 
-    const app = new App(engine, wasm.memory, renderer);
+    const app = new App(engine, loaded.memory, renderer, loaded.tier);
     window.__aether = {
       app,
       diagnostics: () => app.diagnostics,
