@@ -19,9 +19,12 @@ interface AetherDiagnostics {
     | { kind: 'unavailable'; reason: string };
   /** Packed engine stats; indices mirror `STAT` in `web/src/constants.ts`. */
   stats: number[];
-  /** Centre-pixel luminance of the last rendered frame, `[0, 1]`. */
+  /** Latched spell name per hand slot. */
+  spells: [string, string];
+  /** Mean luminance of the last rendered frame, `[0, 1]`. */
   luminance: number;
   particleCount: number;
+  mode: 'aether' | 'camera' | 'debug' | 'particles';
 }
 
 interface AetherTestHooks {
