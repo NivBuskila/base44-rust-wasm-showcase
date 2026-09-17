@@ -27,7 +27,7 @@
  * never exceeds the clamp, so no value ever gets silently rewritten.
  */
 
-import { MAX_PARTICLES, STAT } from './constants';
+import { FLUID_H, FLUID_W, MAX_PARTICLES, STAT } from './constants';
 import type { HudCallbacks, HudStats, PerceptionStatus, ViewMode } from './types';
 
 /**
@@ -1026,9 +1026,9 @@ function markup(): string {
           <div class="k-list">${keyRows}</div>
           <h3>how it works</h3>
           <p class="help-note">
-            Hand and body landmarks steer a 256×144 fluid solver compiled to
-            WebAssembly. With no camera or no models, optical flow — or the
-            engine's own ambient drive — keeps the field alive.
+            Hand and body landmarks steer a ${FLUID_W}×${FLUID_H} fluid solver
+            compiled to WebAssembly. With no camera or no models, optical
+            flow — or the engine's own ambient drive — keeps the field alive.
           </p>
         </div>
       </div>
