@@ -212,7 +212,10 @@ async function expectSpell(page: Page, expected: string): Promise<void> {
 }
 
 async function boot(page: Page): Promise<void> {
-  await page.goto('/');
+  // `?perception=off` skips the MediaPipe load entirely: this suite replaces
+  // the perception source anyway, so loading 26 MB of models just to throw
+  // them away would add ~25 s to every test here.
+  await page.goto('/?perception=off');
   await page.waitForFunction(() => window.__aether !== undefined, null, { timeout: 60_000 });
   await page.waitForFunction(() => (window.__aether?.diagnostics().frames ?? 0) > 30, null, {
     timeout: 60_000,
@@ -317,9 +320,15 @@ test('a moving hand drives the fluid and lights the screen', async ({ page }) =>
   const energy = await page.evaluate(() => window.__aether!.diagnostics().stats[0]);
   expect(energy, 'a moving hand should inject fluid energy').toBeGreaterThan(0.05);
 
-  await page.waitForFunction(() => (window.__aether?.diagnostics().luminance ?? 0) > 0.005, null, {
+  // Polled on a cheap stat; luminance is a framebuffer readback and polling it
+  // every animation frame would slow the app enough to change the result.
+  await page.waitForFunction(() => (window.__aether?.diagnostics().stats[0] ?? 0) > 0.05, null, {
     timeout: 30_000,
   });
+  expect(
+    await page.evaluate(() => window.__aether!.luminance()),
+    'a moving hand should light the screen',
+  ).toBeGreaterThan(0.002);
 });
 
 test('the simulation stays finite through a full gesture sequence', async ({ page }) => {
