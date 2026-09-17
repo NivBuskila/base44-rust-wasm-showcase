@@ -1,0 +1,41 @@
+services:
+  wasm:
+    image: rust:1.90-bookworm
+    working_dir: /app
+    volumes:
+      - .:/app
+      - cargo-cache:/usr/local/cargo
+      - rust-target:/app/target
+    command: bash scripts/base44-wasm.sh
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/aether-wasm-ready"]
+      interval: 3s
+      timeout: 2s
+      retries: 5
+      start_period: 15m
+
+  web:
+    image: node:22
+    working_dir: /app/web
+    volumes:
+      - .:/app
+      - node-modules:/app/web/node_modules
+    environment:
+      __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS:
+    ports:
+      - "3000:5173"
+    depends_on:
+      wasm:
+        condition: service_healthy
+    command: sh -c 'npm ci && npm run fetch:models && npm run dev -- --host 0.0.0.0'
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:5173').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5m
+
+volumes:
+  cargo-cache:
+  rust-target:
+  node-modules:
