@@ -4,6 +4,7 @@ export default defineConfig({
   server: {
     host: '127.0.0.1',
     port: 5173,
+    watch: { usePolling: true },
     // The MediaPipe runtime is 12 MB of WASM served out of public/; without a
     // generous timeout a cold load on a slow disk trips Vite's default.
     warmup: { clientFiles: ['./src/main.ts'] },
