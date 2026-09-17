@@ -309,12 +309,15 @@ impl Engine {
             let x = (FLUID_W as f32) * (0.5 + 0.34 * (phase * 0.7).sin());
             let y = (FLUID_H as f32) * (0.5 + 0.30 * (phase * 0.9).cos());
             let dir = phase * 1.7;
-            let mag = 90.0 * dt * 60.0;
+            // Injected every frame, so these are *rates*: the field settles at
+            // roughly rate / dissipation. The `dt * 60.0` factor expresses them
+            // as "per frame at 60 fps" while staying frame-rate independent.
+            let mag = 10.0 * dt * 60.0;
             self.fluid
                 .add_force(x, y, dir.cos() * mag, dir.sin() * mag, 12.0);
             let hue = 0.55 + 0.12 * (t * 0.05 + k as f32 * 0.33).sin();
             let rgb = hue_to_rgb(hue);
-            let amount = 0.55 * dt * 60.0;
+            let amount = 0.03 * dt * 60.0;
             self.fluid.add_dye(
                 x,
                 y,

@@ -24,7 +24,9 @@ const DISC_SPEED_PX_PER_SEC = 220;
 const DISC_RADIUS = 46;
 
 const here = dirname(fileURLToPath(import.meta.url));
-const outPath = resolve(process.argv[2] ?? join(here, '..', 'tests', 'fixtures', 'motion.y4m'));
+const outPath = resolve(
+  process.argv[2] ?? join(here, '..', 'web', 'tests', 'fixtures', 'motion.y4m'),
+);
 const seconds = Number(process.argv[3] ?? 4);
 const frameCount = Math.max(1, Math.round(seconds * FPS));
 
