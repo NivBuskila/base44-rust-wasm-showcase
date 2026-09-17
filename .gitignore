@@ -2,6 +2,7 @@
 **/node_modules/
 /web/dist/
 /web/src/wasm/
+/web/src/wasm-mt/
 
 # Vendored at install time by scripts/sync-mp-assets.mjs (24 MB).
 /web/public/mp-wasm/

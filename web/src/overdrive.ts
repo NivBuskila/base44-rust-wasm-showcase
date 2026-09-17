@@ -9,6 +9,7 @@
  */
 
 import { MAX_PARTICLES, STAT } from './constants';
+import type { EngineTier } from './engine-loader';
 
 /** Particles the pool is raised to when overdrive is on. */
 export const OVERDRIVE_PARTICLES = MAX_PARTICLES;
@@ -40,7 +41,11 @@ export class OverdriveBanner {
   private lastPaint = 0;
   private on = false;
 
-  constructor(parent: HTMLElement) {
+  constructor(parent: HTMLElement, tier: EngineTier) {
+    const source =
+      tier.name === 'threads'
+        ? `rust · wasm · ${tier.threads} threads · simd128`
+        : 'rust · wasm · single thread · simd128';
     this.el = document.createElement('aside');
     this.el.className = 'od-banner';
     this.el.hidden = true;
@@ -50,7 +55,7 @@ export class OverdriveBanner {
       <span class="od-cell"><b data-od-alive>—</b><i>particles alive</i></span>
       <span class="od-cell"><b data-od-rate>—</b><i>particle-steps / s</i></span>
       <span class="od-cell"><b data-od-step>—</b><i>engine step</i></span>
-      <span class="od-src">rust · wasm · single thread</span>`;
+      <span class="od-src">${source}</span>`;
     parent.appendChild(this.el);
     this.alive = this.el.querySelector('[data-od-alive]')!;
     this.rate = this.el.querySelector('[data-od-rate]')!;

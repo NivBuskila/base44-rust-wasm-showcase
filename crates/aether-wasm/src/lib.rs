@@ -15,6 +15,24 @@
 use aether_core::engine::Engine;
 use wasm_bindgen::prelude::*;
 
+// `initThreadPool(n)` on the JS side: spawns `n` Web Workers over the shared
+// memory and hands them to rayon. Only present in the `--threads` build.
+#[cfg(all(target_arch = "wasm32", feature = "parallel"))]
+pub use wasm_bindgen_rayon::init_thread_pool;
+
+/// Worker threads the engine spreads its hot loops over. `1` in the
+/// single-threaded build, or before `initThreadPool` has resolved.
+#[wasm_bindgen]
+pub fn thread_count() -> usize {
+    aether_core::par::threads()
+}
+
+/// Whether this module was compiled with the multithreaded engine.
+#[wasm_bindgen]
+pub fn is_parallel_build() -> bool {
+    cfg!(feature = "parallel")
+}
+
 /// Number of floats in the packed stats array from [`AetherEngine::stats`].
 pub const STATS_LEN: usize = 16;
 
