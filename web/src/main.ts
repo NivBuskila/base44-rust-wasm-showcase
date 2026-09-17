@@ -306,8 +306,10 @@ class App {
       cameraAvailable: this.cameraAvailable,
       perception: this.perceptionStatus,
       stats: Array.from(this.engine.stats()),
+      spells: [this.engine.spell_name(0), this.engine.spell_name(1)] as [string, string],
       luminance: this.renderer.sampleLuminance(),
       particleCount: this.engine.particle_count(),
+      mode: this.mode,
     };
   }
 

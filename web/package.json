@@ -6,10 +6,15 @@
   "scripts": {
     "postinstall": "node ../scripts/sync-mp-assets.mjs",
     "fetch:models": "node ../scripts/fetch-models.mjs",
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "preview": "vite preview --port 4173",
-    "test:e2e": "playwright test"
+    "build:wasm": "bash ../scripts/build-wasm.sh release",
+    "build:wasm:dev": "bash ../scripts/build-wasm.sh dev",
+    "fixture": "node ../scripts/make-fixture-video.mjs",
+    "dev": "bash ../scripts/build-wasm.sh release --if-missing && vite",
+    "build": "bash ../scripts/build-wasm.sh release --if-missing && tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173 --strictPort",
+    "typecheck": "tsc --noEmit",
+    "test": "cd .. && cargo test --workspace",
+    "test:e2e": "node ../scripts/make-fixture-video.mjs && playwright test"
   },
   "dependencies": {
     "@mediapipe/tasks-vision": "1.0.1"
