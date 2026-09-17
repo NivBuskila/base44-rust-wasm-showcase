@@ -11,7 +11,7 @@
  *
  * Usage: node scripts/make-fixture-video.mjs [out.y4m] [seconds]
  */
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -24,11 +24,43 @@ const DISC_SPEED_PX_PER_SEC = 220;
 const DISC_RADIUS = 46;
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+// Flags and positionals are interleaved on the command line, so they are split
+// before indexing — otherwise `--force` is read as the output path.
+const argv = process.argv.slice(2);
+const positional = argv.filter((a) => !a.startsWith('--'));
+const flags = new Set(argv.filter((a) => a.startsWith('--')));
+
 const outPath = resolve(
-  process.argv[2] ?? join(here, '..', 'web', 'tests', 'fixtures', 'motion.y4m'),
+  positional[0] ?? join(here, '..', 'web', 'tests', 'fixtures', 'motion.y4m'),
 );
-const seconds = Number(process.argv[3] ?? 4);
+const seconds = Number(positional[1] ?? 4);
 const frameCount = Math.max(1, Math.round(seconds * FPS));
+
+// The clip is ~55 MB and fully deterministic, so regenerating it on every test
+// run is pure waste. `--force` overrides.
+if (!flags.has('--force')) {
+  try {
+    const { size } = await stat(outPath);
+    const expected = expectedBytes(frameCount);
+    if (size === expected) {
+      console.log(
+        `[make-fixture-video] ${outPath} already present ` +
+          `(${(size / 1e6).toFixed(1)} MB); pass --force to regenerate`,
+      );
+      process.exit(0);
+    }
+  } catch {
+    /* not generated yet */
+  }
+}
+
+/** Exact Y4M size for a frame count, used to detect a stale fixture. */
+function expectedBytes(frames) {
+  const headerLen = `YUV4MPEG2 W${WIDTH} H${HEIGHT} F${FPS}:1 Ip A1:1 C420jpeg\n`.length;
+  const planeBytes = WIDTH * HEIGHT + 2 * (WIDTH / 2) * (HEIGHT / 2);
+  return headerLen + frames * ('FRAME\n'.length + planeBytes);
+}
 
 /** Deterministic PRNG so the fixture is byte-identical on every machine. */
 function mulberry32(seed) {
