@@ -32,7 +32,12 @@ pub const FLOW_H: usize = 72;
 pub const FLOW_CELLS: usize = FLOW_W * FLOW_H;
 
 /// Hard ceiling on particles; the render buffer is allocated once at this size.
-pub const MAX_PARTICLES: usize = 220_000;
+///
+/// One million is the "overdrive" demo ceiling: eleven f32 streams per
+/// particle (seven SoA fields plus the four-float render buffer) is 44 MB of
+/// linear memory, allocated once at boot and never resized. The normal session
+/// runs at [`DEFAULT_PARTICLES`]; overdrive activates the whole pool.
+pub const MAX_PARTICLES: usize = 1_000_000;
 /// Particle count the engine starts at.
 pub const DEFAULT_PARTICLES: usize = 120_000;
 /// Floats per particle in the render buffer: `x, y, heat, life`.
