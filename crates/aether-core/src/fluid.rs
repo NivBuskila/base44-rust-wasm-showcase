@@ -107,7 +107,6 @@ pub struct Fluid {
     vel: VecField,
     vel_tmp: VecField,
     dye: [Grid; DYE_CHANNELS],
-    dye_tmp: [Grid; DYE_CHANNELS],
     pressure: Grid,
     pressure_tmp: Grid,
     divergence: Grid,
@@ -117,10 +116,8 @@ pub struct Fluid {
     /// `obstacle` with the domain border forced solid. Every kernel tests this
     /// one array instead of re-deriving "am I on the border?" per cell.
     solid: Grid,
-    /// Advection source positions for this step (`u` = x, `v` = y).
-    trace_back: VecField,
-    /// Forward trace positions, used by the MacCormack error estimate.
-    trace_fwd: VecField,
+    /// Trace maps and workspace shared by all five advected channels.
+    advector: Advector,
     /// Absolute maximum divergence measured at the end of the last step; the
     /// HUD shows it and the tests assert on it.
     last_divergence: f32,
@@ -134,7 +131,6 @@ impl Fluid {
             vel: VecField::new(w, h),
             vel_tmp: VecField::new(w, h),
             dye: [Grid::new(w, h), Grid::new(w, h), Grid::new(w, h)],
-            dye_tmp: [Grid::new(w, h), Grid::new(w, h), Grid::new(w, h)],
             pressure: Grid::new(w, h),
             pressure_tmp: Grid::new(w, h),
             divergence: Grid::new(w, h),
@@ -142,8 +138,7 @@ impl Fluid {
             obstacle: Grid::new(w, h),
             scratch: Grid::new(w, h),
             solid: Grid::new(w, h),
-            trace_back: VecField::new(w, h),
-            trace_fwd: VecField::new(w, h),
+            advector: Advector::new(w * h),
             last_divergence: 0.0,
         };
         fluid.refresh_solid();
@@ -237,8 +232,8 @@ impl Fluid {
     pub fn reset(&mut self) {
         self.vel.zero();
         self.pressure.zero();
-        for c in 0..DYE_CHANNELS {
-            self.dye[c].zero();
+        for channel in &mut self.dye {
+            channel.zero();
         }
         self.curl.zero();
         self.divergence.zero();
@@ -277,8 +272,9 @@ impl Fluid {
         // A uniform scale cannot introduce divergence, so dissipation is safe
         // to apply after the projection rather than before it.
         self.vel.scale(decay(params.velocity_dissipation, dt));
-        for c in 0..DYE_CHANNELS {
-            self.dye[c].scale(decay(params.dye_dissipation, dt));
+        let dye_decay = decay(params.dye_dissipation, dt);
+        for channel in &mut self.dye {
+            channel.scale(dye_decay);
         }
 
         self.last_divergence = self.max_divergence();
@@ -288,42 +284,22 @@ impl Fluid {
 
     fn advect(&mut self, dt: f32) {
         self.build_traces(dt);
+        let (w, h) = (self.w, self.h);
 
-        advect_field(
-            &self.vel.u,
-            &mut self.vel_tmp.u,
-            &mut self.scratch,
-            &self.trace_back,
-            &self.trace_fwd,
-        );
-        advect_field(
-            &self.vel.v,
-            &mut self.vel_tmp.v,
-            &mut self.scratch,
-            &self.trace_back,
-            &self.trace_fwd,
-        );
-        core::mem::swap(&mut self.vel, &mut self.vel_tmp);
+        self.advector.run(&mut self.vel.u.data, w, h);
+        self.advector.run(&mut self.vel.v.data, w, h);
         self.enforce_boundaries();
 
-        for c in 0..DYE_CHANNELS {
-            advect_field(
-                &self.dye[c],
-                &mut self.dye_tmp[c],
-                &mut self.scratch,
-                &self.trace_back,
-                &self.trace_fwd,
-            );
-            core::mem::swap(&mut self.dye[c], &mut self.dye_tmp[c]);
+        for channel in &mut self.dye {
+            self.advector.run(&mut channel.data, w, h);
         }
     }
 
     /// Fills the backward and forward trace maps for this step.
     ///
-    /// Shared by all five advected channels, which is the whole reason they are
-    /// materialised instead of recomputed: the RK2 trace costs two velocity
-    /// samples plus the obstacle walk, and doing that five times per cell is
-    /// the difference between a 3 ms and an 8 ms frame.
+    /// Materialised rather than recomputed because velocity and all three dye
+    /// channels trace identically: five fetches per cell share one RK2 trace,
+    /// one obstacle walk and one clamp-floor-fraction conversion.
     fn build_traces(&mut self, dt: f32) {
         let (w, h) = (self.w, self.h);
         for y in 0..h {
@@ -334,17 +310,32 @@ impl Fluid {
                 let u0 = self.vel.u.data[i];
                 let v0 = self.vel.v.data[i];
 
-                let (um, vm) = self.vel.sample(fx - 0.5 * dt * u0, fy - 0.5 * dt * v0);
+                // Midpoint (RK2) rather than Euler: at the 200+ cells/s a
+                // swipe produces, first-order backtracing rounds the dye off
+                // into mush inside a second and no number of pressure
+                // iterations brings the structure back.
+                let (um, vm) = self.velocity_at(fx - 0.5 * dt * u0, fy - 0.5 * dt * v0);
                 let (bx, by) = self.trace_to_fluid(fx, fy, fx - dt * um, fy - dt * vm);
-                self.trace_back.u.data[i] = bx;
-                self.trace_back.v.data[i] = by;
+                self.advector.back.set(i, bx, by, w, h);
 
-                let (up, vp) = self.vel.sample(fx + 0.5 * dt * u0, fy + 0.5 * dt * v0);
+                let (up, vp) = self.velocity_at(fx + 0.5 * dt * u0, fy + 0.5 * dt * v0);
                 let (gx, gy) = self.trace_to_fluid(fx, fy, fx + dt * up, fy + dt * vp);
-                self.trace_fwd.u.data[i] = gx;
-                self.trace_fwd.v.data[i] = gy;
+                self.advector.fwd.set(i, gx, gy, w, h);
             }
         }
+    }
+
+    /// Bilinear velocity fetch. Both components share one stencil, so this is
+    /// half the index arithmetic of sampling the two grids independently.
+    #[inline]
+    fn velocity_at(&self, x: f32, y: f32) -> (f32, f32) {
+        let (ix, fx) = corner_of(x, self.w);
+        let (iy, fy) = corner_of(y, self.h);
+        let corner = iy * self.w + ix;
+        (
+            fetch(&self.vel.u.data, self.w, corner, fx, fy),
+            fetch(&self.vel.v.data, self.w, corner, fx, fy),
+        )
     }
 
     /// Shortens a trace until its endpoint is out of the walls.
@@ -637,11 +628,156 @@ impl Fluid {
     /// Clears any non-finite cell. Returns the number of cells repaired.
     pub fn sanitize(&mut self) -> usize {
         let mut fixed = self.vel.sanitize() + self.pressure.sanitize();
-        for c in 0..DYE_CHANNELS {
-            fixed += self.dye[c].sanitize();
+        for channel in &mut self.dye {
+            fixed += channel.sanitize();
         }
         fixed
     }
+}
+
+// ---------------------------------------------------------------- advection
+
+/// One precomputed bilinear fetch per cell: the index of the stencil's
+/// top-left corner plus the two blend fractions.
+///
+/// Storing the resolved stencil instead of the raw trace position hoists the
+/// clamp, floor and cast out of five per-cell fetches (`u`, `v` and three dye
+/// channels all trace identically), and lets the fetch read a `w + 2` window
+/// so the bounds check collapses to one per corner group.
+struct TraceMap {
+    corner: Vec<u32>,
+    fx: Vec<f32>,
+    fy: Vec<f32>,
+}
+
+impl TraceMap {
+    fn new(n: usize) -> Self {
+        Self {
+            corner: vec![0; n],
+            fx: vec![0.0; n],
+            fy: vec![0.0; n],
+        }
+    }
+
+    /// Records the trace endpoint for cell `i`, clamped into the grid.
+    #[inline]
+    fn set(&mut self, i: usize, x: f32, y: f32, w: usize, h: usize) {
+        let (ix, fx) = corner_of(x, w);
+        let (iy, fy) = corner_of(y, h);
+        self.corner[i] = (iy * w + ix) as u32;
+        self.fx[i] = fx;
+        self.fy[i] = fy;
+    }
+
+    #[inline]
+    fn fetch(&self, g: &[f32], w: usize, i: usize) -> f32 {
+        fetch(g, w, self.corner[i] as usize, self.fx[i], self.fy[i])
+    }
+
+    /// Fetch plus the min and max of the four corners it blended — the range
+    /// the MacCormack limiter is allowed to keep, for free from the same loads.
+    #[inline]
+    fn fetch_limited(&self, g: &[f32], w: usize, i: usize) -> (f32, f32, f32) {
+        let c = self.corner[i] as usize;
+        let q = &g[c..c + w + 2];
+        let (a, b, c, d) = (q[0], q[1], q[w], q[w + 1]);
+        let fx = self.fx[i];
+        let top = a + (b - a) * fx;
+        let bottom = c + (d - c) * fx;
+        (
+            top + (bottom - top) * self.fy[i],
+            a.min(b).min(c).min(d),
+            a.max(b).max(c).max(d),
+        )
+    }
+}
+
+/// Trace maps plus the workspace the error-corrected advection needs.
+struct Advector {
+    back: TraceMap,
+    fwd: TraceMap,
+    /// The backward fetch, kept whole because the forward pass gathers from it.
+    hat: Vec<f32>,
+    /// Limiter bounds from the backward fetch. Stored rather than re-derived:
+    /// re-deriving them means a second random four-corner gather per cell,
+    /// which is the most expensive thing in the advection.
+    lo: Vec<f32>,
+    hi: Vec<f32>,
+}
+
+impl Advector {
+    fn new(n: usize) -> Self {
+        Self {
+            back: TraceMap::new(n),
+            fwd: TraceMap::new(n),
+            hat: vec![0.0; n],
+            lo: vec![0.0; n],
+            hi: vec![0.0; n],
+        }
+    }
+
+    /// Advects `field` in place through the current trace maps.
+    ///
+    /// MacCormack: the backward fetch `hat`, the forward fetch `bar` of that
+    /// result, then `hat + (field - bar) / 2` clamped to the range the backward
+    /// fetch could legitimately have returned. The limiter is not optional —
+    /// unlimited MacCormack overshoots at every sharp dye edge and the
+    /// overshoot compounds into ringing and then into NaN within seconds.
+    ///
+    /// Two passes, two gathers per cell. The correction can be written straight
+    /// back into `field` because it only ever reads `field` at its own index.
+    fn run(&mut self, field: &mut [f32], w: usize, h: usize) {
+        let n = w * h;
+        if field.len() != n || self.hat.len() != n {
+            return;
+        }
+
+        for i in 0..n {
+            let (value, lo, hi) = self.back.fetch_limited(field, w, i);
+            self.hat[i] = value;
+            self.lo[i] = lo;
+            self.hi[i] = hi;
+        }
+
+        for i in 0..n {
+            let bar = self.fwd.fetch(&self.hat, w, i);
+            let corrected = self.hat[i] + 0.5 * (field[i] - bar);
+            // `max`/`min` rather than `clamp`: they return the bound when one
+            // operand is not a number, so a stray NaN dies here instead of
+            // spreading one cell further every frame.
+            field[i] = corrected.max(self.lo[i]).min(self.hi[i]);
+        }
+    }
+}
+
+/// Corner index and blend fraction for a clamped bilinear fetch on one axis.
+///
+/// The index is clamped to `n - 2` rather than `n - 1` so the `+1` neighbour
+/// always exists; the fraction absorbs the difference, which reproduces
+/// [`Grid::sample`]'s clamped behaviour including for out-of-range and NaN
+/// inputs.
+#[inline]
+fn corner_of(x: f32, n: usize) -> (usize, f32) {
+    if x.is_nan() || n < 2 {
+        return (0, 0.0);
+    }
+    let clamped = x.clamp(0.0, (n - 1) as f32);
+    let i = (clamped as usize).min(n - 2);
+    (i, clamped - i as f32)
+}
+
+/// Bilinear blend of the four values at `corner`, `corner + 1`, `corner + w`
+/// and `corner + w + 1`.
+#[inline]
+fn fetch(g: &[f32], w: usize, corner: usize, fx: f32, fy: f32) -> f32 {
+    let end = corner + w + 2;
+    if end > g.len() {
+        return 0.0;
+    }
+    let q = &g[corner..end];
+    let top = q[0] + (q[1] - q[0]) * fx;
+    let bottom = q[w] + (q[w + 1] - q[w]) * fx;
+    top + (bottom - top) * fy
 }
 
 // ------------------------------------------------------------------ helpers
@@ -697,85 +833,75 @@ fn wall_pick(value: f32, solid: f32, centre: f32) -> f32 {
     }
 }
 
-/// Min and max of the four lattice values a bilinear fetch at `(x, y)` would
-/// blend. Mirrors [`Grid::sample`]'s clamping exactly, which is what makes it a
-/// valid limiter for the value that fetch produced.
-#[inline]
-fn bilinear_bounds(g: &Grid, x: f32, y: f32) -> (f32, f32) {
-    let x = if x.is_nan() {
-        0.0
-    } else {
-        x.clamp(0.0, (g.w - 1) as f32)
-    };
-    let y = if y.is_nan() {
-        0.0
-    } else {
-        y.clamp(0.0, (g.h - 1) as f32)
-    };
-    let ix0 = x as usize;
-    let iy0 = y as usize;
-    let ix1 = (ix0 + 1).min(g.w - 1);
-    let iy1 = (iy0 + 1).min(g.h - 1);
-    let row0 = iy0 * g.w;
-    let row1 = iy1 * g.w;
-    let a = g.data[row0 + ix0];
-    let b = g.data[row0 + ix1];
-    let c = g.data[row1 + ix0];
-    let d = g.data[row1 + ix1];
-    (a.min(b).min(c).min(d), a.max(b).max(c).max(d))
-}
-
-/// MacCormack (error-corrected) semi-Lagrangian advection of one scalar field.
-///
-/// `out` receives the advected field and `scratch` is clobbered. The three
-/// passes are: backward trace, forward trace of that result, then the
-/// second-order correction `q_hat + (q - q_bar) / 2` limited to the range the
-/// backward fetch could legitimately have returned.
-fn advect_field(src: &Grid, out: &mut Grid, scratch: &mut Grid, back: &VecField, fwd: &VecField) {
-    let n = src.data.len();
-    if out.data.len() != n
-        || scratch.data.len() != n
-        || back.u.data.len() != n
-        || back.v.data.len() != n
-        || fwd.u.data.len() != n
-        || fwd.v.data.len() != n
-    {
-        return;
-    }
-
-    for (o, (bx, by)) in out
-        .data
-        .iter_mut()
-        .zip(back.u.data.iter().zip(&back.v.data))
-    {
-        *o = src.sample(*bx, *by);
-    }
-
-    for (s, (gx, gy)) in scratch
-        .data
-        .iter_mut()
-        .zip(fwd.u.data.iter().zip(&fwd.v.data))
-    {
-        *s = out.sample(*gx, *gy);
-    }
-
-    for (i, (bx, by)) in back.u.data.iter().zip(&back.v.data).enumerate() {
-        let (lo, hi) = bilinear_bounds(src, *bx, *by);
-        let corrected = out.data[i] + 0.5 * (src.data[i] - scratch.data[i]);
-        // The limiter is not optional: unlimited MacCormack overshoots at every
-        // sharp dye edge, and the overshoot compounds into ringing and then
-        // into NaN within seconds. `max`/`min` also scrub a stray NaN, since
-        // both return the bound when one operand is not a number.
-        out.data[i] = corrected.max(lo).min(hi);
-    }
-}
-
 // ------------------------------------------------------------------ kernels
 //
-// The two Jacobi sweeps are the hot loops of the whole engine: at 256x144 and
+// The two Jacobi sweeps are the hot loops of the whole engine: at 256x144 with
 // 28 pressure iterations they are ~1M cell updates per frame. Both have a
 // wasm32 SIMD128 path and a scalar fallback that stays compiled everywhere, so
 // the two can be diffed against each other.
+
+/// The row windows one output row of a five-point sweep reads.
+///
+/// Slicing the rows out up front is not cosmetic: indexing `w`-long slices with
+/// `x in 1..w - 1` lets the compiler discharge the bounds checks, which is
+/// worth roughly 3x on the pressure sweep over indexing the flat grid.
+struct StencilRows<'a> {
+    up: &'a [f32],
+    mid: &'a [f32],
+    down: &'a [f32],
+    solid_up: &'a [f32],
+    solid_mid: &'a [f32],
+    solid_down: &'a [f32],
+    rhs: &'a [f32],
+}
+
+impl<'a> StencilRows<'a> {
+    /// Windows around row `y`. Requires `1 <= y <= h - 2` and slices of at
+    /// least `w * h`.
+    #[inline]
+    fn new(field: &'a [f32], solid: &'a [f32], rhs: &'a [f32], w: usize, y: usize) -> Self {
+        let row = y * w;
+        Self {
+            up: &field[row - w..row],
+            mid: &field[row..row + w],
+            down: &field[row + w..row + 2 * w],
+            solid_up: &solid[row - w..row],
+            solid_mid: &solid[row..row + w],
+            solid_down: &solid[row + w..row + 2 * w],
+            rhs: &rhs[row..row + w],
+        }
+    }
+
+    /// Damped Jacobi pressure update for one cell of this row.
+    #[inline]
+    fn pressure(&self, x: usize) -> f32 {
+        if self.solid_mid[x] >= 0.5 {
+            return 0.0;
+        }
+        let pc = self.mid[x];
+        let l = wall_pick(self.mid[x - 1], self.solid_mid[x - 1], pc);
+        let r = wall_pick(self.mid[x + 1], self.solid_mid[x + 1], pc);
+        let u = wall_pick(self.up[x], self.solid_up[x], pc);
+        let d = wall_pick(self.down[x], self.solid_down[x], pc);
+        // Grouped exactly as the SIMD path adds it, so the two are bit-equal
+        // and the cross-check test can use a tight tolerance.
+        let sweep = ((l + r) + (u + d) - self.rhs[x]) * 0.25;
+        pc + PRESSURE_OMEGA * (sweep - pc)
+    }
+
+    /// Jacobi diffusion update for one cell of this row.
+    #[inline]
+    fn diffuse(&self, x: usize, a: f32, inv: f32) -> f32 {
+        if self.solid_mid[x] >= 0.5 {
+            return 0.0;
+        }
+        // A wall neighbour contributes its own (zero) velocity rather than a
+        // mirrored copy of the centre: a wall *drags* the fluid beside it,
+        // which is the entire physical content of no-slip.
+        let sum = (self.mid[x - 1] + self.mid[x + 1]) + (self.up[x] + self.down[x]);
+        (self.rhs[x] + a * sum) * inv
+    }
+}
 
 /// One Jacobi sweep of `laplacian(p) = div`, with walls as Neumann boundaries.
 ///
@@ -826,45 +952,6 @@ fn zero_walls(out: &mut [f32], w: usize, h: usize) {
     }
 }
 
-/// Pressure update for one cell. Also the tail of the SIMD loop, so the two
-/// paths cannot drift apart in the arithmetic.
-#[inline]
-fn pressure_cell(p: &[f32], div: &[f32], solid: &[f32], i: usize, w: usize) -> f32 {
-    if solid[i] >= 0.5 {
-        return 0.0;
-    }
-    let pc = p[i];
-    let l = wall_pick(p[i - 1], solid[i - 1], pc);
-    let r = wall_pick(p[i + 1], solid[i + 1], pc);
-    let u = wall_pick(p[i - w], solid[i - w], pc);
-    let d = wall_pick(p[i + w], solid[i + w], pc);
-    // Grouped exactly as the SIMD path adds it, so the results are bit-equal
-    // and the cross-check test can use a tight tolerance.
-    let jacobi = ((l + r) + (u + d) - div[i]) * 0.25;
-    pc + PRESSURE_OMEGA * (jacobi - pc)
-}
-
-/// Diffusion update for one cell.
-#[inline]
-fn diffuse_cell(
-    x: &[f32],
-    rhs: &[f32],
-    solid: &[f32],
-    i: usize,
-    w: usize,
-    a: f32,
-    inv: f32,
-) -> f32 {
-    if solid[i] >= 0.5 {
-        return 0.0;
-    }
-    // A wall neighbour contributes its own (zero) velocity rather than a
-    // mirrored copy of the centre: a wall *drags* the fluid beside it, which is
-    // the entire physical content of no-slip.
-    let sum = (x[i - 1] + x[i + 1]) + (x[i - w] + x[i + w]);
-    (rhs[i] + a * sum) * inv
-}
-
 #[cfg_attr(all(target_arch = "wasm32", feature = "simd"), allow(dead_code))]
 fn jacobi_pressure_scalar(
     p: &[f32],
@@ -881,10 +968,10 @@ fn jacobi_pressure_scalar(
     }
     zero_walls(out, w, h);
     for y in 1..h - 1 {
-        let row = y * w;
+        let rows = StencilRows::new(p, solid, div, w, y);
+        let o = &mut out[y * w..y * w + w];
         for x in 1..w - 1 {
-            let i = row + x;
-            out[i] = pressure_cell(p, div, solid, i, w);
+            o[x] = rows.pressure(x);
         }
     }
 }
@@ -907,10 +994,10 @@ fn jacobi_diffuse_scalar(
     let inv = 1.0 / (1.0 + 4.0 * a);
     zero_walls(out, w, h);
     for y in 1..h - 1 {
-        let row = y * w;
-        for xi in 1..w - 1 {
-            let i = row + xi;
-            out[i] = diffuse_cell(x, rhs, solid, i, w, a, inv);
+        let rows = StencilRows::new(x, solid, rhs, w, y);
+        let o = &mut out[y * w..y * w + w];
+        for i in 1..w - 1 {
+            o[i] = rows.diffuse(i, a, inv);
         }
     }
 }
@@ -965,27 +1052,26 @@ fn jacobi_pressure_simd(
 
     zero_walls(out, w, h);
     for y in 1..h - 1 {
-        let row = y * w;
+        let rows = StencilRows::new(p, solid, div, w, y);
+        let o = &mut out[y * w..y * w + w];
         let mut x = 1;
         // A row is contiguous, so the left/right neighbour vectors are just
         // this row shifted by one element — no shuffles needed.
         while x + 4 <= w - 1 {
-            let i = row + x;
-            let pc = lanes(p, i);
-            let l = wall_pick_v(lanes(p, i - 1), lanes(solid, i - 1), pc);
-            let r = wall_pick_v(lanes(p, i + 1), lanes(solid, i + 1), pc);
-            let u = wall_pick_v(lanes(p, i - w), lanes(solid, i - w), pc);
-            let d = wall_pick_v(lanes(p, i + w), lanes(solid, i + w), pc);
+            let pc = lanes(rows.mid, x);
+            let l = wall_pick_v(lanes(rows.mid, x - 1), lanes(rows.solid_mid, x - 1), pc);
+            let r = wall_pick_v(lanes(rows.mid, x + 1), lanes(rows.solid_mid, x + 1), pc);
+            let u = wall_pick_v(lanes(rows.up, x), lanes(rows.solid_up, x), pc);
+            let d = wall_pick_v(lanes(rows.down, x), lanes(rows.solid_down, x), pc);
             let sum = f32x4_add(f32x4_add(l, r), f32x4_add(u, d));
-            let jacobi = f32x4_mul(f32x4_sub(sum, lanes(div, i)), quarter);
-            let res = f32x4_add(pc, f32x4_mul(omega, f32x4_sub(jacobi, pc)));
-            let solid_centre = f32x4_ge(lanes(solid, i), half);
-            store_lanes(out, i, v128_bitselect(zero, res, solid_centre));
+            let sweep = f32x4_mul(f32x4_sub(sum, lanes(rows.rhs, x)), quarter);
+            let res = f32x4_add(pc, f32x4_mul(omega, f32x4_sub(sweep, pc)));
+            let solid_centre = f32x4_ge(lanes(rows.solid_mid, x), half);
+            store_lanes(o, x, v128_bitselect(zero, res, solid_centre));
             x += 4;
         }
         while x < w - 1 {
-            let i = row + x;
-            out[i] = pressure_cell(p, div, solid, i, w);
+            o[x] = rows.pressure(x);
             x += 1;
         }
     }
@@ -1014,23 +1100,22 @@ fn jacobi_diffuse_simd(
 
     zero_walls(out, w, h);
     for y in 1..h - 1 {
-        let row = y * w;
-        let mut xi = 1;
-        while xi + 4 <= w - 1 {
-            let i = row + xi;
+        let rows = StencilRows::new(x, solid, rhs, w, y);
+        let o = &mut out[y * w..y * w + w];
+        let mut i = 1;
+        while i + 4 <= w - 1 {
             let sum = f32x4_add(
-                f32x4_add(lanes(x, i - 1), lanes(x, i + 1)),
-                f32x4_add(lanes(x, i - w), lanes(x, i + w)),
+                f32x4_add(lanes(rows.mid, i - 1), lanes(rows.mid, i + 1)),
+                f32x4_add(lanes(rows.up, i), lanes(rows.down, i)),
             );
-            let res = f32x4_mul(f32x4_add(lanes(rhs, i), f32x4_mul(av, sum)), inv);
-            let solid_centre = f32x4_ge(lanes(solid, i), half);
-            store_lanes(out, i, v128_bitselect(zero, res, solid_centre));
-            xi += 4;
+            let res = f32x4_mul(f32x4_add(lanes(rows.rhs, i), f32x4_mul(av, sum)), inv);
+            let solid_centre = f32x4_ge(lanes(rows.solid_mid, i), half);
+            store_lanes(o, i, v128_bitselect(zero, res, solid_centre));
+            i += 4;
         }
-        while xi < w - 1 {
-            let i = row + xi;
-            out[i] = diffuse_cell(x, rhs, solid, i, w, a, inv_scalar);
-            xi += 1;
+        while i < w - 1 {
+            o[i] = rows.diffuse(i, a, inv_scalar);
+            i += 1;
         }
     }
 }

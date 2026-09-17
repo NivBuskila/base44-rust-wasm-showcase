@@ -299,11 +299,17 @@ impl Particles {
                 // instead makes fast particles spin and slow ones (the ones
                 // actually trapped in the vortex) barely turn at all.
                 if swirl != 0.0 {
-                    let omega = curl_at(vel, px, py);
-                    let (dirx, diry) = normalize(drag * fu1 + ox, drag * fv1 + oy);
-                    let s = omega * swirl;
-                    ox -= diry * s;
-                    oy += dirx * s;
+                    let tvx = drag * fu1 + ox;
+                    let tvy = drag * fv1 + oy;
+                    let len2 = tvx * tvx + tvy * tvy;
+                    // Same guard as `math::normalize` (len > 1e-6), but folding
+                    // the normalisation into the scale keeps one division off
+                    // the critical path instead of two.
+                    if len2 > 1e-12 {
+                        let k = curl_at(vel, px, py) * swirl / len2.sqrt();
+                        ox -= tvy * k;
+                        oy += tvx * k;
+                    }
                 }
                 oy += gravity;
                 ox = tame(ox);
@@ -507,7 +513,7 @@ impl Frame<'_> {
     /// predicate, the caller only needs to know which side of 0.5 it is on,
     /// and this is one load instead of four in a loop that runs 220k times a
     /// frame.
-    #[inline]
+    #[inline(always)]
     fn is_solid(&self, x: f32, y: f32) -> bool {
         match self.obstacle {
             None => false,
@@ -527,34 +533,55 @@ impl Frame<'_> {
 /// Identical in result to two [`Grid::sample`] calls, but the clamp, floor and
 /// index arithmetic are shared: the compiler cannot prove `u.w == v.w`, so
 /// going through `VecField::sample` computes all of it twice, and `step` does
-/// four of these per particle.
-#[inline]
+/// two of these per particle.
+#[inline(always)]
 fn sample_uv(vel: &VecField, x: f32, y: f32) -> (f32, f32) {
     let w = vel.u.w;
     let h = vel.u.h;
-    let x = if x.is_nan() {
-        0.0
+    // Clamping with explicit comparisons rather than `clamp` maps NaN to the
+    // origin as a side effect (`NaN > 0.0` is false), which is exactly what
+    // `Grid::sample` does.
+    let maxx = (w - 1) as f32;
+    let maxy = (h - 1) as f32;
+    let x = if x > 0.0 {
+        if x < maxx {
+            x
+        } else {
+            maxx
+        }
     } else {
-        x.clamp(0.0, (w - 1) as f32)
+        0.0
     };
-    let y = if y.is_nan() {
-        0.0
+    let y = if y > 0.0 {
+        if y < maxy {
+            y
+        } else {
+            maxy
+        }
     } else {
-        y.clamp(0.0, (h - 1) as f32)
+        0.0
     };
 
-    let x0 = x.floor();
-    let y0 = y.floor();
-    let tx = x - x0;
-    let ty = y - y0;
+    // Truncation, not `floor`: the two agree for a non-negative argument, and
+    // `f32::floor` is a *libm call* on the SSE2 baseline this crate is built
+    // for — there is no `roundss` without SSE4.1. Four of those per particle
+    // measured at 25 ns, more than the rest of the step put together.
+    let ix0 = x as usize;
+    let iy0 = y as usize;
+    let tx = x - ix0 as f32;
+    let ty = y - iy0 as f32;
 
-    let ix0 = x0 as usize;
-    let iy0 = y0 as usize;
     let ix1 = (ix0 + 1).min(w - 1);
     let iy1 = (iy0 + 1).min(h - 1);
     let row0 = iy0 * w;
     let row1 = iy1 * w;
 
+    // Nested `lerp`, bit-for-bit what `Grid::sample` computes: the fluid
+    // backtraces through the same field, and a particle that disagreed with
+    // the solver in the last bit would be a needless source of drift between
+    // what the dye shows and where the particles are. (A flattened
+    // weighted-sum form measured no faster here, so there is nothing to trade
+    // that agreement for.)
     let u = lerp(
         lerp(vel.u.data[row0 + ix0], vel.u.data[row0 + ix1], tx),
         lerp(vel.u.data[row1 + ix0], vel.u.data[row1 + ix1], tx),
@@ -575,7 +602,7 @@ fn sample_uv(vel: &VecField, x: f32, y: f32) -> (f32, f32) {
 /// eight bilinear samples an interpolated curl would cost. Matches
 /// `Fluid::compute_curl` at interior lattice points, and degrades to a
 /// one-sided difference on the border.
-#[inline]
+#[inline(always)]
 fn curl_at(vel: &VecField, x: f32, y: f32) -> f32 {
     let w = vel.u.w;
     let h = vel.u.h;
@@ -585,12 +612,18 @@ fn curl_at(vel: &VecField, x: f32, y: f32) -> f32 {
     let xp = (xi + 1).min(w - 1);
     let ym = yi.saturating_sub(1);
     let yp = (yi + 1).min(h - 1);
-    let dvdx = (vel.v.data[yi * w + xp] - vel.v.data[yi * w + xm]) / (xp - xm).max(1) as f32;
-    let dudy = (vel.u.data[yp * w + xi] - vel.u.data[ym * w + xi]) / (yp - ym).max(1) as f32;
+    // The span is 2 in the interior and 1 against a border, so the per-cell
+    // normalisation is a select on an integer, not a divide. Two `divss` here
+    // measured at ~7 ns per particle, a tenth of the entire step: this runs
+    // once per particle per frame, 220k times, on the critical path.
+    let inv_dx = if xp - xm == 2 { 0.5 } else { 1.0 };
+    let inv_dy = if yp - ym == 2 { 0.5 } else { 1.0 };
+    let dvdx = (vel.v.data[yi * w + xp] - vel.v.data[yi * w + xm]) * inv_dx;
+    let dudy = (vel.u.data[yp * w + xi] - vel.u.data[ym * w + xi]) * inv_dy;
     dvdx - dudy
 }
 
-#[inline]
+#[inline(always)]
 fn finite_or(v: f32, fallback: f32) -> f32 {
     if v.is_finite() {
         v
@@ -601,7 +634,7 @@ fn finite_or(v: f32, fallback: f32) -> f32 {
 
 /// Clamps a particle's own velocity component into the representable band,
 /// mapping a non-finite value to rest rather than propagating it.
-#[inline]
+#[inline(always)]
 fn tame(v: f32) -> f32 {
     if v.is_finite() {
         v.clamp(-MAX_OWN_SPEED, MAX_OWN_SPEED)
@@ -610,7 +643,7 @@ fn tame(v: f32) -> f32 {
     }
 }
 
-#[inline]
+#[inline(always)]
 fn clamp_finite(v: f32, max: f32) -> f32 {
     if v.is_finite() {
         v.clamp(0.0, max)
