@@ -242,6 +242,7 @@ const GESTURES: readonly GestureSpec[] = [
 const SHORTCUTS: readonly [string, string][] = [
   ['1 – 4', 'aether / camera / debug / particles'],
   ['C', 'camera feed behind the fluid'],
+  ['O', 'overdrive: the full 1M particle pool'],
   ['H', 'hide or show this panel'],
   ['R', 'reset the field'],
   ['?', 'this sheet'],
@@ -404,6 +405,10 @@ export class Hud {
   private updates = 0;
 
   private cameraOn = true;
+  private overdriveOn = false;
+  private readonly overdriveBtn: HTMLButtonElement;
+  /** Slider position to restore when overdrive is switched off. */
+  private particlesBeforeOverdrive = 0;
   private collapsed = true;
   private hiddenAll = false;
   private helpOpen = false;
@@ -439,6 +444,7 @@ export class Hud {
     this.camValue = this.q('[data-camera-value]');
     this.particleInput = this.q('[data-particles]');
     this.particleValue = this.q('[data-particles-value]');
+    this.overdriveBtn = this.q('[data-act="overdrive"]');
 
     for (const m of METERS) {
       this.meters.push(
@@ -610,6 +616,7 @@ export class Hud {
       this.modeBtns.push(btn);
     }
     this.camBtn.addEventListener('click', () => this.setCamera(!this.cameraOn));
+    this.overdriveBtn.addEventListener('click', () => this.setOverdrive(!this.overdriveOn));
     this.q('[data-act="reset"]').addEventListener('click', () => this.cb.onReset());
 
     this.particleInput.value = String(countToDetent(120_000));
@@ -621,6 +628,8 @@ export class Hud {
       this.setText(this.particleValue, thousands(detentToCount(this.particleInput.valueAsNumber)));
     });
     this.particleInput.addEventListener('change', () => {
+      // Dragging the slider by hand leaves overdrive; it is a preset, not a lock.
+      if (this.overdriveOn) this.setOverdrive(false, false);
       this.cb.onParticleCount(detentToCount(this.particleInput.valueAsNumber));
     });
 
@@ -657,6 +666,8 @@ export class Hud {
       this.setMode(mode.mode);
     } else if (e.key === 'c' || e.key === 'C') {
       this.setCamera(!this.cameraOn);
+    } else if (e.key === 'o' || e.key === 'O') {
+      this.setOverdrive(!this.overdriveOn);
     } else if (e.key === 'h' || e.key === 'H') {
       this.setHiddenAll(!this.hiddenAll);
     } else if (e.key === 'r' || e.key === 'R') {
@@ -686,6 +697,25 @@ export class Hud {
     this.camBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
     this.setText(this.camValue, on ? 'on' : 'off');
     this.cb.onToggleCamera(on);
+  }
+
+  /**
+   * Toggles the 1M-particle preset. `restoreSlider` is false when the user is
+   * the one moving the slider, so their new position is not overwritten.
+   */
+  private setOverdrive(on: boolean, restoreSlider = true): void {
+    if (on === this.overdriveOn) return;
+    this.overdriveOn = on;
+    this.overdriveBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (on) {
+      this.particlesBeforeOverdrive = this.particleInput.valueAsNumber;
+      this.particleInput.value = String(PARTICLE_DETENTS);
+      this.setText(this.particleValue, thousands(MAX_PARTICLES));
+    } else if (restoreSlider) {
+      this.particleInput.value = String(this.particlesBeforeOverdrive);
+      this.setText(this.particleValue, thousands(detentToCount(this.particlesBeforeOverdrive)));
+    }
+    this.cb.onOverdrive(on);
   }
 
   private setCollapsed(collapsed: boolean): void {
@@ -972,6 +1002,9 @@ function markup(): string {
           <input type="range" data-particles min="0" max="${PARTICLE_DETENTS}" step="1" value="0" aria-label="Particle count" />
           <span class="p-val" data-particles-value>120k</span>
         </label>
+        <button type="button" class="row-btn is-overdrive" data-act="overdrive" aria-pressed="false">
+          <span>overdrive · 1M particles</span><b>O</b>
+        </button>
         <button type="button" class="row-btn is-action" data-act="reset">
           <span>reset the field</span><b>R</b>
         </button>
