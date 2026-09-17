@@ -532,8 +532,14 @@ mod tests {
             // Wavelengths in full-resolution cells; the longest survives three
             // decimations, the shortest gives the finest level something to do.
             let spec = [(30.0f32, 0.45f32), (14.0, 0.30), (8.0, 0.25)];
-            for (slot, &(wavelength, amp)) in waves.iter_mut().zip(spec.iter()) {
-                let theta = rng.next_f32() * TAU;
+            // The seed picks the overall orientation, but the three waves are
+            // then spread evenly: a texture whose gradients all point the same
+            // way leaves the flow component across them unobservable (the
+            // aperture problem), and the ground truth would be unrecoverable
+            // for reasons that have nothing to do with the solver.
+            let base = rng.next_f32() * TAU;
+            for (i, (slot, &(wavelength, amp))) in waves.iter_mut().zip(spec.iter()).enumerate() {
+                let theta = base + i as f32 * TAU / 3.0;
                 let k = TAU / wavelength;
                 *slot = (k * theta.cos(), k * theta.sin(), rng.next_f32() * TAU, amp);
             }
@@ -762,17 +768,75 @@ mod tests {
     }
 
     #[test]
-    fn noise_floor_deadbands_sub_pixel_jitter() {
+    fn noise_floor_soft_thresholds_the_magnitude() {
         let t = Texture::new(12);
-        let cfg = FlowConfig {
-            noise_floor: 4.0, // Far above any motion two frames apart.
-            ..Default::default()
+        let (a, b) = (t.still(W, H), t.translated(W, H, 2.0, 0.0));
+        let open = {
+            let cfg = FlowConfig {
+                noise_floor: 0.0,
+                ..Default::default()
+            };
+            let mut f = OpticalFlow::new(W, H, cfg);
+            f.update(&a, DT);
+            f.update(&b, DT);
+            f
         };
-        let mut f = OpticalFlow::new(W, H, cfg);
-        f.update(&t.still(W, H), DT);
-        f.update(&t.translated(W, H, 2.0, 0.0), DT);
-        assert_eq!(f.flow().max_speed(), 0.0, "deadband did not swallow motion");
-        assert_eq!(f.motion_energy(), 0.0);
+        let floor = 1.0; // cells/frame, i.e. half the real motion
+        let gated = {
+            let cfg = FlowConfig {
+                noise_floor: floor,
+                ..Default::default()
+            };
+            let mut f = OpticalFlow::new(W, H, cfg);
+            f.update(&a, DT);
+            f.update(&b, DT);
+            f
+        };
+        let mut gated_cells = 0;
+        for i in 0..W * H {
+            let (u0, v0) = (open.flow().u.data[i], open.flow().v.data[i]);
+            let raw = (u0 * u0 + v0 * v0).sqrt() * DT;
+            if raw >= MAX_STEP - 1e-3 {
+                continue; // Clamped, so the deadband is not the only effect.
+            }
+            let (u1, v1) = (gated.flow().u.data[i], gated.flow().v.data[i]);
+            let got = (u1 * u1 + v1 * v1).sqrt() * DT;
+            let want = (raw - floor).max(0.0);
+            assert!(
+                (got - want).abs() < 1e-3,
+                "cell {i}: raw {raw} with floor {floor} gave {got}, want {want}"
+            );
+            if want == 0.0 {
+                gated_cells += 1;
+            }
+        }
+        assert!(gated_cells > 0, "floor never engaged; test proves nothing");
+    }
+
+    #[test]
+    fn sensor_noise_on_a_still_camera_does_not_drive_the_fluid() {
+        // The reason the noise floor exists: a static scene through a real
+        // sensor jitters by a couple of LSB every frame, and that must not
+        // read as motion.
+        let t = Texture::new(19);
+        let base = t.still(W, H);
+        let mut rng = Rng::new(20);
+        let mut f = OpticalFlow::new(W, H, FlowConfig::default());
+        let moving = flow_of(&base, &t.translated(W, H, 2.0, 0.0), DT);
+        for _ in 0..20 {
+            let frame: Vec<u8> = base
+                .iter()
+                .map(|&b| (b as f32 + rng.signed() * 2.5).clamp(0.0, 255.0) as u8)
+                .collect();
+            f.update(&frame, DT);
+            assert!(
+                f.motion_energy() < 1.0,
+                "sensor noise read as motion: {} (real motion is {})",
+                f.motion_energy(),
+                moving.motion_energy()
+            );
+            assert!(f.flow().max_speed() < 8.0, "{}", f.flow().max_speed());
+        }
     }
 
     #[test]
@@ -852,7 +916,9 @@ mod tests {
     #[test]
     fn level_count_is_capped_by_resolution() {
         assert_eq!(effective_levels(128, 72, 3), 3);
-        assert_eq!(effective_levels(128, 72, 99), MAX_LEVELS);
+        // 72 >> 5 is 2 samples tall, so the 6th level is dropped.
+        assert_eq!(effective_levels(128, 72, 99), 5);
+        assert_eq!(effective_levels(1024, 1024, 99), MAX_LEVELS);
         assert_eq!(effective_levels(8, 8, 4), 2);
         assert_eq!(effective_levels(4, 4, 5), 1);
         assert_eq!(effective_levels(2, 2, 3), 1);
@@ -945,56 +1011,5 @@ mod tests {
             inside > 4.0 * outside.max(1e-6),
             "flow smeared: {inside} inside vs {outside} outside"
         );
-    }
-    #[test]
-    fn dbg_stats() {
-        let t = Texture::new(1);
-        let f = flow_of(&t.still(W, H), &t.translated(W, H, 2.0, 0.0), DT);
-        let flow = f.flow();
-        let mut mags: Vec<(f32, usize, usize)> = Vec::new();
-        for y in 0..H { for x in 0..W {
-            let (u,v) = flow.get(x,y);
-            mags.push((((u*u+v*v).sqrt())*DT, x, y));
-        }}
-        mags.sort_by(|a,b| b.0.partial_cmp(&a.0).unwrap());
-        println!("top: {:?}", &mags[..12]);
-        println!("median: {:?}", mags[mags.len()/2]);
-        println!("mean interior: {:?}", mean_interior(flow, 16).0*DT);
-        let (a,b)=(t.still(W,H), t.translated(W,H,2.0,0.0));
-        let g = flow_of(&a,&b,DT);
-        println!("max {} energy {} dom {:?}", g.flow().max_speed()*DT, g.motion_energy(), g.dominant_motion());
-        for m in [0usize,1,2,3,4,6] {
-            let mut mx = 0.0f32;
-            for y in m..H-m { for x in m..W-m {
-                let (u,v)=flow.get(x,y); mx = mx.max((u*u+v*v).sqrt()*DT);
-            }}
-            println!("margin {m} max {mx}");
-        }
-        // noise case
-        let mut rng = Rng::new(13);
-        let mut nf = OpticalFlow::new(W,H,FlowConfig::default());
-        for _ in 0..4 {
-            let frame: Vec<u8> = (0..W*H).map(|_| (rng.next_f32()*255.0) as u8).collect();
-            nf.update(&frame, DT);
-        }
-        let mut mx=0.0f32; let mut mxi=0.0f32;
-        for y in 0..H { for x in 0..W { let (u,v)=nf.flow().get(x,y); let m=(u*u+v*v).sqrt()*DT; mx=mx.max(m); if (3..H-3).contains(&y)&&(3..W-3).contains(&x) {mxi=mxi.max(m);} }}
-        println!("noise per-frame max {mx} interior {mxi} energy {}", nf.motion_energy());
-        // flat
-        let mut ff = OpticalFlow::new(W,H,FlowConfig::default());
-        ff.update(&vec![128;W*H],DT); ff.update(&vec![130;W*H],DT);
-        println!("flat max {} ", ff.flow().max_speed());
-        // realistic sensor noise: static scene plus +-2 LSB
-        let base = t.still(W,H);
-        let mut rng2 = Rng::new(77);
-        let mut sf = OpticalFlow::new(W,H,FlowConfig::default());
-        let mut worst = 0.0f32; let mut worst_e = 0.0f32;
-        for _ in 0..20 {
-            let frame: Vec<u8> = base.iter().map(|&b| (b as i32 + (rng2.signed()*2.5) as i32).clamp(0,255) as u8).collect();
-            sf.update(&frame, DT);
-            worst = worst.max(sf.flow().max_speed()*DT);
-            worst_e = worst_e.max(sf.motion_energy());
-        }
-        println!("sensor-noise worst per-frame {worst} energy {worst_e} dom {:?}", sf.dominant_motion());
     }
 }
