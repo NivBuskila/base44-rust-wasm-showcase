@@ -1,0 +1,15 @@
+# aether-core is deliberately dependency-free: it compiles for both
+# x86_64 (tests, benches) and wasm32 with no external crates at all.
+[package]
+name = "aether-core"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+# Enables explicit wasm32 SIMD128 intrinsics in the fluid hot loops.
+simd = []
+
+[lib]
+bench = false
