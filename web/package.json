@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "postinstall": "node ../scripts/sync-mp-assets.mjs",
+    "sync:mp": "node ../scripts/sync-mp-assets.mjs",
     "fetch:models": "node ../scripts/fetch-models.mjs",
     "build:wasm": "bash ../scripts/build-wasm.sh release",
     "build:wasm:dev": "bash ../scripts/build-wasm.sh dev",
