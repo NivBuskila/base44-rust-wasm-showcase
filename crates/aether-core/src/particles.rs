@@ -77,8 +77,8 @@ const RESPAWN_TRIES: usize = 3;
 const LIFE_JITTER: (f32, f32) = (0.6, 1.4);
 
 /// Grid-space radius over which [`Particles::spawn_burst`] scatters the
-/// particles it emits. A burst from a single point reads as one bright dot for
-/// the first few frames; half a cell of spread is enough to read as a puff.
+/// particles it emits. A burst from a single exact point reads as one bright
+/// dot for its first few frames; a cell or two of spread reads as a puff.
 pub const BURST_SCATTER: f32 = 1.5;
 
 /// Per-step tunables that do not belong in the global [`Params`].
@@ -122,10 +122,12 @@ pub struct Particles {
     respawn_credit: f32,
 }
 
-/// Per-step scalars, resolved once and shared by the hot loop and the respawn
-/// path so neither recomputes them per particle (and so `respawn` keeps a short
-/// argument list).
+/// Everything one `step` needs that is not per-particle, resolved once: the
+/// fields, the bounds, and every tunable already folded through `dt`. Bundling
+/// them keeps the per-particle helpers pure and short-signatured, and keeps the
+/// clamping and `decay` calls out of the loop.
 struct Frame<'a> {
+    vel: &'a VecField,
     /// `None` when there is no usable obstacle field, which skips the test
     /// entirely for the common no-body case.
     obstacle: Option<&'a Grid>,
@@ -138,6 +140,40 @@ struct Frame<'a> {
     maxy: f32,
     /// Base lifetime for respawns, before jitter.
     life: f32,
+    dt: f32,
+    /// `params.particle_drag`, clamped: the multiplier on the fluid velocity.
+    drag: f32,
+    /// Fraction of a particle's own velocity surviving this step.
+    keep: f32,
+    /// Fraction of `heat` surviving this step.
+    heat_keep: f32,
+    /// `curl_influence * dt`.
+    swirl: f32,
+    /// `gravity * dt`.
+    gravity: f32,
+}
+
+/// One particle's candidate next state.
+#[derive(Clone, Copy)]
+struct Advance {
+    nx: f32,
+    ny: f32,
+    ox: f32,
+    oy: f32,
+    /// False when the particle left the grid, landed in an obstacle, or went
+    /// non-finite — all of which mean "recycle it".
+    ok: bool,
+}
+
+impl Advance {
+    /// The state of a particle that is not worth integrating at all.
+    const RECYCLE: Self = Self {
+        nx: 0.0,
+        ny: 0.0,
+        ox: 0.0,
+        oy: 0.0,
+        ok: false,
+    };
 }
 
 impl Particles {
@@ -245,7 +281,11 @@ impl Particles {
         let cells = gw.saturating_mul(gh);
         // Defensive: `VecField::new` cannot produce a grid this small, but the
         // fields are public and `step` must not index out of a hand-built one.
-        if self.active == 0 || gw < 2 || gh < 2 || vel.u.data.len() < cells || vel.v.data.len() < cells
+        if self.active == 0
+            || gw < 2
+            || gh < 2
+            || vel.u.data.len() < cells
+            || vel.v.data.len() < cells
         {
             self.alive = 0;
             return;
@@ -260,110 +300,92 @@ impl Particles {
             && obstacle.data.len() >= obstacle.w * obstacle.h
             && obstacle.max_abs() >= 0.5;
         let frame = Frame {
-            obstacle: if usable_obstacle { Some(obstacle) } else { None },
+            vel,
+            obstacle: if usable_obstacle {
+                Some(obstacle)
+            } else {
+                None
+            },
             osx: (obstacle.w.max(1) - 1) as f32 / maxx,
             osy: (obstacle.h.max(1) - 1) as f32 / maxy,
             maxx,
             maxy,
             life: finite_or(params.particle_life, 1.0).clamp(0.05, 60.0),
+            dt,
+            drag: finite_or(params.particle_drag, 1.0).clamp(0.0, 8.0),
+            // `decay`, never `1 - rate * dt`: the latter flips sign at large dt
+            // and makes the 30 fps session look different from the 144 fps one.
+            keep: decay(finite_or(cfg.damping, 0.0).max(0.0), dt),
+            heat_keep: decay(HEAT_DECAY, dt),
+            swirl: finite_or(cfg.curl_influence, 0.0) * dt,
+            gravity: finite_or(cfg.gravity, 0.0) * dt,
         };
-
-        let drag = finite_or(params.particle_drag, 1.0).clamp(0.0, 8.0);
-        // `decay`, never `1 - rate * dt`: the latter flips sign at large dt and
-        // makes the 30 fps session look different from the 144 fps one.
-        let keep = decay(finite_or(cfg.damping, 0.0).max(0.0), dt);
-        let heat_keep = decay(HEAT_DECAY, dt);
-        let swirl = finite_or(cfg.curl_influence, 0.0) * dt;
-        let gravity = finite_or(cfg.gravity, 0.0) * dt;
 
         let rate = finite_or(params.spawn_rate, 0.0).max(0.0);
         let per_frame = rate * dt;
         let mut credit = (self.respawn_credit + per_frame).min(per_frame + 1.0);
 
+        // One linear pass, seven independent streams, no branch in the common
+        // case beyond the cull test.
+        //
+        // The per-particle cost is dominated by the two bilinear gathers RK2
+        // needs, which are dependent (the second samples the midpoint the
+        // first produced). Measured on a 2.8 GHz Xeon, one gather of both
+        // velocity components costs ~10.5 ns whether the grid fits in L1 or
+        // not, and the whole step ~58 ns; hand-pipelining two particles per
+        // iteration to overlap the chains made no difference there, so the
+        // simple form is what stays. On a core that does reorder across
+        // iterations there is nothing here to stop it: `advance` is pure and
+        // every iteration is independent.
         let mut alive = 0usize;
         for i in 0..self.active {
             let life = self.life[i] - dt;
-            if life > 0.0 {
-                let px = self.x[i];
-                let py = self.y[i];
-                let (fu1, fv1) = sample_uv(vel, px, py);
-
-                let mut ox = self.vx[i] * keep;
-                let mut oy = self.vy[i] * keep;
-
-                // Swirl: perpendicular to the direction of travel, signed by
-                // the local curl, so a particle entering a vortex is bent onto
-                // a spiral instead of crossing it in a straight line. Scaled
-                // off the *unit* travel direction, which keeps the magnitude
-                // proportional to omega alone — using the unscaled velocity
-                // instead makes fast particles spin and slow ones (the ones
-                // actually trapped in the vortex) barely turn at all.
-                if swirl != 0.0 {
-                    let tvx = drag * fu1 + ox;
-                    let tvy = drag * fv1 + oy;
-                    let len2 = tvx * tvx + tvy * tvy;
-                    // Same guard as `math::normalize` (len > 1e-6), but folding
-                    // the normalisation into the scale keeps one division off
-                    // the critical path instead of two.
-                    if len2 > 1e-12 {
-                        let k = curl_at(vel, px, py) * swirl / len2.sqrt();
-                        ox -= tvy * k;
-                        oy += tvx * k;
-                    }
-                }
-                oy += gravity;
-                ox = tame(ox);
-                oy = tame(oy);
-
-                // RK2 midpoint. The own-velocity term is constant across the
-                // step, so it needs no correction; only the field sample does.
-                let hx = px + 0.5 * dt * (drag * fu1 + ox);
-                let hy = py + 0.5 * dt * (drag * fv1 + oy);
-                let (fu2, fv2) = sample_uv(vel, hx, hy);
-                let nx = px + dt * (drag * fu2 + ox);
-                let ny = py + dt * (drag * fv2 + oy);
-
-                if nx.is_finite()
-                    && ny.is_finite()
-                    && nx >= 0.0
-                    && nx <= maxx
-                    && ny >= 0.0
-                    && ny <= maxy
-                    && !frame.is_solid(nx, ny)
-                {
-                    self.x[i] = nx;
-                    self.y[i] = ny;
-                    self.vx[i] = ox;
-                    self.vy[i] = oy;
-                    self.heat[i] *= heat_keep;
-                    self.life[i] = life;
-                    alive += 1;
-                    continue;
-                }
-                // Left the world or hit the silhouette: same fate as old age.
-            }
-
-            if credit >= 1.0 {
-                credit -= 1.0;
-                if self.respawn(i, &frame) {
-                    alive += 1;
-                }
+            // The one branch worth taking: a starved pool would otherwise pay
+            // two bilinear gathers per frame for particles nobody can see.
+            let adv = if life > 0.0 {
+                frame.advance(self.x[i], self.y[i], self.vx[i], self.vy[i])
             } else {
-                // No budget: park it. Position is kept in bounds so a dead
-                // particle can never render off-screen if the shader ignores
-                // `life`, and the velocity is dropped so it does not resume
-                // mid-flight several frames later.
-                self.life[i] = 0.0;
-                self.vx[i] = 0.0;
-                self.vy[i] = 0.0;
-                self.heat[i] = 0.0;
-                self.x[i] = clamp_finite(self.x[i], maxx);
-                self.y[i] = clamp_finite(self.y[i], maxy);
-            }
+                Advance::RECYCLE
+            };
+            alive += usize::from(self.commit(i, adv, life, &frame, &mut credit));
         }
 
         self.respawn_credit = credit;
         self.alive = alive;
+    }
+
+    /// Writes one particle's advanced state back, or recycles it.
+    ///
+    /// `life` is the already-aged lifetime and `adv` the candidate state from
+    /// [`Frame::advance`]. Returns whether the particle is alive afterwards, so
+    /// the caller's `alive` tally costs an add rather than a second pass.
+    #[inline(always)]
+    fn commit(&mut self, i: usize, adv: Advance, life: f32, f: &Frame, credit: &mut f32) -> bool {
+        if life > 0.0 && adv.ok {
+            self.x[i] = adv.nx;
+            self.y[i] = adv.ny;
+            self.vx[i] = adv.ox;
+            self.vy[i] = adv.oy;
+            self.heat[i] *= f.heat_keep;
+            self.life[i] = life;
+            return true;
+        }
+        // Old age, out of the world, or inside the silhouette: all the same
+        // fate, and all subject to the same respawn budget.
+        if *credit >= 1.0 {
+            *credit -= 1.0;
+            return self.respawn(i, f);
+        }
+        // No budget: park it. Position is kept in bounds so a dead particle can
+        // never render off-screen if the shader ignores `life`, and the velocity
+        // is dropped so it does not resume mid-flight several frames later.
+        self.life[i] = 0.0;
+        self.vx[i] = 0.0;
+        self.vy[i] = 0.0;
+        self.heat[i] = 0.0;
+        self.x[i] = clamp_finite(self.x[i], f.maxx);
+        self.y[i] = clamp_finite(self.y[i], f.maxy);
+        false
     }
 
     /// Scatters particle `i` to a fresh random position with a fresh jittered
@@ -377,6 +399,8 @@ impl Particles {
     /// covers most of the frame put the *whole* pool through `RESPAWN_TRIES`
     /// samples every frame; spending it caps the work at the budget and merely
     /// thins the population while the obstacle is that large.
+    #[cold]
+    #[inline(never)]
     fn respawn(&mut self, i: usize, frame: &Frame) -> bool {
         let mut x = 0.0;
         let mut y = 0.0;
@@ -490,8 +514,10 @@ impl Particles {
             let dx = self.x[i] - cx;
             let dy = self.y[i] - cy;
             let d2 = dx * dx + dy * dy;
-            if !(d2 <= r2) {
-                // `!(<=)` rather than `>` so a NaN distance is skipped too.
+            // The `is_nan` arm matters: `place` can park a particle at a NaN
+            // position, and `d2 > r2` is false for NaN, which would let it
+            // through into `normalize` and spread the NaN into its velocity.
+            if d2 > r2 || d2.is_nan() {
                 continue;
             }
             // 1 at the centre, 0 with zero slope at the edge.
@@ -500,13 +526,71 @@ impl Particles {
             self.vx[i] = tame(self.vx[i] + nx * strength * falloff);
             self.vy[i] = tame(self.vy[i] + ny * strength * falloff);
             // `max`, not `+=`: spells hold for many frames, and accumulating
-                // would saturate every particle in range to full heat.
+            // would saturate every particle in range to full heat.
             self.heat[i] = self.heat[i].max(heat * falloff);
         }
     }
 }
 
 impl Frame<'_> {
+    /// Integrates one particle for a step: RK2 midpoint advection through the
+    /// fluid, plus the particle's own velocity carrying gravity, curl swirl and
+    /// whatever gestures kicked into it.
+    ///
+    /// Pure, so the caller can run two of these back to back and let the core
+    /// interleave them.
+    #[inline(always)]
+    fn advance(&self, px: f32, py: f32, ovx: f32, ovy: f32) -> Advance {
+        let vel = self.vel;
+        let (fu1, fv1) = sample_uv(vel, px, py);
+
+        let mut ox = ovx * self.keep;
+        let mut oy = ovy * self.keep;
+
+        // Swirl: perpendicular to the direction of travel, signed by the local
+        // curl, so a particle entering a vortex is bent onto a spiral instead
+        // of crossing it in a straight line. Scaled off the *unit* travel
+        // direction, which keeps the magnitude proportional to omega alone —
+        // taken off the unscaled velocity instead, fast particles spin and slow
+        // ones (the ones actually trapped in the vortex) barely turn at all.
+        if self.swirl != 0.0 {
+            let tvx = self.drag * fu1 + ox;
+            let tvy = self.drag * fv1 + oy;
+            let len2 = tvx * tvx + tvy * tvy;
+            // Same guard as `math::normalize` (len > 1e-6), but folding the
+            // normalisation into the scale keeps one division off the critical
+            // path instead of two.
+            if len2 > 1e-12 {
+                let k = curl_at(vel, px, py) * self.swirl / len2.sqrt();
+                ox -= tvy * k;
+                oy += tvx * k;
+            }
+        }
+        oy += self.gravity;
+        ox = tame(ox);
+        oy = tame(oy);
+
+        // RK2 midpoint: sample, step half, sample again, apply. The own
+        // velocity is constant across the step so it needs no correction; only
+        // the field sample does, and it is exactly the correction that keeps a
+        // fast curved gesture from cutting the corner.
+        let dt = self.dt;
+        let hx = px + 0.5 * dt * (self.drag * fu1 + ox);
+        let hy = py + 0.5 * dt * (self.drag * fv1 + oy);
+        let (fu2, fv2) = sample_uv(vel, hx, hy);
+        let nx = px + dt * (self.drag * fu2 + ox);
+        let ny = py + dt * (self.drag * fv2 + oy);
+
+        let ok = nx.is_finite()
+            && ny.is_finite()
+            && nx >= 0.0
+            && nx <= self.maxx
+            && ny >= 0.0
+            && ny <= self.maxy
+            && !self.is_solid(nx, ny);
+        Advance { nx, ny, ox, oy, ok }
+    }
+
     /// Whether grid-space `(x, y)` falls in an obstacle cell.
     ///
     /// Nearest-cell rather than bilinear: the obstacle is a hard binary
@@ -538,34 +622,14 @@ impl Frame<'_> {
 fn sample_uv(vel: &VecField, x: f32, y: f32) -> (f32, f32) {
     let w = vel.u.w;
     let h = vel.u.h;
-    // Clamping with explicit comparisons rather than `clamp` maps NaN to the
-    // origin as a side effect (`NaN > 0.0` is false), which is exactly what
-    // `Grid::sample` does.
-    let maxx = (w - 1) as f32;
-    let maxy = (h - 1) as f32;
-    let x = if x > 0.0 {
-        if x < maxx {
-            x
-        } else {
-            maxx
-        }
-    } else {
-        0.0
-    };
-    let y = if y > 0.0 {
-        if y < maxy {
-            y
-        } else {
-            maxy
-        }
-    } else {
-        0.0
-    };
+    // Clamp and integer split exactly as `Grid::sample` does them, for the
+    // reasons documented there: `max`/`min` fold NaN to the origin without a
+    // branch, and truncation avoids `f32::floor`, which is a libm call on the
+    // SSE2 baseline. Four of those per particle measured at 25 ns here, more
+    // than the rest of the step put together.
+    let x = x.max(0.0).min((w - 1) as f32);
+    let y = y.max(0.0).min((h - 1) as f32);
 
-    // Truncation, not `floor`: the two agree for a non-negative argument, and
-    // `f32::floor` is a *libm call* on the SSE2 baseline this crate is built
-    // for — there is no `roundss` without SSE4.1. Four of those per particle
-    // measured at 25 ns, more than the rest of the step put together.
     let ix0 = x as usize;
     let iy0 = y as usize;
     let tx = x - ix0 as f32;
@@ -820,7 +884,11 @@ mod tests {
         without.set_active(1);
         without.place(0, cx, cy, 5.0, 0.0, 100.0);
         without.step(&vel, &obs, DT, &p_params, &cfg(0.0, 0.0, 0.6));
-        assert_eq!(without.velocity(0).1, 0.0, "curl_influence 0 must not swirl");
+        assert_eq!(
+            without.velocity(0).1,
+            0.0,
+            "curl_influence 0 must not swirl"
+        );
     }
 
     #[test]
@@ -1008,7 +1076,10 @@ mod tests {
             p.step(&vel, &obs, DT, &p_params, &p_cfg);
         }
         let alive = p.alive();
-        assert!(alive > 20, "the budget starved the pool completely: {alive}");
+        assert!(
+            alive > 20,
+            "the budget starved the pool completely: {alive}"
+        );
         assert!(
             alive < 400,
             "spawn_rate was ignored: {alive} alive on a 100/s budget"
@@ -1035,8 +1106,8 @@ mod tests {
         let spread = |p: &Particles| {
             let lives: Vec<f32> = (0..p.active()).map(|i| p.life_of(i)).collect();
             let mean = lives.iter().sum::<f32>() / lives.len() as f32;
-            let var = lives.iter().map(|l| (l - mean) * (l - mean)).sum::<f32>()
-                / lives.len() as f32;
+            let var =
+                lives.iter().map(|l| (l - mean) * (l - mean)).sum::<f32>() / lives.len() as f32;
             (mean, var.sqrt())
         };
 
@@ -1295,30 +1366,36 @@ mod tests {
         assert!(prev > 0.0);
     }
 
+    /// A `Frame` that does nothing but look up obstacles, for unit-testing the
+    /// cull predicate directly.
+    fn obstacle_frame<'a>(vel: &'a VecField, obs: &'a Grid) -> Frame<'a> {
+        Frame {
+            vel,
+            obstacle: Some(obs),
+            osx: (obs.w - 1) as f32 / (vel.w() - 1) as f32,
+            osy: (obs.h - 1) as f32 / (vel.h() - 1) as f32,
+            maxx: (vel.w() - 1) as f32,
+            maxy: (vel.h() - 1) as f32,
+            life: 1.0,
+            dt: DT,
+            drag: 1.0,
+            keep: 1.0,
+            heat_keep: 1.0,
+            swirl: 0.0,
+            gravity: 0.0,
+        }
+    }
+
     #[test]
     fn obstacle_test_matches_the_solver_threshold() {
         // The fluid treats `>= 0.5` as solid; the particle cull must agree, or
         // particles pile up in the half-cell the two disagree about.
+        let vel = const_field(8, 8, 0.0, 0.0);
         let mut obs = Grid::new(8, 8);
         obs.set(4, 4, 0.49);
-        let frame = Frame {
-            obstacle: Some(&obs),
-            osx: 1.0,
-            osy: 1.0,
-            maxx: 7.0,
-            maxy: 7.0,
-            life: 1.0,
-        };
-        assert!(!frame.is_solid(4.0, 4.0));
+        assert!(!obstacle_frame(&vel, &obs).is_solid(4.0, 4.0));
         obs.set(4, 4, 0.5);
-        let frame = Frame {
-            obstacle: Some(&obs),
-            osx: 1.0,
-            osy: 1.0,
-            maxx: 7.0,
-            maxy: 7.0,
-            life: 1.0,
-        };
+        let frame = obstacle_frame(&vel, &obs);
         assert!(frame.is_solid(4.0, 4.0));
         assert!(frame.is_solid(4.49, 4.49), "nearest cell is still (4, 4)");
         assert!(!frame.is_solid(3.49, 4.0));
@@ -1364,5 +1441,226 @@ mod tests {
         assert!(curl_at(&vel, 0.0, 0.0).is_finite());
         assert!(curl_at(&vel, 31.0, 31.0).is_finite());
         assert!(curl_at(&vel, f32::NAN, 1e9).is_finite());
+    }
+
+    #[test]
+    fn transport_scales_linearly_with_particle_drag() {
+        // Every other advection test runs at drag 1.0, where a factor of one is
+        // invisible. `particle_drag` is a HUD slider over 0..4, so the multiplier
+        // has to be exact across the range, not just non-zero.
+        let vel = const_field(64, 64, 10.0, 0.0);
+        let obs = Grid::new(64, 64);
+        for drag in [0.0, 0.5, 1.0, 2.0] {
+            let p_params = params(drag, 10.0, 0.0);
+            let mut p = Particles::new(1, 1);
+            p.set_active(1);
+            p.place(0, 5.0, 32.0, 0.0, 0.0, 100.0);
+            for _ in 0..60 {
+                p.step(&vel, &obs, DT, &p_params, &cfg(0.0, 0.0, 0.6));
+            }
+            let want = 5.0 + drag * 10.0 * DT * 60.0;
+            let got = p.position(0).0;
+            assert!((got - want).abs() < 1e-3, "drag {drag}: {got} vs {want}");
+        }
+    }
+
+    #[test]
+    fn the_whole_step_agrees_at_30_and_144_fps() {
+        // `own_velocity_decay_is_framerate_independent` isolates the damping with
+        // the fluid switched off. This is the composite: advection, curl swirl and
+        // damping together at the shipped defaults, which is the only combination
+        // a player ever sees.
+        let (w, h) = (256, 144);
+        let mut vel = VecField::new(w, h);
+        for y in 0..h {
+            for x in 0..w {
+                let (dx, dy) = (x as f32 - 128.0, y as f32 - 72.0);
+                vel.u.set(x, y, -0.35 * dy + 6.0);
+                vel.v.set(x, y, 0.35 * dx);
+            }
+        }
+        let obs = Grid::new(w, h);
+        let p_params = params(1.0, 10.0, 0.0);
+        let p_cfg = ParticleConfig::default();
+        let run = |dt: f32, steps: usize| {
+            let mut p = Particles::new(1, 3);
+            p.set_active(1);
+            p.place(0, 100.0, 40.0, 0.0, 0.0, 100.0);
+            for _ in 0..steps {
+                p.step(&vel, &obs, dt, &p_params, &p_cfg);
+            }
+            p.position(0)
+        };
+        // One second of travel is ~19 cells here, so the tolerance is 0.3% of
+        // the path: a swirl or gravity term missing its `dt`, or an advection
+        // step that integrated per frame instead of per second, lands orders of
+        // magnitude outside it. (The damping form is pinned separately, by
+        // `own_velocity_decay_is_framerate_independent`, which isolates it.)
+        let (ax, ay) = run(1.0 / 30.0, 30);
+        let (bx, by) = run(1.0 / 144.0, 144);
+        assert!(
+            (ax - bx).abs() < 0.05 && (ay - by).abs() < 0.05,
+            "30 fps ({ax}, {ay}) vs 144 fps ({bx}, {by})"
+        );
+    }
+
+    #[test]
+    fn a_lower_resolution_obstacle_still_culls_correctly() {
+        // The engine hands `step` an obstacle at the fluid's resolution, so the
+        // `osx`/`osy` rescale is dead code there — and dead code is where a
+        // transposed or off-by-one factor hides until someone changes a constant.
+        let (w, h) = (64, 36);
+        let vel = const_field(w, h, 15.0, 0.0);
+        let (ow, oh) = (32, 18);
+        let mut obs = Grid::new(ow, oh);
+        for y in 0..oh {
+            for x in ow / 2..ow {
+                obs.set(x, y, 1.0);
+            }
+        }
+        let p_params = params(1.0, 5.0, 60_000.0);
+        let mut p = Particles::new(400, 5);
+        p.set_active(400);
+        p.seed_uniform(w, h, 5.0);
+
+        let mut live_seen = 0;
+        let mut deepest = 0.0f32;
+        for _ in 0..200 {
+            p.step(&vel, &obs, DT, &p_params, &ParticleConfig::default());
+            for i in 0..p.active() {
+                if p.life_of(i) <= 0.0 {
+                    continue;
+                }
+                live_seen += 1;
+                let (x, y) = p.position(i);
+                let ox = x * (ow - 1) as f32 / (w - 1) as f32;
+                let oy = y * (oh - 1) as f32 / (h - 1) as f32;
+                assert!(
+                    obs.get((ox + 0.5) as usize, (oy + 0.5) as usize) < 0.5,
+                    "live particle at ({x}, {y}) is inside the half-res obstacle"
+                );
+                deepest = deepest.max(x);
+            }
+        }
+        assert!(live_seen > 10_000, "nothing survived to test: {live_seen}");
+        // The wall in grid space sits where `round(x * (ow - 1) / (w - 1))`
+        // first reaches `ow / 2`, i.e. x = 31.5. Asserting only "no live
+        // particle is inside" would pass just as happily with the scale off by
+        // a cell in the *conservative* direction, so pin both sides: the flow
+        // pushes particles at the wall every frame, so the deepest live one has
+        // to end up in the last free half-cell.
+        let wall = 15.5 * (w - 1) as f32 / (ow - 1) as f32;
+        assert!(
+            deepest > wall - 0.5 && deepest < wall,
+            "the obstacle rescale is off: deepest live x {deepest}, wall at {wall}"
+        );
+    }
+
+    #[test]
+    fn garbage_fields_and_parameters_keep_every_invariant() {
+        // The fluid sanitises itself once every few frames, so `step` can and
+        // does get handed a field with a NaN or an infinity in it. None of the
+        // per-particle state may inherit it, and `alive()` must keep agreeing
+        // with the number of particles that actually have life left.
+        let mut r = Rng::new(0xF00D);
+        let (w, h) = (40, 24);
+        for round in 0..120 {
+            let mut vel = VecField::new(w, h);
+            for i in 0..w * h {
+                let pick = r.next_f32();
+                vel.u.data[i] = match pick {
+                    p if p < 0.02 => f32::NAN,
+                    p if p < 0.04 => f32::INFINITY,
+                    p if p < 0.06 => f32::NEG_INFINITY,
+                    _ => r.range(-400.0, 400.0),
+                };
+                vel.v.data[i] = r.range(-400.0, 400.0);
+            }
+            let mut obs = Grid::new(w, h);
+            for i in 0..w * h {
+                obs.data[i] = if r.next_f32() < 0.3 { 1.0 } else { 0.0 };
+            }
+            let p_params = Params {
+                particle_drag: r.range(-1.0, 6.0),
+                particle_life: r.range(-1.0, 40.0),
+                // Every third round starves the respawn budget, which is the
+                // only way to exercise the "park it in bounds" branch.
+                spawn_rate: if round % 3 == 0 {
+                    0.0
+                } else {
+                    r.range(-100.0, 90_000.0)
+                },
+                ..Params::default()
+            };
+            let p_cfg = ParticleConfig {
+                curl_influence: r.range(-20.0, 20.0),
+                gravity: r.range(-300.0, 300.0),
+                damping: r.range(-2.0, 25.0),
+            };
+            let mut p = Particles::new(120, round as u64);
+            p.set_active(120);
+            p.seed_uniform(w, h, 2.0);
+
+            for s in 0..12 {
+                let dt = match s % 7 {
+                    0 => f32::NAN,
+                    1 => 1e9,
+                    2 => -0.01,
+                    3 => 0.0,
+                    _ => r.range(1.0 / 480.0, 1.0 / 20.0),
+                };
+                if s % 5 == 0 {
+                    p.spawn_burst(
+                        r.range(-5.0, 45.0),
+                        r.range(-5.0, 30.0),
+                        20,
+                        r.range(-80.0, 80.0),
+                        r.range(-0.5, 1.5),
+                        r.range(-1.0, 3.0),
+                    );
+                }
+                if s % 4 == 0 {
+                    p.impulse(
+                        r.range(-5.0, 45.0),
+                        r.range(-5.0, 30.0),
+                        r.range(-2.0, 30.0),
+                        r.range(-200.0, 200.0),
+                        r.range(-0.5, 1.5),
+                    );
+                }
+                p.step(&vel, &obs, dt, &p_params, &p_cfg);
+
+                let counted = (0..p.active()).filter(|&i| p.life_of(i) > 0.0).count();
+                assert_eq!(counted, p.alive(), "round {round} step {s}");
+                for i in 0..p.active() {
+                    let (x, y) = p.position(i);
+                    let (vx, vy) = p.velocity(i);
+                    assert!(
+                        x.is_finite() && y.is_finite() && vx.is_finite() && vy.is_finite(),
+                        "round {round} step {s} particle {i}: ({x}, {y}) ({vx}, {vy})"
+                    );
+                    assert!(
+                        (0.0..=(w - 1) as f32).contains(&x)
+                            && (0.0..=(h - 1) as f32).contains(&y),
+                        "round {round} step {s} particle {i} escaped to ({x}, {y})"
+                    );
+                    let heat = p.heat_of(i);
+                    assert!((0.0..=1.0).contains(&heat), "heat {heat} out of range");
+                    if p.life_of(i) > 0.0 {
+                        assert!(
+                            obs.get((x + 0.5) as usize, (y + 0.5) as usize) < 0.5,
+                            "live particle inside the obstacle at ({x}, {y})"
+                        );
+                    }
+                }
+                p.build_render_buffer(w, h);
+                for q in p.render_buffer().chunks(PARTICLE_STRIDE) {
+                    assert!(
+                        q.iter().all(|v| (0.0..=1.0).contains(v)),
+                        "render buffer out of the shader's range: {q:?}"
+                    );
+                }
+            }
+        }
     }
 }
