@@ -69,6 +69,11 @@ Without `fetch:models` the app loads the models from Google's CDN on first run,
 so it works out of the box; fetching them locally just makes it work offline and
 start faster.
 
+If `npm install` fails with npm's own `Exit handler never called!`, that is a
+known npm bug rather than anything in this project. `npm cache clean --force`
+then retry; `npm install --ignore-scripts` followed by `npm run sync:mp` gets
+you moving in the meantime.
+
 ### Gestures
 
 | Gesture | Effect |
