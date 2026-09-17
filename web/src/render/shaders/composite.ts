@@ -25,6 +25,8 @@ uniform float u_bloomAmount;
 uniform float u_exposure;
 uniform float u_aberration;
 uniform float u_vignette;
+/** 1 applies the filmic tone map and grade; 0 passes linear light through. */
+uniform float u_grade;
 /** Frame counter, to reseed the dither every frame. */
 uniform float u_frame;
 ${LUMA}
@@ -69,19 +71,25 @@ void main() {
     bloomAt(v_uv, n.y).g,
     bloomAt(v_uv - off, fract(n.x + n.y)).b);
 
-  vec3 mapped = aces(c * u_exposure);
+  vec3 mapped;
+  if (u_grade >= 1.0) {
+    mapped = aces(c * u_exposure);
 
-  // ACES pushes highlights toward white, which on a field this saturated eats
-  // the hue right off the bright core of every arm. Winding a little chroma
-  // back in afterwards is cheaper than a hue-preserving tone map and the
-  // difference between the two is not visible here.
-  float l = luma(mapped);
-  mapped = max(mix(vec3(l), mapped, 1.14), vec3(0.0));
+    // ACES pushes highlights toward white, which on a field this saturated eats
+    // the hue right off the bright core of every arm. Winding a little chroma
+    // back in afterwards is cheaper than a hue-preserving tone map and the
+    // difference between the two is not visible here.
+    float l = luma(mapped);
+    mapped = max(mix(vec3(l), mapped, 1.14), vec3(0.0));
 
-  // Split tone: cool shadows, warm highlights. Two multiplies and a mix, and
-  // most of the distance between "blue fluid on black" and "graded image".
-  mapped = mix(mapped * vec3(0.90, 0.97, 1.14), mapped * vec3(1.07, 1.00, 0.92),
-               smoothstep(0.22, 0.85, l));
+    // Split tone: cool shadows, warm highlights. Two multiplies and a mix, and
+    // most of the distance between "blue fluid on black" and "graded image".
+    mapped = mix(mapped * vec3(0.90, 0.97, 1.14), mapped * vec3(1.07, 1.00, 0.92),
+                 smoothstep(0.22, 0.85, l));
+  } else {
+    // Camera view: no film look, the feed is shown as the sensor saw it.
+    mapped = clamp(c * u_exposure, 0.0, 1.0);
+  }
 
   mapped *= 1.0 - u_vignette * smoothstep(0.10, 0.80, r2 * 1.7);
 
