@@ -1,16 +1,47 @@
-/* Minimal baseline styling; the HUD pass replaces this with the full design. */
+/*
+ * Aether — the shell around the simulation.
+ *
+ * Rules that are load-bearing rather than decorative:
+ * - `#hud` covers the viewport (so the panel, the hint and the help sheet can
+ *   be placed independently) and is `pointer-events: none`. Every interactive
+ *   node opts back in explicitly. The canvas underneath is a gesture surface;
+ *   an invisible div eating its pointer events would be a real bug.
+ * - Every number in the HUD is `tabular-nums`. Proportional digits make a live
+ *   readout jitter sideways, which reads as instability in the engine.
+ * - The whole panel is sized in `px`, not `rem`: it is an instrument overlay,
+ *   not body copy, and it must not reflow with the user's root font size to a
+ *   width that covers the simulation.
+ */
 
 :root {
-  --ink: #e8f2ff;
-  --dim: #7f93ad;
+  --ink: #e7f1fb;
+  --dim: #92a6bf;
+  --faint: #5d7089;
   --bg: #04050a;
-  --panel: rgba(8, 12, 22, 0.66);
-  --edge: rgba(130, 170, 220, 0.18);
+
+  --panel-a: rgba(11, 16, 26, 0.82);
+  --panel-b: rgba(6, 9, 16, 0.78);
+  --edge: rgba(126, 166, 214, 0.16);
+  --edge-hi: rgba(126, 166, 214, 0.32);
+  --well: rgba(126, 166, 214, 0.1);
+
+  --accent: #35d6ff;
+  --accent-soft: rgba(53, 214, 255, 0.14);
+  --magenta: #ff5ea8;
+  --warn: #ffc65c;
+  --over: #ff6b8b;
+
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --r: 12px;
+  --gut: 12px;
 }
 
 * {
   box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
 }
 
 html,
@@ -21,11 +52,13 @@ body {
   background: var(--bg);
   color: var(--ink);
   font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
   /* Nothing here is meant to be selected or long-pressed; the whole surface
      is a gesture target. */
   user-select: none;
   -webkit-user-select: none;
   touch-action: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 #stage {
@@ -36,72 +69,1101 @@ body {
   display: block;
 }
 
+/* ------------------------------------------------------------------ the HUD */
+
 #hud {
   position: fixed;
-  top: 0;
-  left: 0;
-  padding: 14px;
-  pointer-events: none;
+  inset: 0;
   z-index: 10;
+  pointer-events: none;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* `H` takes the panel and the hint out — visibility, not just opacity, so a
+   hidden panel cannot be tabbed into — and deliberately leaves the help sheet
+   openable, or `?` would have nothing to show. */
+#hud.is-hidden .hud-panel,
+#hud.is-hidden .hud-hint {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 240ms ease,
+    visibility 0s linear 240ms;
 }
 
 .hud-panel {
-  background: var(--panel);
+  position: absolute;
+  top: max(var(--gut), env(safe-area-inset-top));
+  left: max(var(--gut), env(safe-area-inset-left));
+  width: 316px;
+  max-height: calc(100dvh - 2 * var(--gut));
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(170deg, var(--panel-a), var(--panel-b));
   border: 1px solid var(--edge);
-  border-radius: 10px;
-  padding: 12px 14px;
-  backdrop-filter: blur(14px);
+  border-radius: var(--r);
+  box-shadow:
+    0 24px 60px -28px rgba(0, 0, 0, 0.95),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  backdrop-filter: blur(16px) saturate(1.25);
+  -webkit-backdrop-filter: blur(16px) saturate(1.25);
+  pointer-events: auto;
+  overflow: hidden;
+  transition:
+    width 200ms ease,
+    background 200ms ease,
+    opacity 240ms ease;
+}
+
+/* Collapsed is a chip, not a narrow panel: fps, the two icon buttons, and the
+   ambient badge if the engine is driving itself. Anything else at this size
+   overlaps, and the point of the state is to get out of the way. */
+#hud.is-collapsed .hud-panel {
+  width: auto;
+  background: linear-gradient(170deg, rgba(11, 16, 26, 0.6), rgba(6, 9, 16, 0.55));
+}
+
+#hud.is-collapsed .hud-mark {
+  display: none;
+}
+
+/* Header ------------------------------------------------------------------ */
+
+.hud-head {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 0 10px;
+  padding: 10px 11px 10px 13px;
+}
+
+.hud-mark {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.hud-mark b {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.34em;
+  color: var(--ink);
+}
+
+.hud-mark span {
+  font-size: 8.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hud-fps {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+}
+
+.hud-fps b {
+  font-size: 19px;
+  font-weight: 400;
+  line-height: 1;
+  color: var(--accent);
+  transition: color 200ms ease;
+}
+
+.hud-fps b[data-tone='warn'] {
+  color: var(--warn);
+}
+
+.hud-fps b[data-tone='over'] {
+  color: var(--over);
+}
+
+.hud-fps span {
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  color: var(--faint);
+}
+
+.hud-acts {
+  display: flex;
+  gap: 4px;
+}
+
+.ico-btn {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--edge);
+  border-radius: 7px;
+  color: var(--dim);
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    color 140ms ease,
+    border-color 140ms ease,
+    background 140ms ease;
+}
+
+.ico-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.ico-btn:hover {
+  color: var(--ink);
+  border-color: var(--edge-hi);
+  background: var(--well);
+}
+
+.chev-u {
+  display: none;
+}
+
+#hud.is-collapsed .chev-u {
+  display: inline;
+}
+
+#hud.is-collapsed .chev-d {
+  display: none;
+}
+
+/* A second header row rather than an absolute overlay: the badge only exists
+   sometimes, and nothing else in the header may move when it appears. */
+.hud-badge {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  margin-top: 2px;
+  font-size: 8px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--magenta);
+}
+
+.hud-badge::before {
+  content: '';
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  margin-right: 6px;
+  vertical-align: 1px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+}
+
+/* Body ------------------------------------------------------------------- */
+
+.hud-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* The body sets `touch-action: none` for the gesture surface; the panel is
+     the one place a drag should still scroll. */
+  touch-action: pan-y;
+  scrollbar-width: thin;
+  scrollbar-color: var(--edge-hi) transparent;
+}
+
+.hud-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.hud-body::-webkit-scrollbar-thumb {
+  background: var(--edge);
+  border-radius: 3px;
+}
+
+.hud-sec {
+  padding: 10px 13px 12px;
+  border-top: 1px solid var(--edge);
+}
+
+.hud-sec h2 {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.hud-sec h2 span {
+  letter-spacing: 0.08em;
+  color: rgba(93, 112, 137, 0.72);
+  text-transform: none;
+}
+
+/* Meters ----------------------------------------------------------------- */
+
+.m-row {
+  display: grid;
+  grid-template-columns: 44px 1fr 40px 14px;
+  align-items: center;
+  gap: 7px;
+  height: 17px;
+}
+
+.m-key {
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+
+.trk {
+  position: relative;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--well);
+  overflow: hidden;
+}
+
+.trk-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--v, 0%);
+  border-radius: 2px;
+  background: var(--accent);
+  transition:
+    width 110ms linear,
+    background 180ms ease;
+}
+
+.trk-fill[data-tone='warn'] {
+  background: var(--warn);
+}
+
+.trk-fill[data-tone='over'] {
+  background: var(--over);
+  box-shadow: 0 0 8px rgba(255, 107, 139, 0.6);
+}
+
+.trk-fill[data-tone='off'] {
+  background: var(--faint);
+}
+
+.trk-fill[data-tone='on'] {
+  background: var(--magenta);
+  box-shadow: 0 0 8px rgba(255, 94, 168, 0.5);
+}
+
+.m-val {
+  font-size: 10px;
+  text-align: right;
+  color: var(--ink);
+}
+
+.m-unit {
+  font-size: 8.5px;
+  color: var(--faint);
+}
+
+.m-warp {
+  margin-top: 8px;
+}
+
+.hud-spark {
+  display: block;
+  width: 100%;
+  height: 26px;
+  margin-top: 8px;
+  border-bottom: 1px solid var(--edge);
+}
+
+/* Counters --------------------------------------------------------------- */
+
+/* Label left, number right — the same rhythm as the meters above, so the whole
+   panel reads as one column of gauges instead of two unrelated widgets. */
+.c-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 16px;
+  row-gap: 1px;
+}
+
+.c-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+  height: 16px;
+  border-bottom: 1px solid rgba(126, 166, 214, 0.07);
+}
+
+.c-box span {
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.c-box b {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+/* Spells ----------------------------------------------------------------- */
+
+.h-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.h-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px 7px;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: rgba(7, 10, 18, 0.5);
+  transition:
+    border-color 180ms ease,
+    background 180ms ease;
+}
+
+.h-card span {
+  font-size: 8px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.h-card b {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--faint);
+  transition: color 180ms ease;
+}
+
+.h-card[data-state='idle'] b {
+  color: var(--dim);
+}
+
+.h-card[data-state='cast'] {
+  border-color: rgba(53, 214, 255, 0.45);
+  background: var(--accent-soft);
+}
+
+.h-card[data-state='cast'] b {
+  color: var(--accent);
+}
+
+.g-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 1px;
+}
+
+.g-row {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: var(--dim);
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.g-row svg {
+  width: 16px;
+  height: 16px;
+  opacity: 0.75;
+}
+
+.g-txt {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.g-txt b {
+  font-size: 10px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.g-txt i {
+  font-size: 8.5px;
+  font-style: normal;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.g-row[data-on='1'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 1px 0 0 var(--accent);
+}
+
+.g-row[data-on='1'] svg {
+  opacity: 1;
+}
+
+.g-row[data-on='1'] .g-txt i {
+  color: rgba(53, 214, 255, 0.7);
+}
+
+/* Controls --------------------------------------------------------------- */
+
+.seg {
+  display: flex;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.seg-btn {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 6px 2px 7px;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--edge);
+  color: var(--dim);
+  font: inherit;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    color 140ms ease;
+}
+
+.seg-btn:last-child {
+  border-right: 0;
+}
+
+.seg-btn:hover {
+  background: var(--well);
+  color: var(--ink);
+}
+
+.seg-btn[aria-pressed='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.seg-key {
+  display: block;
+  font-size: 7.5px;
+  letter-spacing: 0.1em;
+  color: var(--faint);
+}
+
+.seg-btn[aria-pressed='true'] .seg-key {
+  color: rgba(53, 214, 255, 0.72);
+}
+
+.row-btn {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  margin-top: 7px;
+  padding: 6px 9px 7px;
+  background: rgba(7, 10, 18, 0.5);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  color: var(--dim);
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    color 140ms ease,
+    border-color 140ms ease;
+}
+
+.row-btn b {
+  font-weight: 400;
+  color: var(--faint);
+}
+
+.row-btn:hover {
+  color: var(--ink);
+  border-color: var(--edge-hi);
+  background: var(--well);
+}
+
+.row-btn[aria-pressed='true'] {
+  color: var(--ink);
+}
+
+.row-btn[aria-pressed='true'] b {
+  color: var(--accent);
+}
+
+.row-btn.is-action:hover {
+  border-color: rgba(255, 94, 168, 0.5);
+  color: var(--magenta);
+}
+
+.row-btn.is-action:hover b {
+  color: var(--magenta);
+}
+
+/* Sliders ---------------------------------------------------------------- */
+
+.p-row {
+  display: grid;
+  grid-template-columns: 62px 1fr 48px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.p-key {
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+}
+
+.p-val {
+  font-size: 9.5px;
+  text-align: right;
+  color: var(--ink);
+}
+
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 14px;
+  margin: 0;
+  background: transparent;
+  cursor: ew-resize;
   pointer-events: auto;
 }
 
-.hud-title {
-  font-size: 11px;
-  letter-spacing: 0.32em;
-  color: var(--dim);
-  margin-bottom: 10px;
+input[type='range']::-webkit-slider-runnable-track {
+  height: 2px;
+  border-radius: 1px;
+  background: var(--edge-hi);
 }
 
-.hud-readout {
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  margin-top: -4.5px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px rgba(4, 5, 10, 0.9);
+}
+
+input[type='range']::-moz-range-track {
+  height: 2px;
+  border-radius: 1px;
+  background: var(--edge-hi);
+}
+
+input[type='range']::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.hud-adv {
+  padding: 0 13px 12px;
+  border-top: 1px solid var(--edge);
+}
+
+.hud-adv > summary {
+  padding: 10px 0 2px;
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--faint);
+  cursor: pointer;
+  list-style: none;
+}
+
+.hud-adv > summary::-webkit-details-marker {
+  display: none;
+}
+
+.hud-adv > summary::before {
+  content: '+ ';
+  color: var(--accent);
+}
+
+.hud-adv[open] > summary::before {
+  content: '− ';
+}
+
+.hud-adv > summary:hover {
+  color: var(--dim);
+}
+
+/* Perception ------------------------------------------------------------- */
+
+.hud-percep {
+  position: relative;
+  display: grid;
+  grid-template-columns: 10px 1fr;
+  align-items: baseline;
+  gap: 2px 7px;
   margin: 0;
-  font-size: 11px;
-  line-height: 1.55;
-  white-space: pre;
+  padding: 9px 13px 11px;
+  border-top: 1px solid var(--edge);
+}
+
+/* Tells you the body above is scrollable without adding a widget to click. */
+.hud-percep::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 18px;
+  background: linear-gradient(rgba(6, 9, 16, 0), rgba(6, 9, 16, 0.85));
+  pointer-events: none;
+}
+
+.hud-percep .dot {
+  grid-row: 1;
+  width: 6px;
+  height: 6px;
+  margin-bottom: 1px;
+  border-radius: 50%;
+  background: var(--faint);
+  box-shadow: 0 0 7px currentColor;
+}
+
+.hud-percep b {
+  font-size: 10px;
+  font-weight: 400;
   color: var(--ink);
 }
+
+.hud-percep span {
+  grid-column: 2;
+  font-size: 8.5px;
+  line-height: 1.5;
+  color: var(--faint);
+}
+
+.hud-percep[data-tone='ok'] .dot {
+  background: var(--accent);
+  color: rgba(53, 214, 255, 0.55);
+}
+
+.hud-percep[data-tone='warn'] .dot {
+  background: var(--warn);
+  color: rgba(255, 198, 92, 0.5);
+}
+
+.hud-percep[data-tone='wait'] .dot {
+  background: var(--dim);
+  color: transparent;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* First-run hint --------------------------------------------------------- */
+
+/* Spans the viewport rather than sitting at `left: 50%`: an absolutely
+   positioned box only offset from the left gets a shrink-to-fit width of the
+   space remaining to the right, which silently wrapped the chip row in half. */
+.hud-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: max(26px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  padding: 0 16px;
+  text-align: center;
+  opacity: 1;
+  transition:
+    opacity 1200ms ease,
+    transform 1200ms ease;
+}
+
+.hud-hint > * {
+  max-width: min(960px, 100%);
+}
+
+.hud-hint.is-gone {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.hud-hint > b {
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--ink);
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.9);
+}
+
+.hud-hint .chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 5px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 4px;
+  background: rgba(7, 10, 18, 0.62);
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.chip svg {
+  width: 12px;
+  height: 12px;
+  opacity: 0.8;
+}
+
+.hint-keys {
+  font-size: 8.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* Help sheet ------------------------------------------------------------- */
+
+.hud-help {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(2, 4, 9, 0.7);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 180ms ease,
+    visibility 0s linear 180ms;
+}
+
+.hud-help.is-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition-delay: 0s;
+}
+
+.help-sheet {
+  width: min(620px, 100%);
+  max-height: calc(100dvh - 36px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  padding: 16px 18px 20px;
+  background: linear-gradient(170deg, rgba(12, 17, 28, 0.96), rgba(6, 9, 16, 0.96));
+  border: 1px solid var(--edge-hi);
+  border-radius: 14px;
+  box-shadow: 0 40px 90px -40px #000;
+  transform: translateY(6px) scale(0.99);
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.hud-help.is-open .help-sheet {
+  transform: none;
+}
+
+.help-sheet > header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--edge);
+}
+
+.help-sheet > header b {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.34em;
+}
+
+.help-sheet > header span {
+  flex: 1;
+  font-size: 8.5px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.help-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 22px;
+}
+
+.help-cols h3 {
+  margin: 0 0 8px;
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.help-cols h3 + .k-list + h3 {
+  margin-top: 16px;
+}
+
+.g-list.is-static .g-row {
+  padding: 4px 0;
+}
+
+.k-list {
+  display: grid;
+  gap: 4px;
+}
+
+.k-row {
+  display: grid;
+  grid-template-columns: 54px 1fr;
+  align-items: baseline;
+  gap: 9px;
+  font-size: 9.5px;
+  color: var(--dim);
+}
+
+kbd {
+  display: inline-block;
+  padding: 1px 5px 2px;
+  border: 1px solid var(--edge);
+  border-radius: 5px;
+  background: var(--well);
+  font: inherit;
+  font-size: 9px;
+  text-align: center;
+  color: var(--ink);
+}
+
+.help-note {
+  margin: 0;
+  font-size: 9.5px;
+  line-height: 1.7;
+  color: var(--faint);
+}
+
+/* Focus ------------------------------------------------------------------ */
+
+:focus {
+  outline: none;
+}
+
+:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input[type='range']:focus-visible::-webkit-slider-thumb {
+  box-shadow:
+    0 0 0 1px rgba(4, 5, 10, 0.9),
+    0 0 0 3px rgba(53, 214, 255, 0.45);
+}
+
+/* Boot ------------------------------------------------------------------- */
 
 #boot {
   position: fixed;
   inset: 0;
   display: grid;
   place-items: center;
-  background: radial-gradient(circle at 50% 45%, #0a1020 0%, #04050a 70%);
+  background: radial-gradient(circle at 50% 42%, #0a1120 0%, #04050a 72%);
   z-index: 100;
-  transition: opacity 600ms ease;
+  transition:
+    opacity 600ms ease,
+    visibility 0s linear 600ms;
 }
 
 #boot.done {
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
-}
-
-#boot.failed #boot-status {
-  color: #ff7b7b;
 }
 
 .boot-inner {
   text-align: center;
+  padding: 0 24px;
 }
 
 .boot-inner h1 {
-  margin: 0 0 12px;
-  font-size: 28px;
-  font-weight: 400;
+  margin: 0 0 14px;
+  font-size: clamp(20px, 6vw, 30px);
+  font-weight: 300;
   letter-spacing: 0.5em;
+  /* The title sits optically centred despite the trailing letter-space. */
+  text-indent: 0.5em;
   color: var(--ink);
+  text-shadow: 0 0 40px rgba(53, 214, 255, 0.28);
 }
 
 #boot-status {
   margin: 0;
-  font-size: 12px;
+  font-size: 11px;
+  letter-spacing: 0.1em;
   color: var(--dim);
+}
+
+/* A scanning hairline stands in for a progress bar: boot has no measurable
+   percentage, and a fake one would be a lie. */
+.boot-inner::after {
+  content: '';
+  display: block;
+  width: 170px;
+  height: 1px;
+  margin: 20px auto 0;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 55% 100%;
+  background-repeat: no-repeat;
+  animation: scan 1.7s ease-in-out infinite;
+}
+
+@keyframes scan {
+  0% {
+    background-position: -40% 0;
+  }
+  100% {
+    background-position: 140% 0;
+  }
+}
+
+#boot.failed #boot-status {
+  color: var(--over);
+}
+
+#boot.failed .boot-inner h1 {
+  color: var(--dim);
+  text-shadow: none;
+}
+
+/* The sweep stops dead and goes red: loading and failure should not share a
+   silhouette. */
+#boot.failed .boot-inner::after {
+  animation: none;
+  background: var(--over);
+  opacity: 0.4;
+}
+
+/* Responsive ------------------------------------------------------------- */
+
+@media (max-width: 620px) {
+  :root {
+    --gut: 8px;
+  }
+
+  .hud-panel {
+    width: auto;
+    right: max(var(--gut), env(safe-area-inset-right));
+    /* The fluid is the point. On a phone the panel gets a little over half the
+       screen and scrolls; it never becomes the whole view. */
+    max-height: min(calc(100dvh - 2 * var(--gut) - 74px), 58dvh);
+  }
+
+  #hud.is-collapsed .hud-panel {
+    width: auto;
+    right: auto;
+  }
+
+  .c-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .help-cols {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .hud-hint {
+    bottom: max(14px, env(safe-area-inset-bottom));
+    gap: 7px;
+  }
+
+  .hud-hint > b {
+    font-size: 11px;
+    letter-spacing: 0.26em;
+  }
+
+  /* Seven chips wrap to four rows on a phone and cover the simulation, and a
+     clipped list looks broken rather than terse. The panel and the help sheet
+     carry the full legend; the hint just points at them. */
+  .hud-hint .chips {
+    display: none;
+  }
+}
+
+/* A short viewport (phone in landscape) has no room for the legend. */
+@media (max-height: 520px) {
+  .hud-panel {
+    max-height: calc(100dvh - 2 * var(--gut));
+  }
+
+  .hud-hint .chips {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
+  }
 }

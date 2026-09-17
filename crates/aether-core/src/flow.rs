@@ -359,11 +359,18 @@ impl OpticalFlow {
                     v = 0.0;
                 }
                 let mag = (u * u + v * v).sqrt();
-                let (fu, fv) = if mag > floor {
-                    // Soft threshold rather than a hard gate: subtracting the
-                    // floor keeps the field continuous, so a hand drifting
-                    // through the deadband does not pop the fluid.
-                    let per_frame = (mag - floor).min(MAX_STEP);
+                // A gain that ramps 0 -> 1 across the deadband, rather than
+                // subtracting the floor from the magnitude. Both keep the field
+                // continuous, but subtracting leaves a residual bias of
+                // `floor / dt` in the published cells/second, and that term
+                // grows with the frame rate: at the default 0.06 cells/frame it
+                // costs 1.8 cells/s at 30 fps and 8.6 cells/s at 144 fps, so the
+                // same physical motion reads differently on different hardware.
+                // A unity-gain-above-the-band gate rejects exactly the same
+                // per-frame noise without touching motion the sensor resolved.
+                let gain = crate::math::smoothstep(floor, floor * 2.0, mag);
+                let (fu, fv) = if gain > 0.0 && mag > 1e-12 {
+                    let per_frame = (mag * gain).min(MAX_STEP);
                     let scale = (per_frame * inv_dt).min(MAX_FLOW) / mag;
                     (u * scale, v * scale)
                 } else {
@@ -679,10 +686,15 @@ mod tests {
         let (dx, dy) = f.dominant_motion();
         assert!(dx > 0.5 * 2.0 / DT, "dominant dx too small: {dx}");
         assert!(dy.abs() < 0.35 * 2.0 / DT, "spurious dominant dy: {dy}");
-        // Mean square of a field whose mean is ~dx can never be below dx^2.
+        // `motion_energy >= dx^2` would be vacuous: mean(u^2 + v^2) is never
+        // below mean(u)^2 for *any* field, so that inequality holds even if the
+        // solver returns garbage. Pin it to the analytic truth instead. It lands
+        // slightly under (2 / DT)^2 because the border fade zeroes the frame
+        // edge, and the field is near-uniform so it cannot land far over.
+        let truth = (2.0 / DT) * (2.0 / DT);
         assert!(
-            f.motion_energy() >= dx * dx * 0.9,
-            "energy {} vs dx {dx}",
+            f.motion_energy() > 0.6 * truth && f.motion_energy() < 1.3 * truth,
+            "energy {} should be near {truth}",
             f.motion_energy()
         );
     }
@@ -775,7 +787,46 @@ mod tests {
     }
 
     #[test]
-    fn noise_floor_soft_thresholds_the_magnitude() {
+    fn the_reported_speed_does_not_depend_on_the_frame_rate() {
+        // The same physical 60 cells/second, sampled at four frame rates. Any
+        // bias that is a *per-frame* constant — a subtracted noise floor, say —
+        // becomes `constant / dt` in the published cells/second and shows up
+        // here as a spread that tracks the frame rate.
+        const SPEED: f32 = 60.0;
+        let t = Texture::new(40);
+        let still = t.still(W, H);
+        for fps in [15.0f32, 30.0, 60.0, 144.0] {
+            let dt = 1.0 / fps;
+            let f = flow_of(&still, &t.translated(W, H, SPEED * dt, 0.0), dt);
+            let (u, v) = mean_interior(f.flow(), 16);
+            assert!(
+                (u - SPEED).abs() < 0.06 * SPEED,
+                "{fps} fps reported {u} cells/s for a true {SPEED}"
+            );
+            assert!(v.abs() < 0.1 * SPEED, "{fps} fps invented v {v}");
+        }
+    }
+
+    #[test]
+    fn small_motion_is_not_systematically_understated() {
+        // Half a cell to two cells per frame is the common case for a hand held
+        // in front of the camera, and it is where a magnitude bias hides: the
+        // 35% band `assert_recovers` allows would not notice a 10% cut.
+        let t = Texture::new(41);
+        let still = t.still(W, H);
+        for d in [0.5f32, 1.0, 2.0] {
+            let f = flow_of(&still, &t.translated(W, H, d, 0.0), DT);
+            let (u, _) = mean_interior(f.flow(), 16);
+            let truth = d / DT;
+            assert!(
+                (u - truth).abs() < 0.08 * truth,
+                "{d} cells/frame reported {u} cells/s, truth {truth}"
+            );
+        }
+    }
+
+    #[test]
+    fn noise_floor_gates_below_and_passes_above_unchanged() {
         let t = Texture::new(12);
         let (a, b) = (t.still(W, H), t.translated(W, H, 2.0, 0.0));
         let open = {
@@ -799,7 +850,14 @@ mod tests {
             f.update(&b, DT);
             f
         };
-        let mut gated_cells = 0;
+        // The three regimes of the deadband, as behaviour rather than formula:
+        // fully rejected at or below the floor, untouched once clear of it, and
+        // monotonically attenuated in between. "Untouched above" is the part
+        // that matters: a floor that is *subtracted* instead biases every
+        // magnitude by `floor`, and since the floor is per-frame that bias is
+        // `floor / dt` in the published cells/second — frame-rate dependent.
+        let mut below = 0;
+        let mut above = 0;
         for i in 0..W * H {
             let (u0, v0) = (open.flow().u.data[i], open.flow().v.data[i]);
             let raw = (u0 * u0 + v0 * v0).sqrt() * DT;
@@ -808,16 +866,22 @@ mod tests {
             }
             let (u1, v1) = (gated.flow().u.data[i], gated.flow().v.data[i]);
             let got = (u1 * u1 + v1 * v1).sqrt() * DT;
-            let want = (raw - floor).max(0.0);
             assert!(
-                (got - want).abs() < 1e-3,
-                "cell {i}: raw {raw} with floor {floor} gave {got}, want {want}"
+                got <= raw + 1e-3,
+                "cell {i}: the floor amplified {raw} to {got}"
             );
-            if want == 0.0 {
-                gated_cells += 1;
+            if raw <= floor {
+                assert!(got == 0.0, "cell {i}: {raw} <= floor {floor} gave {got}");
+                below += 1;
+            } else if raw >= 2.0 * floor {
+                assert!(
+                    (got - raw).abs() < 1e-3,
+                    "cell {i}: {raw} is clear of floor {floor} but was cut to {got}"
+                );
+                above += 1;
             }
         }
-        assert!(gated_cells > 0, "floor never engaged; test proves nothing");
+        assert!(below > 0 && above > 0, "only {below}/{above} cells; vacuous");
     }
 
     #[test]
@@ -902,6 +966,61 @@ mod tests {
             // A negative or zero dt must never invert the direction of time.
             assert!(f.dominant_motion().0 >= 0.0, "dt {dt} flipped the sign");
         }
+    }
+
+    #[test]
+    fn a_long_run_of_hostile_input_stays_bounded() {
+        // Everything the browser can throw at once: garbage dt, config churn
+        // mid-stream, resets between frames, moving and static content. The
+        // state machine around the reused pyramid is the thing under test —
+        // a stale cached level would show up as flow on a static frame.
+        let t = Texture::new(42);
+        let mut rng = Rng::new(99);
+        let mut f = OpticalFlow::new(W, H, FlowConfig::default());
+        for step in 0..150 {
+            let dt = match step % 5 {
+                0 => 1.0 / 144.0,
+                1 => 1.0 / 30.0,
+                2 => 0.0,
+                3 => -0.5,
+                _ => f32::NAN,
+            };
+            if step % 37 == 0 {
+                f.reset();
+            }
+            if step % 23 == 0 {
+                f.set_config(FlowConfig {
+                    levels: (step / 23) % 7,
+                    iters: step % 40,
+                    alpha: rng.next_f32() * 30.0,
+                    noise_floor: rng.next_f32() * 0.2,
+                });
+            }
+            let frame = t.translated(W, H, rng.signed() * 3.0, rng.signed() * 3.0);
+            f.update(&frame, dt);
+            assert!(
+                f.flow().u.data.iter().all(|v| v.is_finite())
+                    && f.flow().v.data.iter().all(|v| v.is_finite()),
+                "non-finite flow at step {step}"
+            );
+            assert!(
+                f.flow().max_speed() <= MAX_FLOW + 1e-3,
+                "step {step} produced {}",
+                f.flow().max_speed()
+            );
+            assert!(f.motion_energy().is_finite() && f.motion_energy() >= 0.0);
+            assert!(f.levels() >= 1 && f.levels() <= MAX_LEVELS);
+        }
+        // Coming to rest must actually mean rest, not a decaying tail.
+        let still = t.still(W, H);
+        f.set_config(FlowConfig::default());
+        f.update(&still, DT);
+        f.update(&still, DT);
+        assert!(
+            f.flow().max_speed() < 1e-5,
+            "did not settle: {}",
+            f.flow().max_speed()
+        );
     }
 
     #[test]

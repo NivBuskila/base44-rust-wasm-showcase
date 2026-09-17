@@ -49,15 +49,35 @@
 //! sharp dye edges and eventually blows up. The trace positions depend only on
 //! the velocity field, so all five advected channels share one pair of maps.
 //!
-//! Walls — the domain border and every obstacle cell — are collapsed into a
-//! single `solid` mask, which is the only thing the kernels branch on. Solid
-//! cells hold zero velocity and are excluded from every write, so the invariant
-//! "solids are at rest" holds between stages rather than being patched up at
-//! the end.
+//! The trace is subdivided when it would cross more than
+//! [`TRACE_CELLS_PER_STEP`] in one step. That is not polish: a single midpoint
+//! step over an arc wider than the impulse carrying it lands in the still
+//! fluid outside and returns a trace of length *zero*, which freezes the
+//! impulse in place and makes the settled speed depend on the frame rate. See
+//! [`TRACE_CELLS_PER_STEP`] for the measurements and the cost.
+//!
+//! Walls — the domain border and every obstacle cell — are collapsed into one
+//! `solid` mask, which is the only thing the solver stages test. Solid cells
+//! hold zero velocity and are excluded from every write, so the invariant
+//! "solids are at rest" holds *between* stages instead of being patched up at
+//! the end. Advection is the one exception: it backs away from the `obstacle`
+//! mask only, because the border needs no backing away (the fetch clamps
+//! there) and treating it as an obstacle would make the frame edge behave
+//! differently depending on whether a body is in view.
+//!
+//! ## Cost
+//!
+//! Measured native release at 256x144 with the default parameters, mid-stir:
+//! ~7 ms per step, split roughly trace build 2.6, advection of the five
+//! channels 2.3, 28 pressure sweeps 1.3, everything else 0.9. The two Jacobi
+//! kernels are the only loops with a hand-written wasm32 SIMD128 path; the
+//! advection is gather-bound rather than arithmetic-bound, so the work there
+//! went into halving the number of gathers instead (three passes per channel
+//! down to two, with one shared trace map instead of five).
 
 use crate::config::Params;
 use crate::field::{Grid, VecField};
-use crate::math::{decay, normalize};
+use crate::math::{decay, length, normalize};
 
 #[cfg(all(target_arch = "wasm32", feature = "simd"))]
 use core::arch::wasm32::{
@@ -97,8 +117,49 @@ const MAX_CONFINE_IMPULSE: f32 = 50.0;
 const PRESSURE_OMEGA: f32 = 0.9;
 
 /// Fractions of an advection trace tried, in order, when the full backtrace
-/// lands inside a wall.
+/// would fetch from inside a wall.
 const TRACE_RETRIES: [f32; 3] = [0.5, 0.25, 0.1];
+
+/// Cells one trace substep may cross before the trace is subdivided.
+///
+/// The backtrace is the only place this solver has a CFL condition, and a
+/// *single* midpoint step hides it: it assumes the velocity is near-constant
+/// over the whole arc, so once `dt * |u|` is wider than the impulse carrying
+/// it the midpoint lands in the still fluid outside, the trace collapses to
+/// (exactly) zero length and the impulse stops advecting at all. The next
+/// frame's impulse then stacks onto a stationary spike instead of a moving
+/// one, and the field climbs until dissipation catches it — which is a
+/// frame-rate dependence, because the per-frame impulse grows with `dt`.
+///
+/// Measured with a 6000 cells/s^2 drive pinned at one point: one midpoint step
+/// settles at 1817 cells/s at 30 fps against 350 at 240 fps; subdividing gives
+/// 340 and 350. A span under one substep is bit-identical to the single step,
+/// so a calm field pays nothing.
+///
+/// Two cells rather than one is the cost/accuracy line: the midpoint then sits
+/// one cell upwind, still well inside the narrowest impulse the spell layer
+/// makes (`spells::MIN_RADIUS` is 4), and each substep costs one more velocity
+/// gather. That matters because the gather, not the arithmetic, is what the
+/// trace build is made of: at the flow-drive benchmark's 980 cells/s, half the
+/// grid spans 7+ cells per frame and the stage roughly triples (the whole
+/// engine step goes 14.1 -> 18.8 ms native release). Dial these two constants
+/// if that trade needs to move; both are safe to lower.
+const TRACE_CELLS_PER_STEP: f32 = 2.0;
+
+/// Ceiling on trace substeps, so one runaway cell cannot eat the frame. At the
+/// cap the substep grows again and the trace degrades gracefully rather than
+/// turning the trace build into an unbounded loop.
+const MAX_TRACE_STEPS: usize = 4;
+
+/// Bilinear weight below which a wall corner counts as not contributing.
+///
+/// Near zero on purpose. Its only job is to let a cell's *own* lattice point
+/// pass the test when the body happens to be its neighbour — there the wall
+/// corner has weight exactly zero — so that the rim of cells around a
+/// silhouette can still advect instead of freezing. Anything larger is
+/// tolerated bleed: at 5% a wall cell leaks a third of its dye into the fluid
+/// beside it within eight frames.
+const MIN_STENCIL_WEIGHT: f32 = 1e-3;
 
 /// A velocity + dye field on a fixed grid.
 pub struct Fluid {
@@ -118,6 +179,8 @@ pub struct Fluid {
     solid: Grid,
     /// Trace maps and workspace shared by all five advected channels.
     advector: Advector,
+    /// Whether any *interior* cell is solid, i.e. whether a body is in frame.
+    has_obstacle: bool,
     /// Absolute maximum divergence measured at the end of the last step; the
     /// HUD shows it and the tests assert on it.
     last_divergence: f32,
@@ -139,6 +202,7 @@ impl Fluid {
             scratch: Grid::new(w, h),
             solid: Grid::new(w, h),
             advector: Advector::new(w * h),
+            has_obstacle: false,
             last_divergence: 0.0,
         };
         fluid.refresh_solid();
@@ -259,8 +323,12 @@ impl Fluid {
             self.diffuse(dt, params.viscosity);
         }
 
-        // Curl is recomputed every step even when confinement is off: the
-        // particle system reads it through `curl_at` for spin.
+        // Recomputed every step even when confinement is off, so that the
+        // `curl` / `curl_at` accessors are never a frame stale. (The particle
+        // system does *not* read them — it re-derives curl from four velocity
+        // loads around the particle, which is cheaper than an interpolated
+        // fetch — so this pass is one full grid sweep for the HUD and for
+        // whatever reads the accessors next.)
         self.compute_curl();
         if params.vorticity > 0.0 {
             self.confine_vorticity(dt, params.vorticity);
@@ -314,15 +382,46 @@ impl Fluid {
                 // swipe produces, first-order backtracing rounds the dye off
                 // into mush inside a second and no number of pressure
                 // iterations brings the structure back.
-                let (um, vm) = self.velocity_at(fx - 0.5 * dt * u0, fy - 0.5 * dt * v0);
-                let (bx, by) = self.trace_to_fluid(fx, fy, fx - dt * um, fy - dt * vm);
+                let (bx, by) = self.integrate(fx, fy, -dt, u0, v0);
+                let (bx, by) = self.trace_to_fluid(fx, fy, bx, by);
                 self.advector.back.set(i, bx, by, w, h);
 
-                let (up, vp) = self.velocity_at(fx + 0.5 * dt * u0, fy + 0.5 * dt * v0);
-                let (gx, gy) = self.trace_to_fluid(fx, fy, fx + dt * up, fy + dt * vp);
+                let (gx, gy) = self.integrate(fx, fy, dt, u0, v0);
+                let (gx, gy) = self.trace_to_fluid(fx, fy, gx, gy);
                 self.advector.fwd.set(i, gx, gy, w, h);
             }
         }
+    }
+
+    /// Traces `(x, y)` along the velocity field for `dt` seconds — negative to
+    /// backtrace — with the midpoint rule, subdivided so no substep crosses
+    /// much more than [`TRACE_CELLS_PER_STEP`].
+    ///
+    /// `u0`/`v0` are the cell's own lattice velocity, which is exact, so the
+    /// first substep needs no fetch and a short trace costs exactly what the
+    /// single midpoint step cost. Each later substep predicts with the previous
+    /// substep's midpoint velocity rather than re-reading the field at its own
+    /// start: that estimate is stale by `O(hs)`, which only moves the midpoint
+    /// by `O(hs^2)` and leaves the step second order, for one gather per
+    /// substep instead of two.
+    #[inline]
+    fn integrate(&self, x: f32, y: f32, dt: f32, u0: f32, v0: f32) -> (f32, f32) {
+        let span = dt.abs() * length(u0, v0) / TRACE_CELLS_PER_STEP;
+        // `max` drops NaN and a float-to-int cast saturates, so a poisoned
+        // velocity yields a count in `1..=MAX_TRACE_STEPS` and never a
+        // zero-length or unbounded loop.
+        let steps = (span.ceil().max(1.0) as usize).min(MAX_TRACE_STEPS);
+        let hs = dt / steps as f32;
+        let (mut px, mut py) = (x, y);
+        let (mut u, mut v) = (u0, v0);
+        for _ in 0..steps {
+            let (um, vm) = self.velocity_at(px + 0.5 * hs * u, py + 0.5 * hs * v);
+            px += hs * um;
+            py += hs * vm;
+            u = um;
+            v = vm;
+        }
+        (px, py)
     }
 
     /// Bilinear velocity fetch. Both components share one stencil, so this is
@@ -344,28 +443,49 @@ impl Fluid {
     /// the body silhouette into the fluid, which reads on screen as dye
     /// bleeding straight through the body.
     fn trace_to_fluid(&self, x0: f32, y0: f32, tx: f32, ty: f32) -> (f32, f32) {
-        if !self.solid_at(tx, ty) {
+        // With no body in frame there is nothing to back away from, so the
+        // whole walk — a random read into the mask per cell, a third of the
+        // trace stage — is skipped outright.
+        if !self.has_obstacle || !self.obstacle_in_stencil(tx, ty) {
             return (tx, ty);
         }
         for &t in &TRACE_RETRIES {
             let px = x0 + (tx - x0) * t;
             let py = y0 + (ty - y0) * t;
-            if !self.solid_at(px, py) {
+            if !self.obstacle_in_stencil(px, py) {
                 return (px, py);
             }
         }
-        // Everything along the ray is wall (the cell itself is solid): stay
-        // put, which leaves the field there untouched.
+        // Every point along the ray would fetch from the body, which is the
+        // normal case for the rim of cells pressed against it: stay put. At the
+        // lattice point itself the body's corners carry weight zero, so this
+        // fallback is always a clean fetch of the cell's own value.
         (x0, y0)
     }
 
-    /// Nearest-cell wall test. Bilinear would smear the silhouette by half a
-    /// cell in every direction and let traces reach one cell into the body.
+    /// Whether a bilinear fetch at `(x, y)` would blend in an obstacle cell
+    /// with more than negligible weight.
+    ///
+    /// Testing only the nearest cell is not enough: a trace that stops just
+    /// clear of a silhouette still has the body as a stencil corner, and at
+    /// 40% weight that is dye visibly bleeding out of the body. See
+    /// [`MIN_STENCIL_WEIGHT`] for why the test is a weight and not a flag.
+    ///
+    /// Deliberately the *obstacle* mask and not `solid`: the domain border is a
+    /// wall too, but the fetch already clamps against it, and backing away
+    /// from it as well would make the border behave differently depending on
+    /// whether a body happens to be in frame.
     #[inline]
-    fn solid_at(&self, x: f32, y: f32) -> bool {
-        let xi = round_index(x, self.w);
-        let yi = round_index(y, self.h);
-        self.solid.data[yi * self.w + xi] >= 0.5
+    fn obstacle_in_stencil(&self, x: f32, y: f32) -> bool {
+        let (ix, fx) = corner_of(x, self.w);
+        let (iy, fy) = corner_of(y, self.h);
+        let c = iy * self.w + ix;
+        let o = &self.obstacle.data;
+        let (gx, gy) = (1.0 - fx, 1.0 - fy);
+        (gx * gy > MIN_STENCIL_WEIGHT && o[c] >= 0.5)
+            || (fx * gy > MIN_STENCIL_WEIGHT && o[c + 1] >= 0.5)
+            || (gx * fy > MIN_STENCIL_WEIGHT && o[c + self.w] >= 0.5)
+            || (fx * fy > MIN_STENCIL_WEIGHT && o[c + self.w + 1] >= 0.5)
     }
 
     // ------------------------------------------------------------- diffusion
@@ -599,6 +719,7 @@ impl Fluid {
     fn refresh_solid(&mut self) {
         let (w, h) = (self.w, self.h);
         self.solid.data.copy_from_slice(&self.obstacle.data);
+        self.has_obstacle = self.obstacle.data.iter().any(|&o| o >= 0.5);
         for x in 0..w {
             self.solid.data[x] = 1.0;
             self.solid.data[(h - 1) * w + x] = 1.0;
@@ -637,25 +758,38 @@ impl Fluid {
 
 // ---------------------------------------------------------------- advection
 
-/// One precomputed bilinear fetch per cell: the index of the stencil's
-/// top-left corner plus the two blend fractions.
+/// A resolved bilinear fetch: the index of the stencil's top-left corner plus
+/// the two blend fractions.
 ///
 /// Storing the resolved stencil instead of the raw trace position hoists the
 /// clamp, floor and cast out of five per-cell fetches (`u`, `v` and three dye
 /// channels all trace identically), and lets the fetch read a `w + 2` window
-/// so the bounds check collapses to one per corner group.
+/// so the bounds check collapses to one per corner group. Packing the three
+/// fields into one struct rather than three parallel arrays cuts the trace
+/// build from six write streams to two, which is worth ~15% of the stage.
+#[derive(Clone, Copy)]
+struct Stencil {
+    corner: u32,
+    fx: f32,
+    fy: f32,
+}
+
+/// One [`Stencil`] per cell: where this cell's value comes from this step.
 struct TraceMap {
-    corner: Vec<u32>,
-    fx: Vec<f32>,
-    fy: Vec<f32>,
+    cells: Vec<Stencil>,
 }
 
 impl TraceMap {
     fn new(n: usize) -> Self {
         Self {
-            corner: vec![0; n],
-            fx: vec![0.0; n],
-            fy: vec![0.0; n],
+            cells: vec![
+                Stencil {
+                    corner: 0,
+                    fx: 0.0,
+                    fy: 0.0,
+                };
+                n
+            ],
         }
     }
 
@@ -664,28 +798,35 @@ impl TraceMap {
     fn set(&mut self, i: usize, x: f32, y: f32, w: usize, h: usize) {
         let (ix, fx) = corner_of(x, w);
         let (iy, fy) = corner_of(y, h);
-        self.corner[i] = (iy * w + ix) as u32;
-        self.fx[i] = fx;
-        self.fy[i] = fy;
+        self.cells[i] = Stencil {
+            corner: (iy * w + ix) as u32,
+            fx,
+            fy,
+        };
     }
 
     #[inline]
     fn fetch(&self, g: &[f32], w: usize, i: usize) -> f32 {
-        fetch(g, w, self.corner[i] as usize, self.fx[i], self.fy[i])
+        let s = self.cells[i];
+        fetch(g, w, s.corner as usize, s.fx, s.fy)
     }
 
     /// Fetch plus the min and max of the four corners it blended — the range
     /// the MacCormack limiter is allowed to keep, for free from the same loads.
     #[inline]
     fn fetch_limited(&self, g: &[f32], w: usize, i: usize) -> (f32, f32, f32) {
-        let c = self.corner[i] as usize;
-        let q = &g[c..c + w + 2];
+        let s = self.cells[i];
+        let start = s.corner as usize;
+        let end = start + w + 2;
+        if end > g.len() {
+            return (0.0, 0.0, 0.0);
+        }
+        let q = &g[start..end];
         let (a, b, c, d) = (q[0], q[1], q[w], q[w + 1]);
-        let fx = self.fx[i];
-        let top = a + (b - a) * fx;
-        let bottom = c + (d - c) * fx;
+        let top = a + (b - a) * s.fx;
+        let bottom = c + (d - c) * s.fx;
         (
-            top + (bottom - top) * self.fy[i],
+            top + (bottom - top) * s.fy,
             a.min(b).min(c).min(d),
             a.max(b).max(c).max(d),
         )
@@ -739,13 +880,13 @@ impl Advector {
             self.hi[i] = hi;
         }
 
-        for i in 0..n {
+        for (i, cell) in field.iter_mut().enumerate() {
             let bar = self.fwd.fetch(&self.hat, w, i);
-            let corrected = self.hat[i] + 0.5 * (field[i] - bar);
+            let corrected = self.hat[i] + 0.5 * (*cell - bar);
             // `max`/`min` rather than `clamp`: they return the bound when one
             // operand is not a number, so a stray NaN dies here instead of
             // spreading one cell further every frame.
-            field[i] = corrected.max(self.lo[i]).min(self.hi[i]);
+            *cell = corrected.max(self.lo[i]).min(self.hi[i]);
         }
     }
 }
@@ -810,15 +951,6 @@ fn bounded_impulse(v: f32, limit: f32) -> f32 {
     }
 }
 
-/// Nearest lattice index to `x`, clamped into `[0, n - 1]` and NaN-safe.
-#[inline]
-fn round_index(x: f32, n: usize) -> usize {
-    if x.is_nan() {
-        return 0;
-    }
-    x.round().clamp(0.0, (n - 1) as f32) as usize
-}
-
 /// Substitutes the centre value for a wall neighbour.
 ///
 /// For pressure this is the Neumann condition `dp/dn = 0` on a solid face.
@@ -873,11 +1005,13 @@ impl<'a> StencilRows<'a> {
     }
 
     /// Damped Jacobi pressure update for one cell of this row.
+    ///
+    /// The wall test comes last, as a select on an already-computed value,
+    /// rather than as an early return. That is not a style choice: an early
+    /// return here costs 4.2 ns/cell against 1.2 ns/cell for the select,
+    /// because the branch is data-dependent and blocks vectorisation.
     #[inline]
     fn pressure(&self, x: usize) -> f32 {
-        if self.solid_mid[x] >= 0.5 {
-            return 0.0;
-        }
         let pc = self.mid[x];
         let l = wall_pick(self.mid[x - 1], self.solid_mid[x - 1], pc);
         let r = wall_pick(self.mid[x + 1], self.solid_mid[x + 1], pc);
@@ -886,20 +1020,27 @@ impl<'a> StencilRows<'a> {
         // Grouped exactly as the SIMD path adds it, so the two are bit-equal
         // and the cross-check test can use a tight tolerance.
         let sweep = ((l + r) + (u + d) - self.rhs[x]) * 0.25;
-        pc + PRESSURE_OMEGA * (sweep - pc)
+        let relaxed = pc + PRESSURE_OMEGA * (sweep - pc);
+        if self.solid_mid[x] >= 0.5 {
+            0.0
+        } else {
+            relaxed
+        }
     }
 
     /// Jacobi diffusion update for one cell of this row.
     #[inline]
     fn diffuse(&self, x: usize, a: f32, inv: f32) -> f32 {
-        if self.solid_mid[x] >= 0.5 {
-            return 0.0;
-        }
         // A wall neighbour contributes its own (zero) velocity rather than a
         // mirrored copy of the centre: a wall *drags* the fluid beside it,
         // which is the entire physical content of no-slip.
         let sum = (self.mid[x - 1] + self.mid[x + 1]) + (self.up[x] + self.down[x]);
-        (self.rhs[x] + a * sum) * inv
+        let relaxed = (self.rhs[x] + a * sum) * inv;
+        if self.solid_mid[x] >= 0.5 {
+            0.0
+        } else {
+            relaxed
+        }
     }
 }
 
@@ -970,8 +1111,8 @@ fn jacobi_pressure_scalar(
     for y in 1..h - 1 {
         let rows = StencilRows::new(p, solid, div, w, y);
         let o = &mut out[y * w..y * w + w];
-        for x in 1..w - 1 {
-            o[x] = rows.pressure(x);
+        for (x, cell) in o.iter_mut().enumerate().take(w - 1).skip(1) {
+            *cell = rows.pressure(x);
         }
     }
 }
@@ -996,8 +1137,8 @@ fn jacobi_diffuse_scalar(
     for y in 1..h - 1 {
         let rows = StencilRows::new(x, solid, rhs, w, y);
         let o = &mut out[y * w..y * w + w];
-        for i in 1..w - 1 {
-            o[i] = rows.diffuse(i, a, inv);
+        for (i, cell) in o.iter_mut().enumerate().take(w - 1).skip(1) {
+            *cell = rows.diffuse(i, a, inv);
         }
     }
 }
@@ -1349,6 +1490,32 @@ mod tests {
             f.max_speed()
         );
         assert!(far_dye < 1e-6, "dye leaked past the wall: {far_dye}");
+    }
+
+    #[test]
+    fn advection_never_fetches_from_inside_an_obstacle() {
+        let (w, h) = (48usize, 32usize);
+        let mut f = Fluid::new(w, h);
+        f.set_obstacle(&bar_mask(w, h, 20, 26));
+        // Dye parked inside the bar, fluid streaming right alongside it. The
+        // column just clear of the bar backtraces into it, so without the
+        // stencil walk the wall's dye bleeds straight out.
+        for y in 0..h {
+            for x in 20..26 {
+                f.dye[0].data[y * w + x] = 1.0;
+            }
+        }
+        f.vel.u.data.fill(25.0);
+        f.enforce_boundaries();
+        for _ in 0..8 {
+            f.advect(1.0 / 30.0);
+        }
+        for y in 1..h - 1 {
+            for x in 26..w - 1 {
+                let v = f.dye[0].data[y * w + x];
+                assert!(v < 1e-6, "dye bled out of the obstacle at {x},{y}: {v}");
+            }
+        }
     }
 
     #[test]
@@ -1716,6 +1883,216 @@ mod tests {
         );
     }
 
+    // --- trace CFL ---------------------------------------------------------
+
+    #[test]
+    fn a_narrow_fast_impulse_actually_advects() {
+        // The shape a hand swipe makes: `MIN_RADIUS`-ish and near
+        // `spells::MAX_IMPULSE`. One midpoint step backtraces such a cell to
+        // *itself* — the midpoint lands outside the impulse, where the fluid is
+        // still — so the spike never moves and the next frame stacks onto it.
+        let (w, h) = (96usize, 72usize);
+        let mut f = Fluid::new(w, h);
+        f.add_force(30.0, 36.0, 800.0, 0.0, 4.0);
+        let peak = f.vel.u.data[36 * w + 30];
+        assert!((peak - 800.0).abs() < 1.0, "fixture peak is {peak}");
+
+        let dt = 1.0 / 30.0;
+        let (tx, _) = f.integrate(30.0, 36.0, -dt, peak, 0.0);
+        assert!(
+            30.0 - tx > 2.0,
+            "the backtrace only moved {} cells upwind of a {peak} cells/s jet",
+            30.0 - tx
+        );
+
+        f.advect(dt);
+        assert!(
+            f.vel.u.data[36 * w + 30] < 0.5 * peak,
+            "the spike stayed put: {} of {peak}",
+            f.vel.u.data[36 * w + 30]
+        );
+    }
+
+    #[test]
+    fn a_pinned_hard_drive_settles_at_the_same_speed_at_30_and_240_fps() {
+        // The user-visible face of the trace CFL: the same impulse *rate* must
+        // not reach a different speed because the frames are wider.
+        fn run(dt: f32) -> f32 {
+            let steps = (2.0 / dt).round() as usize;
+            let mut f = Fluid::new(96, 72);
+            let params = Params {
+                vorticity: 0.0,
+                viscosity: 0.0,
+                velocity_dissipation: 0.0,
+                ..Params::default()
+            };
+            for _ in 0..steps {
+                f.add_force(30.0, 36.0, 6000.0 * dt, 0.0, 9.0);
+                f.step(dt, &params);
+            }
+            f.max_speed()
+        }
+        let slow = run(1.0 / 30.0);
+        let fast = run(1.0 / 240.0);
+        assert!(slow > 50.0 && fast > 50.0, "the drive did nothing");
+        let ratio = slow.max(fast) / slow.min(fast);
+        assert!(
+            ratio < 1.6,
+            "30 fps settled at {slow} where 240 fps settled at {fast} (ratio {ratio})"
+        );
+    }
+
+    #[test]
+    fn the_trace_reproduces_a_uniform_flow_at_every_substep_count() {
+        // Subdivision must not change the answer where the single step was
+        // already exact, at any speed, in either direction.
+        let mut f = Fluid::new(64, 48);
+        for speed in [3.0f32, 60.0, 300.0, 3000.0] {
+            f.vel.u.data.fill(speed);
+            f.vel.v.data.fill(-0.5 * speed);
+            let dt = 1.0 / 60.0;
+            let (bx, by) = f.integrate(32.0, 24.0, -dt, speed, -0.5 * speed);
+            assert!(
+                (bx - (32.0 - dt * speed)).abs() < 1e-2 * speed.max(1.0) * dt,
+                "speed {speed}: backtrace x {bx}"
+            );
+            assert!(
+                (by - (24.0 + dt * 0.5 * speed)).abs() < 1e-2 * speed.max(1.0) * dt,
+                "speed {speed}: backtrace y {by}"
+            );
+            let (gx, _) = f.integrate(32.0, 24.0, dt, speed, -0.5 * speed);
+            assert!(
+                (gx - (32.0 + dt * speed)).abs() < 1e-2 * speed.max(1.0) * dt,
+                "speed {speed}: forward x {gx}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_trace_survives_a_poisoned_velocity() {
+        let mut f = Fluid::new(32, 24);
+        f.vel.u.data.fill(5.0);
+        for (u0, v0) in [
+            (f32::NAN, 0.0),
+            (f32::INFINITY, f32::NEG_INFINITY),
+            (0.0, f32::NAN),
+            (1e38, 1e38),
+        ] {
+            let (x, y) = f.integrate(16.0, 12.0, -1.0 / 60.0, u0, v0);
+            // Must terminate and must not be usable as an out-of-range index;
+            // `TraceMap::set` clamps, so NaN is acceptable, a hang is not.
+            assert!(x.is_nan() || (-1e9..1e9).contains(&x), "x {x}");
+            assert!(y.is_nan() || (-1e9..1e9).contains(&y), "y {y}");
+        }
+    }
+
+    // --- boundaries --------------------------------------------------------
+
+    #[test]
+    fn an_enclosed_cavity_stays_at_rest() {
+        // Stronger than the full-height-bar leak test: the far side there is
+        // shielded by the domain border as well, so it can only catch a gross
+        // leak. Here the only thing between a violent drive and the cavity is
+        // the solver's own wall treatment, on all four sides and on corners.
+        let (w, h) = (96usize, 72usize);
+        let mut f = Fluid::new(w, h);
+        let mut m = Grid::new(w, h);
+        for y in 28..=48 {
+            for x in 40..=60 {
+                if x == 40 || x == 60 || y == 28 || y == 48 {
+                    m.data[y * w + x] = 1.0;
+                }
+            }
+        }
+        f.set_obstacle(&m);
+        let params = Params::default();
+        for _ in 0..300 {
+            f.add_force(20.0, 38.0, 400.0, 30.0, 9.0);
+            f.add_dye(20.0, 38.0, [1.0, 0.0, 0.0], 7.0);
+            f.step(DT, &params);
+        }
+        assert!(f.max_speed() > 10.0, "the drive did nothing");
+        for y in 29..48 {
+            for x in 41..60 {
+                let i = y * w + x;
+                assert!(f.solid.data[i] < 0.5, "cavity cell {x},{y} is solid");
+                assert_eq!(f.vel.u.data[i], 0.0, "u leaked into the cavity at {x},{y}");
+                assert_eq!(f.vel.v.data[i], 0.0, "v leaked into the cavity at {x},{y}");
+                assert_eq!(f.dye[0].data[i], 0.0, "dye leaked in at {x},{y}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_one_cell_thick_wall_still_seals() {
+        // A one-cell wall is the case a face-based no-penetration treatment
+        // gets wrong: both of its faces belong to fluid cells on opposite
+        // sides, so neither is closed unless the wall cell's own stored
+        // velocity is also trusted to be zero.
+        let (w, h) = (64usize, 48usize);
+        let mut f = Fluid::new(w, h);
+        let mut m = Grid::new(w, h);
+        for y in 0..h {
+            m.data[y * w + 32] = 1.0;
+        }
+        f.set_obstacle(&m);
+        let params = Params::default();
+        for _ in 0..200 {
+            f.add_force(12.0, 24.0, 320.0, 0.0, 8.0);
+            f.add_dye(12.0, 24.0, [1.0, 0.0, 0.0], 6.0);
+            f.step(DT, &params);
+        }
+        assert!(f.max_speed() > 10.0, "the push never took");
+        for y in 0..h {
+            for x in 33..w {
+                let i = y * w + x;
+                assert_eq!(f.vel.u.data[i], 0.0, "u crossed the wall at {x},{y}");
+                assert_eq!(f.dye[0].data[i], 0.0, "dye crossed the wall at {x},{y}");
+            }
+        }
+    }
+
+    // --- projection --------------------------------------------------------
+
+    #[test]
+    fn the_projection_converges_on_a_smooth_divergence_blob() {
+        // The white-noise fixture is the easy case for Jacobi — high-frequency
+        // error is exactly what it kills fastest. A smooth, wide divergence
+        // blob is the shape a real impulse makes, and it is also the case an
+        // *inconsistent* divergence/gradient pair would plateau on instead of
+        // converging. The bound is loose; the point is that it keeps falling.
+        let (w, h) = (65usize, 65usize);
+        let mut f = Fluid::new(w, h);
+        let c = 32.0;
+        for y in 0..h {
+            for x in 0..w {
+                let (dx, dy) = (x as f32 - c, y as f32 - c);
+                let r = (dx * dx + dy * dy).sqrt();
+                if r > 0.5 && r < 14.0 {
+                    let i = y * w + x;
+                    f.vel.u.data[i] = 30.0 * dx / r;
+                    f.vel.v.data[i] = 30.0 * dy / r;
+                }
+            }
+        }
+        f.enforce_boundaries();
+        f.close_solid_faces();
+        let start = f.max_divergence();
+        assert!(start > 20.0, "fixture was not divergent: {start}");
+
+        f.project(200);
+        let mid = f.max_divergence();
+        for _ in 0..12 {
+            f.project(200);
+        }
+        let end = f.max_divergence();
+        assert!(mid < 0.1 * start, "200 sweeps left {mid} of {start}");
+        assert!(
+            end < 0.02 * mid,
+            "the solve plateaued at {end} instead of converging (was {mid})"
+        );
+    }
+
     #[test]
     fn a_still_field_stays_still() {
         let mut f = Fluid::new(64, 48);
@@ -1731,3 +2108,4 @@ mod tests {
         assert_eq!(f.last_divergence(), 0.0);
     }
 }
+
