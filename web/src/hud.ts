@@ -230,6 +230,16 @@ const ICONS: Record<string, string> = {
     '<path d="M12 6V3M12 21v-3M6 12H3M21 12h-3M7.2 7.2 5.1 5.1M18.9 18.9l-2.1-2.1M7.2 16.8l-2.1 2.1M18.9 5.1l-2.1 2.1"/>',
   warp:
     '<path d="M20 12a8 8 0 1 1-2.7-6"/><path d="M20.2 3.6V7.8h-4.2"/><path d="M12 7.8v4.6l3 1.8"/>',
+  sculpt:
+    '<path d="M8 20v-6.5a1.5 1.5 0 0 1 3 0V6a1.5 1.5 0 0 1 3 0v7.5a1.5 1.5 0 0 1 3 0V16"/>' +
+    '<path d="M8 13.5 5.5 11a1.5 1.5 0 0 0-2.1 2.1L8 17.5"/>' +
+    '<circle cx="12.5" cy="4.5" r=".9" fill="currentColor" stroke="none"/><circle cx="17.5" cy="11" r=".9" fill="currentColor" stroke="none"/>',
+  beam:
+    '<path d="M3 12h18"/><path d="M6.5 9.4 5 7.6M17.5 9.4 19 7.6M6.5 14.6 5 16.4M17.5 14.6 19 16.4"/>' +
+    '<circle cx="3" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="21" cy="12" r="1.4" fill="currentColor" stroke="none"/>',
+  release:
+    '<circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="3.2" stroke-dasharray="2 2"/>' +
+    '<path d="M12 1.5v1.8M12 20.7v1.8M1.5 12h1.8M20.7 12h1.8"/>',
 };
 
 const GESTURES: readonly GestureSpec[] = [
@@ -239,6 +249,9 @@ const GESTURES: readonly GestureSpec[] = [
   { spell: 'ignite', hand: 'point', effect: 'paint a hot trail', icon: ICONS.ignite },
   { spell: 'freeze', hand: 'victory', effect: 'chill and damp', icon: ICONS.freeze },
   { spell: 'shatter', hand: 'thumb up', effect: 'burst outward', icon: ICONS.shatter },
+  { spell: 'sculpt', hand: 'open palm, hold still', effect: 'gather into your hand', icon: ICONS.sculpt },
+  { spell: 'release', hand: 'open a held fist', effect: 'ring shockwave', icon: ICONS.release },
+  { spell: 'beam', hand: 'two hands, point', effect: 'beam between fingertips', icon: ICONS.beam },
   { spell: 'warp', hand: 'two hands, rotate', effect: 'warp time', icon: ICONS.warp },
 ];
 

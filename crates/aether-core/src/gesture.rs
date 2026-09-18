@@ -92,6 +92,17 @@ const PINCH_REACH: f32 = 1.2;
 const OPEN_FALLBACK_REPEL: f32 = 0.8;
 const OPEN_FALLBACK_ATTRACT: f32 = 0.12;
 
+/// Seconds an open palm must have been repelling before holding it still turns
+/// it into a sculpt. A palm that is thrown open pushes first; only a deliberate
+/// hold gathers.
+const SCULPT_DWELL: f32 = 0.5;
+/// Palm speed, normalised units per second, below which a held palm is "still"
+/// and the sculpt may begin, and above which a sculpting hand is read as a
+/// sweep and goes back to repelling. The gap between them is the hysteresis
+/// that keeps a slightly trembling hand from flickering between the two.
+const SCULPT_ENTER_SPEED: f32 = 0.10;
+const SCULPT_EXIT_SPEED: f32 = 0.40;
+
 /// One-euro adaptivity: how much measured speed shortens the position filter's
 /// half-life, in (normalised units per second)^-1.
 ///
@@ -188,6 +199,13 @@ pub enum Spell {
     Freeze,
     /// Thumb up bursts particles outward.
     Shatter,
+    /// Open palm held still: particles gather onto the hand's own skeleton.
+    Sculpt,
+    /// Both hands pointing: a beam strung between the two index tips.
+    Beam,
+    /// A held fist opened: an expanding ring shockwave. Reported by the spell
+    /// layer for the moment after the release; never latched by the tracker.
+    Release,
 }
 
 impl Spell {
@@ -200,6 +218,9 @@ impl Spell {
             Self::Ignite => "ignite",
             Self::Freeze => "freeze",
             Self::Shatter => "shatter",
+            Self::Sculpt => "sculpt",
+            Self::Beam => "beam",
+            Self::Release => "release",
         }
     }
 
@@ -213,6 +234,9 @@ impl Spell {
             Self::Ignite => 0.05,
             Self::Freeze => 0.55,
             Self::Shatter => 0.14,
+            Self::Sculpt => 0.36,
+            Self::Beam => 0.97,
+            Self::Release => 0.62,
         }
     }
 }
@@ -825,6 +849,25 @@ fn read_hand(packed: &[f32], base: usize) -> Option<[[f32; 3]; HAND_LANDMARKS]> 
 /// the classifier is frequently unconfident and occasionally unavailable, and a
 /// hand that produces no spell at all feels broken.
 fn candidate_spell(hand: &HandState, cfg: &GestureConfig) -> Spell {
+    let base = base_candidate(hand, cfg);
+    if base != Spell::Repel {
+        return base;
+    }
+    // An open palm is two spells depending on what it is doing: sweeping
+    // repels, holding still sculpts. Decided against the *latched* spell so the
+    // transition has memory in both directions.
+    let speed = crate::math::length(hand.velocity[0], hand.velocity[1]);
+    match hand.spell {
+        Spell::Sculpt if speed < SCULPT_EXIT_SPEED => Spell::Sculpt,
+        Spell::Repel if hand.spell_age >= SCULPT_DWELL && speed < SCULPT_ENTER_SPEED => {
+            Spell::Sculpt
+        }
+        _ => Spell::Repel,
+    }
+}
+
+/// [`candidate_spell`] before the open-palm split.
+fn base_candidate(hand: &HandState, cfg: &GestureConfig) -> Spell {
     if hand.canned_score >= cfg.min_score {
         if let Some(spell) = spell_for_label(hand.canned) {
             return spell;
