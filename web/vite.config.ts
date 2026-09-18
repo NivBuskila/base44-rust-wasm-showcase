@@ -1,4 +1,5 @@
 import { defineConfig, type Plugin } from 'vite';
+import { qaSessionEndpoint } from './qa-session-endpoint';
 
 // Cross-origin isolation unlocks SharedArrayBuffer, which the threaded engine
 // (web/src/wasm-mt) needs for its shared linear memory. `credentialless`
@@ -46,7 +47,7 @@ function serveMediaPipeRuntimeAsAsset(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [serveMediaPipeRuntimeAsAsset()],
+  plugins: [serveMediaPipeRuntimeAsAsset(), qaSessionEndpoint()],
   server: {
     host: '127.0.0.1',
     port: 5173,

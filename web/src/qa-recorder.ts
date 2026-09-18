@@ -23,6 +23,9 @@
 /** Storage key holding the most recent session summary. */
 export const QA_SESSION_KEY = 'aether.qa.session';
 
+/** Dev-server drop box; see `web/qa-session-endpoint.ts`. */
+const QA_SESSION_ENDPOINT = '/__qa/session';
+
 /** Sampling period. 2 Hz is enough for fps percentiles over a human session. */
 const SAMPLE_MS = 500;
 
@@ -269,10 +272,27 @@ export class QaRecorder {
   persist(): void {
     if (this.fps.length === 0) return;
     if (isEmbedded()) return;
+    this.upload();
     try {
       localStorage.setItem(QA_SESSION_KEY, JSON.stringify(this.summary()));
     } catch {
       /* private mode or quota — never break the session over telemetry */
+    }
+  }
+
+  /**
+   * Ships the summary to the dev server, which is the only bridge that actually
+   * reaches outside this tab: `localStorage` is partitioned by top-level site, so
+   * a record written here is invisible to the embedded preview even though the
+   * origin matches. `sendBeacon` because this also runs from `pagehide`, where a
+   * `fetch` is not guaranteed to be flushed; failure is ignored, as with storage.
+   */
+  private upload(): void {
+    try {
+      const body = new Blob([JSON.stringify(this.summary())], { type: 'application/json' });
+      navigator.sendBeacon(QA_SESSION_ENDPOINT, body);
+    } catch {
+      /* dev-server absent (a production build) — never break the session */
     }
   }
 
