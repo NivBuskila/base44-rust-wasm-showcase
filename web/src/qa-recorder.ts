@@ -103,6 +103,19 @@ export interface QaSession {
   events: QaEvent[];
 }
 
+/**
+ * Whether this document is framed. Cross-origin framing makes `window.top`
+ * throw on access, which is itself the answer, so the throw is treated as
+ * embedded rather than propagated.
+ */
+function isEmbedded(): boolean {
+  try {
+    return window.top !== window.self;
+  } catch {
+    return true;
+  }
+}
+
 function quantile(sorted: readonly number[], q: number): number {
   if (sorted.length === 0) return 0;
   const i = Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))));
@@ -224,13 +237,17 @@ export class QaRecorder {
   /**
    * Writes the summary. Storage failures are ignored: this is diagnostics.
    *
-   * A record with no samples is never written. The embedded preview iframe
-   * constructs an `App` but never gets an animation frame, so it would otherwise
-   * flush an all-zero session over the real one recorded in a standalone tab —
-   * destroying the only trace of the QA pass this exists to capture.
+   * Only a top-level tab may write. The embedded preview iframe does run the
+   * frame loop — at a throttled rate and always single-threaded, since it never
+   * gets `SharedArrayBuffer` — so it produces a record full of real samples that
+   * describes the iframe rather than the QA pass, and `localStorage` is shared
+   * per origin, so that record overwrites the standalone-tab session this exists
+   * to capture. Sample count cannot tell the two apart; only the frame context
+   * can. A record with no samples is still never written.
    */
   persist(): void {
     if (this.fps.length === 0) return;
+    if (isEmbedded()) return;
     try {
       localStorage.setItem(QA_SESSION_KEY, JSON.stringify(this.summary()));
     } catch {
