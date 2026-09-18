@@ -286,6 +286,167 @@ impl Particles {
         }
     }
 
+    /// Emits `count` particles on a circle of radius `ring` around `(x, y)`,
+    /// each flying straight outward at `speed`: an expanding shell rather than
+    /// a filled puff. Uniform in angle, so the ring has no bright spokes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_ring(
+        &mut self,
+        x: f32,
+        y: f32,
+        count: usize,
+        ring: f32,
+        speed: f32,
+        heat: f32,
+        life: f32,
+    ) {
+        if self.active == 0 || !x.is_finite() || !y.is_finite() || !ring.is_finite() {
+            return;
+        }
+        let speed = finite_or(speed, 0.0).clamp(-MAX_OWN_SPEED, MAX_OWN_SPEED);
+        let heat = finite_or(heat, 0.0).clamp(0.0, 1.0);
+        let base = finite_or(life, 1.0).max(0.05);
+        let ring = ring.max(0.0);
+
+        for _ in 0..count.min(self.active) {
+            let i = self.cursor % self.active;
+            self.cursor = self.cursor.wrapping_add(1);
+            let theta = self.rng.next_f32() * core::f32::consts::TAU;
+            let (dx, dy) = (theta.cos(), theta.sin());
+            let (jx, jy) = self.rng.in_disc();
+            self.x[i] = x + dx * ring + jx * BURST_SCATTER;
+            self.y[i] = y + dy * ring + jy * BURST_SCATTER;
+            self.vx[i] = dx * speed;
+            self.vy[i] = dy * speed;
+            self.max_life[i] = base * self.rng.range(LIFE_JITTER.0, LIFE_JITTER.1);
+            self.life[i] = self.max_life[i];
+            self.heat[i] = heat;
+        }
+    }
+
+    /// Pushes every particle within `radius` of the segment `a -> b` straight
+    /// away from it (to whichever side it is on) and heats it. The push is a
+    /// velocity step; `strength` carries any `dt` scaling the caller wants.
+    pub fn impulse_segment(
+        &mut self,
+        a: [f32; 2],
+        b: [f32; 2],
+        radius: f32,
+        strength: f32,
+        heat: f32,
+    ) {
+        if self.active == 0
+            || !a.iter().chain(b.iter()).all(|v| v.is_finite())
+            || !radius.is_finite()
+            || radius <= 0.0
+        {
+            return;
+        }
+        let strength = finite_or(strength, 0.0).clamp(-MAX_OWN_SPEED, MAX_OWN_SPEED);
+        let heat = finite_or(heat, 0.0).clamp(0.0, 1.0);
+        let (minx, maxx) = (a[0].min(b[0]) - radius, a[0].max(b[0]) + radius);
+        let (miny, maxy) = (a[1].min(b[1]) - radius, a[1].max(b[1]) + radius);
+        let r2 = radius * radius;
+
+        for i in 0..self.active {
+            if self.life[i] <= 0.0 {
+                continue;
+            }
+            let (px, py) = (self.x[i], self.y[i]);
+            // A NaN position fails every comparison and is skipped here.
+            if !(px >= minx && px <= maxx && py >= miny && py <= maxy) {
+                continue;
+            }
+            let (cx, cy) = closest_on_segment(a, b, px, py);
+            let dx = px - cx;
+            let dy = py - cy;
+            let d2 = dx * dx + dy * dy;
+            if d2 > r2 {
+                continue;
+            }
+            let falloff = smoothstep(radius, 0.0, d2.sqrt());
+            let (nx, ny) = normalize(dx, dy);
+            self.vx[i] = tame(self.vx[i] + nx * strength * falloff);
+            self.vy[i] = tame(self.vy[i] + ny * strength * falloff);
+            self.heat[i] = self.heat[i].max(heat * falloff);
+        }
+    }
+
+    /// Draws every particle within `radius` of any of `segments` onto the
+    /// nearest point of the nearest one, so the pool settles into the shape
+    /// the segments trace.
+    ///
+    /// A damped spring rather than an impulse: the particle's own velocity is
+    /// relaxed toward `(target - position) * spring` at `rate` per second,
+    /// which both pulls it in and kills the velocity that would otherwise carry
+    /// it straight through the target and out the other side.
+    pub fn gather(
+        &mut self,
+        segments: &[[f32; 4]],
+        radius: f32,
+        spring: f32,
+        rate: f32,
+        heat: f32,
+        dt: f32,
+    ) {
+        if self.active == 0
+            || segments.is_empty()
+            || !radius.is_finite()
+            || radius <= 0.0
+            || !segments.iter().all(|s| s.iter().all(|v| v.is_finite()))
+        {
+            return;
+        }
+        let dt = finite_or(dt, 0.0).clamp(0.0, MAX_STEP);
+        let k = 1.0 - decay(finite_or(rate, 0.0).max(0.0), dt);
+        let spring = finite_or(spring, 0.0).clamp(0.0, MAX_OWN_SPEED);
+        let heat = finite_or(heat, 0.0).clamp(0.0, 1.0);
+
+        let mut minx = f32::INFINITY;
+        let mut miny = f32::INFINITY;
+        let mut maxx = f32::NEG_INFINITY;
+        let mut maxy = f32::NEG_INFINITY;
+        for s in segments {
+            minx = minx.min(s[0]).min(s[2]);
+            maxx = maxx.max(s[0]).max(s[2]);
+            miny = miny.min(s[1]).min(s[3]);
+            maxy = maxy.max(s[1]).max(s[3]);
+        }
+        minx -= radius;
+        miny -= radius;
+        maxx += radius;
+        maxy += radius;
+        let r2 = radius * radius;
+
+        for i in 0..self.active {
+            if self.life[i] <= 0.0 {
+                continue;
+            }
+            let (px, py) = (self.x[i], self.y[i]);
+            if !(px >= minx && px <= maxx && py >= miny && py <= maxy) {
+                continue;
+            }
+            let mut best = (f32::INFINITY, px, py);
+            for s in segments {
+                let (cx, cy) = closest_on_segment([s[0], s[1]], [s[2], s[3]], px, py);
+                let d2 = (px - cx) * (px - cx) + (py - cy) * (py - cy);
+                if d2 < best.0 {
+                    best = (d2, cx, cy);
+                }
+            }
+            if best.0 > r2 {
+                continue;
+            }
+            let falloff = smoothstep(radius, 0.0, best.0.sqrt());
+            let tx = (best.1 - px) * spring;
+            let ty = (best.2 - py) * spring;
+            let kk = k * (0.35 + 0.65 * falloff);
+            self.vx[i] = tame(self.vx[i] + (tx - self.vx[i]) * kk);
+            self.vy[i] = tame(self.vy[i] + (ty - self.vy[i]) * kk);
+            self.heat[i] = self.heat[i].max(heat * (0.4 + 0.6 * falloff));
+        }
+    }
+
     /// Advances every active particle.
     ///
     /// One pass, no allocation, no per-particle branching beyond the cull test.
@@ -824,6 +985,19 @@ impl Lane<'_> {
         self.life[i] = if free { self.max_life[i] } else { 0.0 };
         free
     }
+}
+
+/// Nearest point on the segment `a -> b` to `(px, py)`. A degenerate segment
+/// returns `a`.
+#[inline(always)]
+fn closest_on_segment(a: [f32; 2], b: [f32; 2], px: f32, py: f32) -> (f32, f32) {
+    let (ex, ey) = (b[0] - a[0], b[1] - a[1]);
+    let len2 = ex * ex + ey * ey;
+    if len2 <= 1e-12 {
+        return (a[0], a[1]);
+    }
+    let t = (((px - a[0]) * ex + (py - a[1]) * ey) / len2).clamp(0.0, 1.0);
+    (a[0] + ex * t, a[1] + ey * t)
 }
 
 #[inline(always)]

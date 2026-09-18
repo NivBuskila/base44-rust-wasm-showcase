@@ -116,6 +116,81 @@ const SHATTER_DYE: f32 = 2.2;
 const SHATTER_FRACTION: usize = 6;
 const SHATTER_MAX: usize = 12_000;
 
+/// Sculpt: how far from a bone, in palm radii, a particle is captured, and the
+/// spring/relaxation that pins it there. The spring is a rate (grid cells per
+/// second per cell of error) so a captured particle closes its gap in roughly
+/// `1 / SCULPT_SPRING` seconds.
+const SCULPT_CAPTURE_SCALE: f32 = 1.6;
+const SCULPT_SPRING: f32 = 12.0;
+const SCULPT_RATE: f32 = 30.0;
+/// Seconds to fade the sculpt in, so the hand fills rather than snaps.
+const SCULPT_WINDUP: f32 = 0.6;
+/// Wider intake pulling loose particles toward the hand before the bones grab
+/// them, as a multiple of the palm radius, and its acceleration. Kept well
+/// under the spring: the intake also acts on captured particles, and its
+/// steady-state drift against the spring is what sets how far off the bones
+/// they settle.
+const SCULPT_INTAKE_SCALE: f32 = 4.5;
+const SCULPT_INTAKE_ACCEL: f32 = 250.0;
+const SCULPT_HEAT: f32 = 0.85;
+/// Dye deposited per second at each joint while sculpting.
+const SCULPT_DYE: f32 = 0.35;
+
+/// Beam: half-width of the beam in grid cells, and the sideways acceleration
+/// it presses the fluid and the particles away with.
+const BEAM_RADIUS: f32 = 6.0;
+const BEAM_ACCEL: f32 = 1400.0;
+const BEAM_PARTICLE_ACCEL: f32 = 1800.0;
+/// Dye deposited per second along the whole beam, split over its splats.
+const BEAM_DYE: f32 = 6.0;
+const BEAM_STEP: f32 = 2.0;
+const BEAM_MAX_STEPS: usize = 256;
+/// Seconds to reach full strength once both hands point.
+const BEAM_WINDUP: f32 = 0.35;
+
+/// Release: seconds of holding the fist that count as a full charge, the least
+/// charge worth firing, and the burst it drives.
+const RELEASE_CHARGE_TIME: f32 = 1.2;
+const RELEASE_MIN_CHARGE: f32 = 0.12;
+/// Ring radius as a multiple of the palm radius, and the shell speed at full
+/// charge (half of it at zero charge).
+const RELEASE_RING_SCALE: f32 = 1.3;
+const RELEASE_SPEED: f32 = 260.0;
+/// Velocity step kicked into the fluid on the ring; a shell, not a disc.
+const RELEASE_IMPULSE: f32 = 420.0;
+const RELEASE_REACH_SCALE: f32 = 4.0;
+const RELEASE_DYE: f32 = 1.6;
+const RELEASE_FRACTION: usize = 5;
+const RELEASE_MAX: usize = 16_000;
+/// Seconds the HUD keeps showing "release" after the ring fires.
+const RELEASE_SHOW: f32 = 0.45;
+
+/// MediaPipe's hand skeleton as landmark index pairs. The shape the sculpt
+/// gathers particles onto.
+const HAND_BONES: [(usize, usize); 21] = [
+    (0, 1),
+    (1, 2),
+    (2, 3),
+    (3, 4),
+    (0, 5),
+    (5, 6),
+    (6, 7),
+    (7, 8),
+    (5, 9),
+    (9, 10),
+    (10, 11),
+    (11, 12),
+    (9, 13),
+    (13, 14),
+    (14, 15),
+    (15, 16),
+    (13, 17),
+    (17, 18),
+    (18, 19),
+    (19, 20),
+    (0, 17),
+];
+
 /// Seconds of rotation rate mapped into one unit of time scale.
 const TIME_GAIN: f32 = 0.32;
 /// Smoothing rate of the requested time scale, per second. Without it the time
@@ -148,6 +223,12 @@ pub struct SpellState {
     /// Smoothed time scale, carried across frames so the two-hand warp eases
     /// in and out instead of stepping.
     time_scale: f32,
+    /// Latched spell seen last step per hand, for edge-triggered spells.
+    prev_spell: [Spell; 2],
+    /// How charged the release is, `[0, 1]`, built up while the fist is held.
+    charge: [f32; 2],
+    /// Seconds left of reporting `Release` after a ring fired.
+    release_show: [f32; 2],
 }
 
 impl Default for SpellState {
@@ -157,6 +238,9 @@ impl Default for SpellState {
             last_tip: [[0.0; 2]; 2],
             has_tip: [false; 2],
             time_scale: 1.0,
+            prev_spell: [Spell::Idle; 2],
+            charge: [0.0; 2],
+            release_show: [0.0; 2],
         }
     }
 }
@@ -200,11 +284,16 @@ pub fn apply(
 
     let force = params.hand_force.max(0.0);
     let slots = report.spells.len();
+    // Two pointing hands string a beam between them instead of two trails.
+    let beam = beam_ramp(tracker);
     for (slot, hand) in tracker.hands().iter().enumerate().take(slots) {
         if !hand.present || !hand.palm[0].is_finite() || !hand.palm[1].is_finite() {
             report.spells[slot] = Spell::Idle;
             state.fired[slot] = false;
             state.has_tip[slot] = false;
+            state.prev_spell[slot] = Spell::Idle;
+            state.charge[slot] = 0.0;
+            state.release_show[slot] = 0.0;
             continue;
         }
         report.spells[slot] = hand.spell;
@@ -212,6 +301,8 @@ pub fn apply(
         if hand.spell != Spell::Shatter {
             state.fired[slot] = false;
         }
+        let opened_fist = state.prev_spell[slot] == Spell::Attract && hand.spell != Spell::Attract;
+        state.prev_spell[slot] = hand.spell;
 
         let palm = to_grid(hand.palm, sx, sy);
         let tip = to_grid(hand.index_tip, sx, sy);
@@ -253,7 +344,8 @@ pub fn apply(
         }
 
         match hand.spell {
-            Spell::Idle => {}
+            // The last two are reported by this layer, never latched.
+            Spell::Idle | Spell::Beam | Spell::Release => {}
 
             Spell::Vortex => {
                 let ramp =
@@ -314,6 +406,45 @@ pub fn apply(
                 let dye = tint(hand.spell, RADIAL_DYE * force * dt);
                 fluid.add_dye(palm[0], palm[1], dye, radius);
             }
+
+            Spell::Sculpt => {
+                let ramp = smoothstep(0.0, SCULPT_WINDUP, hand.spell_age);
+                if ramp > 1e-3 {
+                    let mut bones = [[0.0f32; 4]; HAND_BONES.len()];
+                    for (seg, &(a, b)) in bones.iter_mut().zip(HAND_BONES.iter()) {
+                        let pa = to_grid([hand.landmarks[a][0], hand.landmarks[a][1]], sx, sy);
+                        let pb = to_grid([hand.landmarks[b][0], hand.landmarks[b][1]], sx, sy);
+                        *seg = [pa[0], pa[1], pb[0], pb[1]];
+                    }
+                    // Loose particles drift in first, then the bones pin them.
+                    particles.impulse(
+                        palm[0],
+                        palm[1],
+                        radius * SCULPT_INTAKE_SCALE,
+                        -SCULPT_INTAKE_ACCEL * ramp * dt,
+                        0.3,
+                    );
+                    particles.gather(
+                        &bones,
+                        radius * SCULPT_CAPTURE_SCALE,
+                        SCULPT_SPRING,
+                        SCULPT_RATE * ramp,
+                        SCULPT_HEAT * ramp,
+                        dt,
+                    );
+                    // A faint glow at every joint so the fluid carries the
+                    // hand's outline too, not just the particles.
+                    let dye = tint(Spell::Sculpt, SCULPT_DYE * ramp * dt);
+                    for lm in hand.landmarks.iter() {
+                        let p = to_grid([lm[0], lm[1]], sx, sy);
+                        fluid.add_dye(p[0], p[1], dye, radius * 0.35);
+                    }
+                }
+            }
+
+            // The beam owns both tips while it is up; the trails would only
+            // smear over it.
+            Spell::Ignite if beam > 0.0 => {}
 
             Spell::Ignite => {
                 // The whole segment since the last frame, not a dot at the
@@ -403,8 +534,35 @@ pub fn apply(
             }
         }
 
+        // Release: a fist that has been held charges a ring, and opening it
+        // lets the ring go. Edge-triggered on the latched spell, so it fires
+        // once per open no matter how the hand ends up.
+        if hand.spell == Spell::Attract {
+            state.charge[slot] = smoothstep(0.0, RELEASE_CHARGE_TIME, hand.spell_age);
+        }
+        if opened_fist {
+            let charge = state.charge[slot];
+            state.charge[slot] = 0.0;
+            if charge >= RELEASE_MIN_CHARGE {
+                fire_release(fluid, particles, params, palm, radius, charge, &mut report);
+                state.release_show[slot] = RELEASE_SHOW;
+            }
+        }
+        if state.release_show[slot] > 0.0 {
+            state.release_show[slot] -= dt;
+            report.spells[slot] = Spell::Release;
+        }
+
         state.last_tip[slot] = tip;
         state.has_tip[slot] = true;
+    }
+
+    if beam > 0.0 {
+        let hands = tracker.hands();
+        let a = to_grid(hands[0].index_tip, sx, sy);
+        let b = to_grid(hands[1].index_tip, sx, sy);
+        fire_beam(fluid, particles, a, b, beam * force.min(1.0).max(0.25), dt, &mut report);
+        report.spells = [Spell::Beam, Spell::Beam];
     }
 
     // Rotating both hands warps time. Smoothed, because this multiplies every
@@ -428,6 +586,146 @@ pub fn apply(
     }
 
     report
+}
+
+/// Strength of the two-hand beam this step, 0 when it is not being cast.
+fn beam_ramp(tracker: &GestureTracker) -> f32 {
+    let hands = tracker.hands();
+    let up = hands.iter().all(|h| {
+        h.present
+            && h.spell == Spell::Ignite
+            && h.index_tip[0].is_finite()
+            && h.index_tip[1].is_finite()
+    });
+    if !up {
+        return 0.0;
+    }
+    let age = hands[0].spell_age.min(hands[1].spell_age);
+    smoothstep(0.0, BEAM_WINDUP, age)
+}
+
+/// Strings the beam from `a` to `b`: a hot dye line, the fluid pressed
+/// sideways off it and the particles thrown clear and lit.
+fn fire_beam(
+    fluid: &mut Fluid,
+    particles: &mut Particles,
+    a: [f32; 2],
+    b: [f32; 2],
+    strength: f32,
+    dt: f32,
+    report: &mut SpellReport,
+) {
+    let (gw, gh) = (fluid.width(), fluid.height());
+    let (ex, ey) = (b[0] - a[0], b[1] - a[1]);
+    let len = length(ex, ey);
+    let (dirx, diry) = normalize(ex, ey);
+    // Left-hand normal; the sign is resolved per cell below.
+    let (nx, ny) = (-diry, dirx);
+
+    let accel = clamp_impulse(BEAM_ACCEL * strength * dt);
+    let mut injected = 0.0;
+    {
+        let vel = fluid.velocity_mut();
+        let pad = BEAM_RADIUS.ceil() as i64;
+        let x0 = ((a[0].min(b[0])).floor() as i64 - pad).max(0);
+        let x1 = ((a[0].max(b[0])).ceil() as i64 + pad).min(gw as i64 - 1);
+        let y0 = ((a[1].min(b[1])).floor() as i64 - pad).max(0);
+        let y1 = ((a[1].max(b[1])).ceil() as i64 + pad).min(gh as i64 - 1);
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                let (px, py) = (x as f32 - a[0], y as f32 - a[1]);
+                let t = if len > 1e-6 {
+                    ((px * dirx + py * diry) / len).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let (cx, cy) = (ex * t, ey * t);
+                let (ox, oy) = (px - cx, py - cy);
+                let r = length(ox, oy);
+                if r > BEAM_RADIUS {
+                    continue;
+                }
+                let w = smoothstep(BEAM_RADIUS, 0.0, r);
+                let side = if ox * nx + oy * ny >= 0.0 { 1.0 } else { -1.0 };
+                let du = clamp_impulse(nx * side * accel * w);
+                let dv = clamp_impulse(ny * side * accel * w);
+                vel.add(x as usize, y as usize, du, dv);
+                injected += du * du + dv * dv;
+            }
+        }
+    }
+    report.injected += injected;
+
+    // Per splat, not split over the beam: a longer beam covers more ground and
+    // should carry more dye, exactly as a longer ignite stroke does.
+    let steps = ((len / BEAM_STEP).ceil() as usize).clamp(1, BEAM_MAX_STEPS);
+    let dye = tint(Spell::Beam, BEAM_DYE * strength * dt);
+    for step in 0..=steps {
+        let t = step as f32 / steps as f32;
+        fluid.add_dye(lerp(a[0], b[0], t), lerp(a[1], b[1], t), dye, BEAM_RADIUS * 0.5);
+    }
+    particles.impulse_segment(
+        a,
+        b,
+        BEAM_RADIUS * 2.5,
+        BEAM_PARTICLE_ACCEL * strength * dt,
+        1.0,
+    );
+}
+
+/// Lets a charged fist go: a shell of particles, a ring-shaped kick into the
+/// fluid and a ring of dye, all scaled by how long the fist was held.
+fn fire_release(
+    fluid: &mut Fluid,
+    particles: &mut Particles,
+    params: &Params,
+    palm: [f32; 2],
+    radius: f32,
+    charge: f32,
+    report: &mut SpellReport,
+) {
+    let (gw, gh) = (fluid.width(), fluid.height());
+    let charge = charge.clamp(0.0, 1.0);
+    let ring = radius * RELEASE_RING_SCALE;
+    let power = 0.5 + 0.5 * charge;
+    report.bursts += 1;
+    let count = ((particles.active() / RELEASE_FRACTION) as f32 * power) as usize;
+    particles.spawn_ring(
+        palm[0],
+        palm[1],
+        count.min(RELEASE_MAX),
+        ring,
+        RELEASE_SPEED * power,
+        1.0,
+        params.particle_life,
+    );
+    // An event, not a force: a velocity step, deliberately not scaled by dt.
+    let reach = radius * RELEASE_REACH_SCALE;
+    let shell = ring * 0.6;
+    let mut injected = 0.0;
+    let vel = fluid.velocity_mut();
+    for_disc(gw, gh, palm, reach, |x, y, dx, dy, r, _| {
+        // Peaked on the ring, zero at the centre and the reach.
+        let band = ((r - ring) / shell).powi(2);
+        let w = (-band).exp() * smoothstep(0.0, ring * 0.5, r);
+        let (nx, ny) = radial(dx, dy, r);
+        let du = clamp_impulse(nx * RELEASE_IMPULSE * power * w);
+        let dv = clamp_impulse(ny * RELEASE_IMPULSE * power * w);
+        vel.add(x, y, du, dv);
+        injected += du * du + dv * dv;
+    });
+    report.injected += injected;
+    let dye = tint(Spell::Release, RELEASE_DYE * power);
+    let n = 24;
+    for i in 0..n {
+        let theta = i as f32 / n as f32 * core::f32::consts::TAU;
+        fluid.add_dye(
+            palm[0] + theta.cos() * ring,
+            palm[1] + theta.sin() * ring,
+            dye,
+            radius * 0.45,
+        );
+    }
 }
 
 /// The two whole-field drives — optical flow and the body silhouette's boundary
@@ -617,7 +915,9 @@ fn is_zero(field: &VecField) -> bool {
 mod tests {
     use super::*;
     use crate::config::{FLOW_H, FLOW_W, FLUID_H, FLUID_W};
+    use crate::field::Grid;
     use crate::gesture::synth::{self, Hand};
+    use crate::particles::ParticleConfig;
     use crate::gesture::{GestureConfig, GestureTracker};
 
     /// Render step.
@@ -694,6 +994,19 @@ mod tests {
         let mut buf = synth::buffer();
         synth::write(&mut buf, 0, hand);
         for _ in 0..60 {
+            t.update_hands(&buf, HAND_DT);
+            t.update_two_hand(HAND_DT);
+        }
+        t
+    }
+
+    /// A still hand held just long enough to latch, but not long enough for an
+    /// open palm to dwell into a sculpt: the way to get a steady `Repel`.
+    fn latched(hand: &Hand) -> GestureTracker {
+        let mut t = GestureTracker::new(GestureConfig::default());
+        let mut buf = synth::buffer();
+        synth::write(&mut buf, 0, hand);
+        for _ in 0..10 {
             t.update_hands(&buf, HAND_DT);
             t.update_two_hand(HAND_DT);
         }
@@ -828,7 +1141,7 @@ mod tests {
         // hand_force saturates at 8 and dt at 0.25, which together ask for a
         // 3000 cells/s push — the clamp is the only thing between that and a
         // velocity field the projection cannot resolve.
-        let tracker = holding(&Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
+        let tracker = latched(&Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
         let mut rig = Rig::new();
         rig.params.hand_force = 8.0;
         rig.run(&tracker, 1e6);
@@ -972,7 +1285,7 @@ mod tests {
     #[test]
     fn repel_pushes_out_and_attract_pulls_in_more_gently() {
         let mut out = Rig::new();
-        let repel = holding(&Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
+        let repel = latched(&Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
         let palm = palm_of(&repel);
         // A particle just to the right of the palm, to check the particle path.
         out.particles
@@ -1181,7 +1494,7 @@ mod tests {
         // Repel is a pure dt-scaled impulse. Probed outside the palm drag's
         // radius but inside the push's, where nothing else has touched the
         // field, the two paths must agree to floating-point noise.
-        let tracker = holding(&Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
+        let tracker = latched(&Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
         let palm = palm_of(&tracker);
         let mut coarse = Rig::new();
         coarse.run(&tracker, DT);
@@ -1294,5 +1607,156 @@ mod tests {
         );
         assert!(report.injected.is_finite());
         assert_eq!(tiny.sanitize(), 0);
+    }
+
+    #[test]
+    fn a_still_open_palm_sculpts_and_pulls_particles_onto_the_hand() {
+        let tracker = holding(&Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
+        assert_eq!(tracker.hands()[0].spell, Spell::Sculpt, "held palm should sculpt");
+        let hand = &tracker.hands()[0];
+        let (sx, sy) = ((FLUID_W - 1) as f32, (FLUID_H - 1) as f32);
+        let tip = to_grid(hand.index_tip, sx, sy);
+        // A particle a few cells off the index finger, at rest.
+        let mut rig = Rig::new();
+        rig.particles.place(0, tip[0] + 4.0, tip[1], 0.0, 0.0, 3.0);
+        let obstacle = Grid::new(FLUID_W, FLUID_H);
+        let cfg = ParticleConfig::default();
+        for _ in 0..30 {
+            rig.run(&tracker, DT);
+            rig.particles
+                .step(rig.fluid.velocity(), &obstacle, DT, &rig.params, &cfg);
+        }
+        let (px, py) = rig.particles.position(0);
+        // Nearest point of the skeleton, not the tip: the particle sits on
+        // whichever bone is closest.
+        let mut dist = f32::INFINITY;
+        for &(i, j) in HAND_BONES.iter() {
+            let a = to_grid([hand.landmarks[i][0], hand.landmarks[i][1]], sx, sy);
+            let b = to_grid([hand.landmarks[j][0], hand.landmarks[j][1]], sx, sy);
+            let (ex, ey) = (b[0] - a[0], b[1] - a[1]);
+            let len2 = (ex * ex + ey * ey).max(1e-12);
+            let t = (((px - a[0]) * ex + (py - a[1]) * ey) / len2).clamp(0.0, 1.0);
+            dist = dist.min(length(px - a[0] - ex * t, py - a[1] - ey * t));
+        }
+        assert!(dist < 1.5, "particle did not settle onto the hand: {dist} cells off a bone");
+        assert!(rig.particles.heat_of(0) > 0.3, "sculpted particle should glow");
+    }
+
+    #[test]
+    fn a_sweeping_open_palm_still_repels() {
+        let tracker = sweeping(&Hand::at(0.3, 0.5).gesture(synth::OPEN_PALM));
+        assert_eq!(tracker.hands()[0].spell, Spell::Repel);
+    }
+
+    #[test]
+    fn two_pointing_hands_string_a_beam_between_the_tips() {
+        let mut t = GestureTracker::new(GestureConfig::default());
+        let mut buf = synth::buffer();
+        synth::write(&mut buf, 0, &Hand::at(0.2, 0.5).gesture(synth::POINTING_UP));
+        synth::write(&mut buf, 1, &Hand::at(0.8, 0.5).gesture(synth::POINTING_UP));
+        for _ in 0..40 {
+            t.update_hands(&buf, HAND_DT);
+            t.update_two_hand(HAND_DT);
+        }
+        let (sx, sy) = ((FLUID_W - 1) as f32, (FLUID_H - 1) as f32);
+        let a = to_grid(t.hands()[0].index_tip, sx, sy);
+        let b = to_grid(t.hands()[1].index_tip, sx, sy);
+        let mid = [(a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5];
+
+        let mut rig = Rig::new();
+        // Particles just above and below the midpoint of the beam.
+        rig.particles.place(0, mid[0], mid[1] - 3.0, 0.0, 0.0, 3.0);
+        rig.particles.place(1, mid[0], mid[1] + 3.0, 0.0, 0.0, 3.0);
+        let report = rig.run(&t, DT);
+        assert_eq!(report.spells, [Spell::Beam, Spell::Beam]);
+        assert!(rig.particles.velocity(0).1 < 0.0, "above the beam should be thrown up");
+        assert!(rig.particles.velocity(1).1 > 0.0, "below the beam should be thrown down");
+        assert!(rig.particles.heat_of(0) > 0.5);
+        // The fluid is pressed off the beam on both sides, and the beam's
+        // midpoint — far from either hand — carries dye.
+        let (_, up) = rig.velocity_at(mid[0], mid[1] - 3.0);
+        let (_, down) = rig.velocity_at(mid[0], mid[1] + 3.0);
+        assert!(up < 0.0 && down > 0.0, "fluid not pushed off the beam: {up} {down}");
+        assert!(report.injected > 0.0);
+    }
+
+    #[test]
+    fn one_pointing_hand_is_still_an_ignite() {
+        let tracker = holding(&Hand::at(0.5, 0.5).gesture(synth::POINTING_UP));
+        let mut rig = Rig::new();
+        let report = rig.run(&tracker, DT);
+        assert_eq!(report.spells[0], Spell::Ignite);
+    }
+
+    #[test]
+    fn opening_a_held_fist_fires_a_ring_once() {
+        let mut t = GestureTracker::new(GestureConfig::default());
+        let mut buf = synth::buffer();
+        let mut rig = Rig::new();
+        synth::write(&mut buf, 0, &Hand::at(0.5, 0.5).gesture(synth::CLOSED_FIST));
+        for _ in 0..45 {
+            t.update_hands(&buf, HAND_DT);
+            t.update_two_hand(HAND_DT);
+            rig.run(&t, HAND_DT);
+        }
+        assert_eq!(t.hands()[0].spell, Spell::Attract);
+        let palm = palm_of(&t);
+
+        // Still the pool first so the only fast particles afterwards are the
+        // ring's own, not two seconds of attract pull.
+        rig.particles
+            .seed_uniform(FLUID_W, FLUID_H, rig.params.particle_life);
+        // Open the hand: the tracker takes `commit_frames` to relatch.
+        synth::write(&mut buf, 0, &Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
+        let mut bursts = 0;
+        let mut saw_release = false;
+        for _ in 0..12 {
+            t.update_hands(&buf, HAND_DT);
+            t.update_two_hand(HAND_DT);
+            let report = rig.run(&t, HAND_DT);
+            bursts += report.bursts;
+            saw_release |= report.spells[0] == Spell::Release;
+        }
+        assert_eq!(bursts, 1, "the ring must fire exactly once per open");
+        assert!(saw_release, "the release should be reported to the HUD");
+        // Particles were re-seeded on a ring and fly outward from the palm.
+        let mut outward = 0;
+        let mut total = 0;
+        for i in 0..rig.particles.active() {
+            let (px, py) = rig.particles.position(i);
+            let (vx, vy) = rig.particles.velocity(i);
+            let speed = length(vx, vy);
+            if speed < 50.0 {
+                continue;
+            }
+            total += 1;
+            if (px - palm[0]) * vx + (py - palm[1]) * vy > 0.0 {
+                outward += 1;
+            }
+        }
+        assert!(total > 100, "expected a burst of fast particles, got {total}");
+        assert!(outward * 10 > total * 9, "burst is not outward: {outward}/{total}");
+    }
+
+    #[test]
+    fn a_fist_barely_closed_does_not_fire_a_ring() {
+        let mut t = GestureTracker::new(GestureConfig::default());
+        let mut buf = synth::buffer();
+        let mut rig = Rig::new();
+        synth::write(&mut buf, 0, &Hand::at(0.5, 0.5).gesture(synth::CLOSED_FIST));
+        for _ in 0..4 {
+            t.update_hands(&buf, HAND_DT);
+            t.update_two_hand(HAND_DT);
+            rig.run(&t, HAND_DT);
+        }
+        assert_eq!(t.hands()[0].spell, Spell::Attract);
+        synth::write(&mut buf, 0, &Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
+        let mut bursts = 0;
+        for _ in 0..12 {
+            t.update_hands(&buf, HAND_DT);
+            t.update_two_hand(HAND_DT);
+            bursts += rig.run(&t, HAND_DT).bursts;
+        }
+        assert_eq!(bursts, 0, "an uncharged fist must not fire");
     }
 }
