@@ -158,7 +158,7 @@ const PARAMS: readonly ParamSpec[] = [
     min: 0,
     max: 2,
     step: 0.01,
-    value: 0.5,
+    value: 0.3,
     fmt: d2,
   },
   { key: 'hand_force', label: 'hand force', min: 0, max: 8, step: 0.05, value: 1, fmt: d2 },

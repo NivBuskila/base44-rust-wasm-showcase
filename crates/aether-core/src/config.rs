@@ -107,11 +107,14 @@ pub struct Params {
 impl Default for Params {
     fn default() -> Self {
         Self {
-            // Raised from 0.15: at that rate momentum from a held gesture kept
-            // accumulating for tens of seconds, so the field ended up in a
-            // permanent blown-out state rather than settling between gestures.
-            // 0.5 still leaves a push coasting for a couple of seconds.
-            velocity_dissipation: 0.5,
+            // 0.15 was the original value and it is the bug: momentum from a
+            // held gesture kept accumulating for tens of seconds, so the field
+            // sat permanently blown out instead of settling between gestures.
+            // 0.5 fixed that but also ate the swirl the solver produces, so
+            // this is the compromise — a push coasts noticeably longer than at
+            // 0.5 (the e-folding time goes 2 s -> 3.3 s) while the decay is
+            // still twice the rate that let the field ratchet up.
+            velocity_dissipation: 0.3,
             // Raised from 0.55 after looking at it: dye accumulates wherever a
             // gesture dwells, and at 0.55 a held vortex pinned a whole plume at
             // the tone-map ceiling — one flat saturated blob with none of the
