@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 
 // Cross-origin isolation unlocks SharedArrayBuffer, which the threaded engine
 // (web/src/wasm-mt) needs for its shared linear memory. `credentialless`
@@ -10,7 +10,41 @@ const crossOriginIsolationHeaders = {
   'Cross-Origin-Embedder-Policy': 'credentialless',
 };
 
+/**
+ * Lets the vendored MediaPipe runtime be imported from a module worker.
+ *
+ * In a module worker `importScripts` does not exist, so `tasks-vision` falls
+ * back to `import(wasmLoaderPath)`. Vite's dev server tags every dynamic import
+ * with `?import`, which routes the request into the transform pipeline — and
+ * that pipeline rejects anything under `public/` on principle ("should not be
+ * imported from source code"). The file is a prebuilt Emscripten bundle that
+ * wants no transforming at all, so dropping the query hands the request back to
+ * the static handler, which serves it verbatim.
+ *
+ * Dev-only: a production build serves `public/` as plain files with no query
+ * appended, so the import already works there.
+ */
+function serveMediaPipeRuntimeAsAsset(): Plugin {
+  return {
+    name: 'aether:mp-wasm-as-asset',
+    configureServer(server) {
+      // Registered inside `configureServer` rather than the returned hook, so
+      // it sits ahead of Vite's own transform middleware.
+      // Typed structurally: the Node request types are not in this project's
+      // `lib`, and `url` is the only field this needs.
+      server.middlewares.use((req: { url?: string }, _res: unknown, next: () => void) => {
+        if (req.url?.startsWith('/mp-wasm/')) {
+          const query = req.url.indexOf('?');
+          if (query !== -1) req.url = req.url.slice(0, query);
+        }
+        next();
+      });
+    },
+  };
+}
+
 export default defineConfig({
+  plugins: [serveMediaPipeRuntimeAsAsset()],
   server: {
     host: '127.0.0.1',
     port: 5173,
