@@ -29,6 +29,7 @@
 
 import { FLUID_H, FLUID_W, MAX_PARTICLES, STAT } from './constants';
 import type { EngineTier } from './engine-loader';
+import { ComboBook, comboState } from './hud-combos';
 import { PRESETS, type ParamPreset } from './hud-presets';
 import type { HudCallbacks, HudStats, PerceptionStatus, ViewMode } from './types';
 
@@ -416,6 +417,7 @@ export class Hud {
   private readonly particleInput: HTMLInputElement;
   private readonly particleValue: HTMLElement;
   private readonly presetBtns = new Map<string, HTMLButtonElement>();
+  private readonly combos: ComboBook;
 
   /** Frame-time history, newest last, as a fill-then-shift window. */
   private readonly history = new Float32Array(SPARK_SAMPLES);
@@ -486,6 +488,9 @@ export class Hud {
     // must not be something you have to scroll to — so collapsing hides both.
     this.body.hidden = true;
     this.percepEl.hidden = true;
+    // Outside the panel on purpose: sequence progress has to stay visible when
+    // the panel is collapsed, which is how most of a session is spent.
+    this.combos = new ComboBook(this.root);
     this.wireControls();
     this.wireKeys();
 
@@ -522,6 +527,13 @@ export class Hud {
     this.meters[2]?.sample(s.inferenceMs);
 
     if (this.hintStartMs === 0) this.hintStartMs = now;
+
+    // Every frame, ahead of the 10 Hz gate: a charge bar that steps at 10 Hz
+    // reads as lag in the recognition itself, and each write is diffed inside
+    // the component, so an unchanged sequence costs nothing.
+    if (s.comboBook) this.combos.setBook(s.comboBook);
+    this.combos.update(comboState(s.comboProgress));
+
     if (now - this.lastPaintMs < PAINT_MS) return;
     this.lastPaintMs = now;
 

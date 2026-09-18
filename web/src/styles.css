@@ -1293,3 +1293,123 @@ input[type='range']:focus-visible::-webkit-slider-thumb {
     scroll-behavior: auto !important;
   }
 }
+
+/* Sequence spellbook ----------------------------------------------------- */
+
+/* Pinned bottom-right, outside `.hud-panel`, because it has to stay legible
+   while the panel is collapsed — landing a combo depends on watching the pips,
+   not on having the telemetry open. */
+.hud-combos {
+  position: absolute;
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 9px 11px 10px;
+  background: rgba(7, 10, 18, 0.58);
+  border: 1px solid var(--edge);
+  border-radius: var(--r);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.cb-title {
+  font-size: 8px;
+  font-weight: 400;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.cb-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  opacity: 0.55;
+  transition: opacity 160ms ease;
+}
+
+.cb-row[data-state='casting'],
+.cb-row[data-state='fired'] {
+  opacity: 1;
+}
+
+.cb-name {
+  min-width: 66px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.cb-row[data-state='casting'] .cb-name {
+  color: var(--accent);
+}
+
+.cb-row[data-state='fired'] .cb-name {
+  color: var(--magenta);
+}
+
+.cb-pips {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* The pip is its own charge meter: the fill is a background gradient stop
+   driven by `--charge`, so holding the final gesture of a combo shows the wind-up
+   without a second element or a layout-affecting width animation. */
+.cb-pip {
+  --charge: 0%;
+  position: relative;
+  padding: 3px 7px 4px;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  background:
+    linear-gradient(to right, var(--accent-soft) var(--charge), transparent var(--charge));
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  font-style: normal;
+  color: var(--faint);
+  transition:
+    color 120ms ease,
+    border-color 120ms ease;
+}
+
+.cb-pip[data-state='hold'] {
+  color: var(--ink);
+  border-color: var(--edge-hi);
+}
+
+.cb-pip[data-state='done'] {
+  color: var(--bg);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.cb-row[data-state='fired'] .cb-pip[data-state='done'] {
+  background: var(--magenta);
+  border-color: var(--magenta);
+}
+
+.cb-arrow {
+  width: 7px;
+  height: 1px;
+  background: var(--edge-hi);
+}
+
+/* On a phone the panel and the book would fight for the same corner. */
+@media (max-width: 620px) {
+  .hud-combos {
+    gap: 3px;
+    padding: 7px 9px 8px;
+  }
+
+  .cb-name {
+    min-width: 54px;
+    font-size: 8px;
+  }
+}
