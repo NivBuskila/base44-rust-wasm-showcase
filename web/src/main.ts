@@ -121,6 +121,11 @@ class App {
   private lastCameraTime = -1;
   private lastCameraMs = 0;
   private lastPerceptionMs = 0;
+  /**
+   * True when the source runs the models on a worker, so `process` is cheap and
+   * self-pacing and the render loop should drain it every frame.
+   */
+  private perceptionOffThread = false;
   /** Current inference cadence, adapted from measured cost. */
   private perceptionIntervalMs = PERCEPTION_MIN_INTERVAL_MS;
   /** Smoothed wall time one `process` call costs the render loop. */
@@ -315,10 +320,24 @@ class App {
   /** Runs inference at a cadence derived from its own measured cost. */
   private pumpPerception(nowMs: number): void {
     if (!this.perception || !this.cameraAvailable || !this.camera.hasFrame) return;
-    if (nowMs - this.lastPerceptionMs < this.perceptionIntervalMs) return;
 
+    // Off-thread perception paces itself: the worker takes one frame at a time,
+    // and `process` only decodes a bitmap and hands back whatever has already
+    // come back. Throttling it here would do nothing but hold a finished result
+    // for up to a full interval before the engine sees it — pure added latency,
+    // which is what made gestures feel late. The interval gate stays for the
+    // inline source, where every call really does run the models in this frame.
+    if (
+      !this.perceptionOffThread &&
+      nowMs - this.lastPerceptionMs < this.perceptionIntervalMs
+    ) {
+      return;
+    }
+
+    // Time since the last result actually reached the engine — not since the
+    // last attempt — because that is the interval the gesture velocities are
+    // differentiated over.
     const dt = this.lastPerceptionMs === 0 ? 1 / 30 : (nowMs - this.lastPerceptionMs) / 1000;
-    this.lastPerceptionMs = nowMs;
 
     let result;
     const start = performance.now();
@@ -337,7 +356,7 @@ class App {
     // matters for pacing is the wall time this call cost *the render loop*,
     // including anything the source does around the inference itself.
     const cost = performance.now() - start;
-    if (result) {
+    if (result && !this.perceptionOffThread) {
       this.inferenceCostMs = this.inferenceCostMs * 0.8 + cost * 0.2;
       const wanted = this.inferenceCostMs / PERCEPTION_DUTY;
       this.perceptionIntervalMs = Math.min(
@@ -365,6 +384,7 @@ class App {
       }
     }
     if (!result) return;
+    this.lastPerceptionMs = nowMs;
 
     // `cost`, not `result.latencyMs`: the HUD row sits in the frame budget, so
     // it must report what the render loop actually paid. With perception on a
@@ -460,6 +480,7 @@ class App {
         return;
       }
       this.perception = perception;
+      this.perceptionOffThread = perception instanceof WorkerPerception;
       this.perceptionStatus = perception.status;
     } catch (err) {
       const reason = `Vision models unavailable: ${String(err)}`;
@@ -482,6 +503,7 @@ class App {
     this.engine.clear_perception();
     this.lastHands = null;
     this.lastPerceptionMs = 0;
+    this.perceptionOffThread = source instanceof WorkerPerception;
     // A scripted source has nothing to do with the real one's cost, so the
     // adaptive cadence has to start over or a slow MediaPipe load would leave
     // an injected test source throttled to once every two seconds.
