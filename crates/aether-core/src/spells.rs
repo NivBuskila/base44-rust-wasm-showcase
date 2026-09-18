@@ -171,6 +171,15 @@ const SUPERNOVA_FRACTION: usize = 2;
 /// Hard cap on particles any one combo may recycle.
 const COMBO_MAX: usize = 24_000;
 
+/// How much of a hand's own spell strength is withheld while it is mid-sequence.
+///
+/// Every combo is built out of gestures that are also spells on their own, so a
+/// caster winding up a sequence was firing full-strength Attract/Repel/Freeze
+/// effects into the same field the combo is about to reorganise, and the payoff
+/// read as more of the same. Fading the intermediate steps out turns them into a
+/// wind-up: the field quiets down as the sequence advances, then the combo lands.
+const COMBO_CHARGE_DAMP: f32 = 0.8;
+
 /// Seconds of rotation rate mapped into one unit of time scale.
 const TIME_GAIN: f32 = 0.32;
 /// Smoothing rate of the requested time scale, per second. Without it the time
@@ -248,6 +257,9 @@ pub fn apply(
     // A gesture sequence that completed this step, recognised by
     // `crate::combo`. Its effect is applied at the casting hand's palm.
     combo: Option<ComboHit>,
+    // Per-hand sequence depth, 0..1, from `ComboTracker::charging`. Fades a
+    // hand's own spell out while it is winding a combo up.
+    charging: [f32; 2],
     dt: f32,
 ) -> SpellReport {
     let dt = clamp_dt(dt);
@@ -265,7 +277,7 @@ pub fn apply(
 
     drive_fields(flow, body_edge, fluid, params, dt, &mut report);
 
-    let force = params.hand_force.max(0.0);
+    let base_force = params.hand_force.max(0.0);
     let slots = report.spells.len();
     for (slot, hand) in tracker.hands().iter().enumerate().take(slots) {
         if !hand.present || !hand.palm[0].is_finite() || !hand.palm[1].is_finite() {
@@ -277,6 +289,8 @@ pub fn apply(
             state.release_show[slot] = 0.0;
             continue;
         }
+        let force =
+            base_force * (1.0 - COMBO_CHARGE_DAMP * fin(charging[slot]).clamp(0.0, 1.0));
         report.spells[slot] = hand.spell;
         // Releasing the gesture is what re-arms the one-shot.
         if hand.spell != Spell::Shatter {
@@ -978,6 +992,7 @@ mod tests {
                 &mut self.state,
                 &self.params,
                 combo,
+                [0.0; 2],
                 dt,
             )
         }
@@ -1639,6 +1654,7 @@ mod tests {
             &mut state,
             &Params::default(),
             None,
+            [0.0; 2],
             DT,
         );
         assert!(report.injected.is_finite());
