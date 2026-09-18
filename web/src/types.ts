@@ -88,6 +88,10 @@ export interface HudStats {
   inferenceMs: number;
   stats: Float32Array;
   spells: [string, string];
+  /** Gesture-sequence spellbook from the engine, `name:step,step;...`. */
+  comboBook?: string;
+  /** Packed sequence progress: combo, steps matched, charge, fired. */
+  comboProgress?: Float32Array;
   perception: PerceptionStatus;
 }
 
