@@ -99,6 +99,12 @@ if [ "$THREADS" = "1" ]; then
   # reservation — the engine needs ~64 MB at the 1M-particle pool.
   FLAGS="$FLAGS -C target-feature=+atomics,+bulk-memory,+mutable-globals"
   FLAGS="$FLAGS -C link-arg=--shared-memory -C link-arg=--import-memory -C link-arg=--max-memory=1073741824"
+  # wasm-bindgen's threading pass needs the TLS bootstrap symbols exported.
+  # Recent nightlies leave them hidden unless asked, and it then fails with
+  # "failed to find `__wasm_init_tls`".
+  for sym in __wasm_init_tls __tls_size __tls_align __tls_base; do
+    FLAGS="$FLAGS -C link-arg=--export=$sym"
+  done
   FEATURES="$FEATURES,parallel"
   EXTRA+=(-Z build-std=std,panic_abort)
 elif ! rustup target list --installed 2> /dev/null | grep -q wasm32-unknown-unknown; then
