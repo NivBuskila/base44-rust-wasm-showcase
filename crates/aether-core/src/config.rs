@@ -111,7 +111,11 @@ pub struct Params {
 impl Default for Params {
     fn default() -> Self {
         Self {
-            velocity_dissipation: 0.15,
+            // Raised from 0.15: at that rate momentum from a held gesture kept
+            // accumulating for tens of seconds, so the field ended up in a
+            // permanent blown-out state rather than settling between gestures.
+            // 0.5 still leaves a push coasting for a couple of seconds.
+            velocity_dissipation: 0.5,
             // Raised from 0.55 after looking at it: dye accumulates wherever a
             // gesture dwells, and at 0.55 a held vortex pinned a whole plume at
             // the tone-map ceiling — one flat saturated blob with none of the

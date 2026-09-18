@@ -151,14 +151,14 @@ const PARAMS: readonly ParamSpec[] = [
   // Both dissipations clamp to 0..10 in Rust, but past ~3 per second the field
   // is gone inside a frame or two and the whole top of the travel is the same
   // black screen, so the slider stops where the range is still expressive.
-  { key: 'dye_dissipation', label: 'dye decay', min: 0, max: 3, step: 0.01, value: 0.55, fmt: d2 },
+  { key: 'dye_dissipation', label: 'dye decay', min: 0, max: 3, step: 0.01, value: 1, fmt: d2 },
   {
     key: 'velocity_dissipation',
     label: 'flow decay',
     min: 0,
     max: 2,
     step: 0.01,
-    value: 0.15,
+    value: 0.5,
     fmt: d2,
   },
   { key: 'hand_force', label: 'hand force', min: 0, max: 8, step: 0.05, value: 1, fmt: d2 },
