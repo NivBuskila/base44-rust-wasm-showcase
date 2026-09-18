@@ -87,6 +87,10 @@ const REPEL_ACCEL: f32 = 1500.0;
 /// everything it touches, so at equal strength it piles the whole field into a
 /// few cells and the projection has to resolve a pressure spike every frame.
 const ATTRACT_RATIO: f32 = 0.45;
+/// How fast a closed fist bleeds the speed off the particles it gathered, per
+/// second at the palm. High enough that they settle into a held clump within a
+/// fraction of a second, low enough that they still visibly stream inward.
+const GRIP_RATE: f32 = 25.0;
 const RADIAL_RADIUS_SCALE: f32 = 2.6;
 /// Radial acceleration applied to particles, in grid cells per second squared.
 const PARTICLE_ACCEL: f32 = 2200.0;
@@ -343,6 +347,11 @@ pub fn apply(
                     PARTICLE_ACCEL * outward * dt,
                     if outward > 0.0 { 0.3 } else { 0.55 },
                 );
+                // A fist has to *hold* what it pulled in, or the particles
+                // shoot through the palm and orbit back out.
+                if hand.spell == Spell::Attract {
+                    particles.damp(palm[0], palm[1], outer, GRIP_RATE, dt);
+                }
                 let dye = tint(hand.spell, RADIAL_DYE * force * dt);
                 fluid.add_dye(palm[0], palm[1], dye, radius);
             }
@@ -723,7 +732,9 @@ fn is_zero(field: &VecField) -> bool {
 mod tests {
     use super::*;
     use crate::config::{FLOW_H, FLOW_W, FLUID_H, FLUID_W};
+    use crate::field::Grid;
     use crate::gesture::synth::{self, Hand};
+    use crate::particles::ParticleConfig;
     use crate::gesture::{GestureConfig, GestureTracker};
 
     /// Render step.
@@ -1418,6 +1429,30 @@ mod tests {
     fn a_sweeping_open_palm_still_repels() {
         let tracker = sweeping(&Hand::at(0.3, 0.5).gesture(synth::OPEN_PALM));
         assert_eq!(tracker.hands()[0].spell, Spell::Repel);
+    }
+
+    #[test]
+    fn a_closed_fist_gathers_particles_instead_of_slinging_them_past() {
+        let tracker = latched(&Hand::at(0.5, 0.5).gesture(synth::CLOSED_FIST));
+        let hand = &tracker.hands()[0];
+        let (sx, sy) = ((FLUID_W - 1) as f32, (FLUID_H - 1) as f32);
+        let palm = to_grid(hand.palm, sx, sy);
+
+        let mut rig = Rig::new();
+        rig.particles.place(0, palm[0] + 10.0, palm[1], 0.0, 0.0, 30.0);
+        let obstacle = Grid::new(FLUID_W, FLUID_H);
+        let cfg = ParticleConfig::default();
+        for _ in 0..60 {
+            rig.run(&tracker, DT);
+            rig.particles
+                .step(rig.fluid.velocity(), &obstacle, DT, &rig.params, &cfg);
+        }
+        let (px, py) = rig.particles.position(0);
+        let dist = length(px - palm[0], py - palm[1]);
+        let (vx, vy) = rig.particles.velocity(0);
+        assert!(dist < 10.0, "particle was not gathered: {dist} cells out");
+        // Held, not orbiting: the grip has taken the speed off it.
+        assert!(length(vx, vy) < 60.0, "particle still slinging: {vx} {vy}");
     }
 
     #[test]
