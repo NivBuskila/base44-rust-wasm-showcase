@@ -1,5 +1,3 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 
 // Cross-origin isolation unlocks SharedArrayBuffer, which the threaded engine
@@ -19,45 +17,29 @@ const crossOriginIsolationHeaders = {
  * either by the worker's `importScripts` shim (a plain XHR) or by a dynamic
  * import. Either way Vite's dev server routes a `.js` request into its
  * transform pipeline, which refuses anything under `public/` on principle
- * ("should not be imported from source code"). Dropping the `?import` query is
- * not enough — the transform middleware matches on the path.
+ * ("should not be imported from source code"). Dropping the `?import` query
+ * before any internal middleware sees it hands the request back to the static
+ * public-file handler, which serves the bundle verbatim.
  *
- * So this middleware answers those requests itself, straight off disk, ahead of
- * the transform middleware. Dev-only: a production build copies `public/`
- * verbatim and never transforms it.
+ * Dev-only: a production build copies `public/` as plain files and never
+ * transforms them.
  */
 function serveMediaPipeRuntimeAsAsset(): Plugin {
-  const types: Record<string, string> = {
-    '.js': 'text/javascript',
-    '.wasm': 'application/wasm',
-    '.data': 'application/octet-stream',
-  };
-
   return {
     name: 'aether:mp-wasm-as-asset',
     configureServer(server) {
       // Registered inside `configureServer` rather than the returned hook, so
-      // it sits ahead of Vite's own transform middleware.
-      server.middlewares.use((req, res, next) => {
-        const url = req.url ?? '';
-        if (!url.startsWith('/mp-wasm/')) return next();
-
-        const pathname = url.split('?')[0];
-        // No traversal out of the directory, whatever the client sends.
-        if (pathname.includes('..')) return next();
-
-        const file = path.join(server.config.publicDir, pathname.slice(1));
-        let body: Buffer;
-        try {
-          body = fs.readFileSync(file);
-        } catch {
-          return next();
+      // it sits ahead of Vite's own transform middleware — and ahead of the
+      // public-file middleware, which refuses a request that still carries
+      // `?import`.
+      // Typed structurally: the Node request types are not in this project's
+      // `lib`, and `url` is the only field this needs.
+      server.middlewares.use((req: { url?: string }, _res: unknown, next: () => void) => {
+        if (req.url?.startsWith('/mp-wasm/')) {
+          const query = req.url.indexOf('?');
+          if (query !== -1) req.url = req.url.slice(0, query);
         }
-
-        res.setHeader('Content-Type', types[path.extname(pathname)] ?? 'application/octet-stream');
-        res.setHeader('Content-Length', body.byteLength);
-        res.setHeader('Cache-Control', 'no-cache');
-        res.end(body);
+        next();
       });
     },
   };
