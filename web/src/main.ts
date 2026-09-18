@@ -157,6 +157,21 @@ class App {
   private stepMs = 0;
   private renderMs = 0;
   private inferenceMs = 0;
+  /** Camera pump: grabbing the video frame and handing it to perception. */
+  private cameraMs = 0;
+  /** HUD DOM update, which touches layout and is not free at 60 Hz. */
+  private hudMs = 0;
+  /** Everything the callback did, so the measured rows can be checked to sum. */
+  private frameMs = 0;
+  /**
+   * The gap the callback did not spend: wall time between frames minus the work
+   * of the previous one. `step`/`render`/`infer` summing far below the frame
+   * period means the cost is here — GPU work the driver finishes after the GL
+   * calls return, compositing, or another task blocking the loop — and without
+   * this row that time is invisible and the HUD appears to contradict the frame
+   * rate it sits next to.
+   */
+  private outsideMs = 0;
   private frames = 0;
 
   constructor(
@@ -309,8 +324,12 @@ class App {
       this.views = this.makeViews();
     }
 
+    const frameStart = performance.now();
+    this.outsideMs = Math.max(0, realDt * 1000 - this.frameMs);
+
     this.pumpCamera(nowMs);
     this.pumpPerception(nowMs);
+    this.cameraMs = performance.now() - frameStart;
 
     const stepStart = performance.now();
     this.engine.step(simDt);
@@ -323,6 +342,7 @@ class App {
 
     this.governor.update(this.fps);
     this.overdrive.update(stats, this.fps, this.stepMs);
+    const hudStart = performance.now();
     this.hud.update({
       fps: this.fps,
       stepMs: this.stepMs,
@@ -332,6 +352,8 @@ class App {
       spells: [this.engine.spell_name(0), this.engine.spell_name(1)],
       perception: this.perceptionStatus,
     });
+    this.hudMs = performance.now() - hudStart;
+    this.frameMs = performance.now() - frameStart;
 
     // Last in the frame: the recorder reads the values this frame just produced,
     // and it rate-limits itself to 2 Hz internally.
@@ -567,6 +589,11 @@ class App {
       stepMs: this.stepMs,
       renderMs: this.renderMs,
       inferenceMs: this.inferenceMs,
+      /** Camera pump, inclusive of the bitmap decode charged to `inferenceMs`. */
+      cameraMs: this.cameraMs,
+      hudMs: this.hudMs,
+      frameMs: this.frameMs,
+      outsideMs: this.outsideMs,
       cameraAvailable: this.cameraAvailable,
       perception: this.perceptionStatus,
       stats: Array.from(this.engine.stats()),
