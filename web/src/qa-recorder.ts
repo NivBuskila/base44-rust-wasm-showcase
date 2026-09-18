@@ -68,6 +68,10 @@ export interface QaDiagnostics {
   stepMs: number;
   renderMs: number;
   inferenceMs: number;
+  cameraMs: number;
+  hudMs: number;
+  frameMs: number;
+  outsideMs: number;
   cameraAvailable: boolean;
   perception: PerceptionStatus;
   particleCount: number;
@@ -97,6 +101,11 @@ export interface QaSession {
   stepMs: { median: number; p95: number };
   renderMs: { median: number; p95: number };
   inferenceMs: { median: number; p95: number };
+  cameraMs: { median: number; p95: number };
+  hudMs: { median: number; p95: number };
+  frameMs: { median: number; p95: number };
+  /** Frame time the callback did not account for — see `App.outsideMs`. */
+  outsideMs: { median: number; p95: number };
   perceptionHz: { median: number; min: number };
   qualityTier: { start: number; worst: number; end: number };
   particleCount: { min: number; max: number; end: number };
@@ -152,6 +161,10 @@ export class QaRecorder {
   private readonly stepMs: number[] = [];
   private readonly renderMs: number[] = [];
   private readonly inferenceMs: number[] = [];
+  private readonly cameraMs: number[] = [];
+  private readonly hudMs: number[] = [];
+  private readonly frameMs: number[] = [];
+  private readonly outsideMs: number[] = [];
   private readonly perceptionHz: number[] = [];
   private readonly events: QaEvent[] = [];
 
@@ -175,6 +188,10 @@ export class QaRecorder {
       push(this.stepMs, diag.stepMs);
       push(this.renderMs, diag.renderMs);
       push(this.inferenceMs, diag.inferenceMs);
+      push(this.cameraMs, diag.cameraMs);
+      push(this.hudMs, diag.hudMs);
+      push(this.frameMs, diag.frameMs);
+      push(this.outsideMs, diag.outsideMs);
       push(this.perceptionHz, diag.perceptionHz);
     }
 
@@ -219,6 +236,10 @@ export class QaRecorder {
       stepMs: msStats(this.stepMs),
       renderMs: msStats(this.renderMs),
       inferenceMs: msStats(this.inferenceMs),
+      cameraMs: msStats(this.cameraMs),
+      hudMs: msStats(this.hudMs),
+      frameMs: msStats(this.frameMs),
+      outsideMs: msStats(this.outsideMs),
       perceptionHz: { median: round(quantile(hz, 0.5)), min: round(quantile(hz, 0)) },
       qualityTier: {
         start: this.tierStart,
