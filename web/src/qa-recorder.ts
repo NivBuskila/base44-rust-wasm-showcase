@@ -98,6 +98,10 @@ export interface QaSession {
   durationMs: number;
   samples: number;
   engine: string;
+  /** The engine loader's own explanation for that tier. */
+  engineReason: string;
+  /** Whether the document could allocate `SharedArrayBuffer` at all. */
+  crossOriginIsolated: boolean;
   cameraAvailable: boolean;
   fps: { min: number; p5: number; median: number; mean: number; max: number };
   slowFrameShare: number;
@@ -177,6 +181,8 @@ export class QaRecorder {
   private particlesMin = Number.POSITIVE_INFINITY;
   private particlesMax = 0;
   private engine = 'unknown';
+  private engineReason = 'unknown';
+  private isolated = false;
   private cameraSeen = false;
 
   sample(diag: QaDiagnostics): void {
@@ -205,6 +211,10 @@ export class QaRecorder {
     // `threads:8` vs `single:1` is the single most important fact about a
     // session's frame rate, so the tier is flattened to a label with its width.
     this.engine = `${diag.engine.name}:${diag.engine.threads}`;
+    // Why that tier was chosen — a `single:1` session is only actionable when
+    // the record also says which gate rejected the threaded build.
+    this.engineReason = diag.engine.reason;
+    this.isolated = Boolean(globalThis.crossOriginIsolated);
     this.cameraSeen = this.cameraSeen || diag.cameraAvailable;
 
     this.recordTransitions(diag, now - this.t0);
@@ -227,6 +237,8 @@ export class QaRecorder {
       durationMs: Math.round(performance.now() - this.t0),
       samples: fps.length,
       engine: this.engine,
+      engineReason: this.engineReason,
+      crossOriginIsolated: this.isolated,
       cameraAvailable: this.cameraSeen,
       fps: {
         min: round(quantile(fps, 0)),
