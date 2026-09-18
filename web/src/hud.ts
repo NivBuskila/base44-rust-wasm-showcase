@@ -183,6 +183,18 @@ const PARAMS: readonly ParamSpec[] = [
     value: 30_000,
     fmt: (v) => `${thousands(v)}/s`,
   },
+  // How long a particle lives before it respawns somewhere random. High up the
+  // travel the pool barely recycles, so a gathered cloud stays gathered
+  // instead of dissolving under the hand holding it.
+  {
+    key: 'particle_life',
+    label: 'particle life',
+    min: 0.2,
+    max: 30,
+    step: 0.1,
+    value: 4.5,
+    fmt: (v) => `${v.toFixed(1)}s`,
+  },
 ];
 
 interface ModeSpec {
