@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 
 // Cross-origin isolation unlocks SharedArrayBuffer, which the threaded engine
@@ -13,31 +15,49 @@ const crossOriginIsolationHeaders = {
 /**
  * Lets the vendored MediaPipe runtime be imported from a module worker.
  *
- * In a module worker `importScripts` does not exist, so `tasks-vision` falls
- * back to `import(wasmLoaderPath)`. Vite's dev server tags every dynamic import
- * with `?import`, which routes the request into the transform pipeline — and
- * that pipeline rejects anything under `public/` on principle ("should not be
- * imported from source code"). The file is a prebuilt Emscripten bundle that
- * wants no transforming at all, so dropping the query hands the request back to
- * the static handler, which serves it verbatim.
+ * The runtime is a prebuilt Emscripten bundle in `public/mp-wasm/`, loaded
+ * either by the worker's `importScripts` shim (a plain XHR) or by a dynamic
+ * import. Either way Vite's dev server routes a `.js` request into its
+ * transform pipeline, which refuses anything under `public/` on principle
+ * ("should not be imported from source code"). Dropping the `?import` query is
+ * not enough — the transform middleware matches on the path.
  *
- * Dev-only: a production build serves `public/` as plain files with no query
- * appended, so the import already works there.
+ * So this middleware answers those requests itself, straight off disk, ahead of
+ * the transform middleware. Dev-only: a production build copies `public/`
+ * verbatim and never transforms it.
  */
 function serveMediaPipeRuntimeAsAsset(): Plugin {
+  const types: Record<string, string> = {
+    '.js': 'text/javascript',
+    '.wasm': 'application/wasm',
+    '.data': 'application/octet-stream',
+  };
+
   return {
     name: 'aether:mp-wasm-as-asset',
     configureServer(server) {
       // Registered inside `configureServer` rather than the returned hook, so
       // it sits ahead of Vite's own transform middleware.
-      // Typed structurally: the Node request types are not in this project's
-      // `lib`, and `url` is the only field this needs.
-      server.middlewares.use((req: { url?: string }, _res: unknown, next: () => void) => {
-        if (req.url?.startsWith('/mp-wasm/')) {
-          const query = req.url.indexOf('?');
-          if (query !== -1) req.url = req.url.slice(0, query);
+      server.middlewares.use((req, res, next) => {
+        const url = req.url ?? '';
+        if (!url.startsWith('/mp-wasm/')) return next();
+
+        const pathname = url.split('?')[0];
+        // No traversal out of the directory, whatever the client sends.
+        if (pathname.includes('..')) return next();
+
+        const file = path.join(server.config.publicDir, pathname.slice(1));
+        let body: Buffer;
+        try {
+          body = fs.readFileSync(file);
+        } catch {
+          return next();
         }
-        next();
+
+        res.setHeader('Content-Type', types[path.extname(pathname)] ?? 'application/octet-stream');
+        res.setHeader('Content-Length', body.byteLength);
+        res.setHeader('Cache-Control', 'no-cache');
+        res.end(body);
       });
     },
   };
