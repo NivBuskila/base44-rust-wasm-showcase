@@ -27,6 +27,7 @@ import {
   OverdriveBanner,
 } from './overdrive';
 import { MediaPipePerception } from './perception';
+import { WorkerPerception } from './perception-worker-client';
 import { Renderer } from './render/renderer';
 import { PARTICLE_STRIDE, STAT, assertLayout } from './constants';
 import type { PerceptionSource, PerceptionStatus, RenderFrame, ViewMode } from './types';
@@ -365,7 +366,12 @@ class App {
     }
     if (!result) return;
 
-    this.inferenceMs = result.latencyMs;
+    // `cost`, not `result.latencyMs`: the HUD row sits in the frame budget, so
+    // it must report what the render loop actually paid. With perception on a
+    // worker the model still takes ~26 ms, but the loop pays only the bitmap
+    // decode — charging it the full inference would show a blown budget on a
+    // frame that comfortably made 60 Hz.
+    this.inferenceMs = cost;
     this.lastHands = result.hands;
     this.engine.push_hands(result.hands, dt);
     this.engine.push_pose(result.pose, dt);
@@ -421,8 +427,29 @@ class App {
    * Rust optical-flow path keeps driving the fluid, so the app stays fully
    * responsive and the HUD explains what is missing.
    */
+  /**
+   * Prefers perception on a worker, falling back to the inline source.
+   *
+   * Off-thread is strictly better — a 26 ms inference stops being a 26 ms hole
+   * in the render loop — but it needs module workers and `createImageBitmap`,
+   * and the worker can fail to start for reasons the page cannot inspect. So
+   * the inline path stays as the fallback rather than the default: same models,
+   * same results, just paid for out of the frame budget.
+   */
+  private async buildPerception(): Promise<PerceptionSource> {
+    const offloaded = new WorkerPerception();
+    try {
+      await offloaded.init();
+      return offloaded;
+    } catch (err) {
+      console.warn('[aether] perception worker unusable, running inference inline', err);
+      offloaded.close();
+      return new MediaPipePerception();
+    }
+  }
+
   private async attachPerception(): Promise<void> {
-    const perception = new MediaPipePerception();
+    const perception = await this.buildPerception();
     try {
       await perception.init();
       // A scripted source may have been injected while the models loaded
