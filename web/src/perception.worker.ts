@@ -34,7 +34,9 @@ import type { FromWorker, ToWorker } from './perception-protocol';
  */
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
-const perception = new MediaPipePerception();
+// No rationing here: the limiter protects a render loop this worker does not
+// have, and its idle gaps are pure gesture latency. See the field's docs.
+const perception = new MediaPipePerception({ rationInference: false });
 
 /** Buffer the mask is copied into, recycled between frames by the main thread. */
 let maskBuf: ArrayBuffer | null = null;

@@ -539,6 +539,23 @@ export interface PerceptionDiagnostics {
 }
 
 export class MediaPipePerception implements PerceptionSource {
+  /**
+   * When false, the duty-cycle limiter is disabled.
+   *
+   * The limiter exists for one reason: inference is synchronous, so on the main
+   * thread an expensive pass stalls the render loop and rationing is the only
+   * way to keep the app alive. Inside `perception.worker.ts` none of that
+   * applies — the worker blocks nobody, and its client already keeps exactly
+   * one inference in flight. Rationing there only inserts idle time between
+   * landmarks: at a 60 ms pass it drops gestures from ~16 Hz to ~6 Hz, felt
+   * directly as hands lagging behind the fluid they are supposed to push.
+   */
+  private readonly rationInference: boolean;
+
+  constructor(options: { rationInference?: boolean } = {}) {
+    this.rationInference = options.rationInference ?? true;
+  }
+
   private state: PerceptionStatus = { kind: 'loading' };
   private readonly hands = new Float32Array(HAND_BUFFER);
   private readonly pose = new Float32Array(POSE_STRIDE);
@@ -770,6 +787,7 @@ export class MediaPipePerception implements PerceptionSource {
 
   /** Idle time the duty-cycle limiter owes after an inference costing `costMs`. */
   private gap(): number {
+    if (!this.rationInference) return 0;
     return this.costMs <= BUDGET_MS ? 0 : this.costMs * (1 / MAX_DUTY - 1);
   }
 
