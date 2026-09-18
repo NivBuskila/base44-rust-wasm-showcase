@@ -567,6 +567,42 @@ impl Particles {
             self.heat[i] = self.heat[i].max(heat * falloff);
         }
     }
+
+    /// Bleeds the own-velocity of every particle within `radius` of
+    /// `(cx, cy)` at `rate` per second, strongest at the centre.
+    ///
+    /// A pure inward impulse cannot gather anything: a particle arrives at the
+    /// centre carrying all the speed the pull gave it and sails straight out
+    /// the far side, which reads as an orbit rather than a grip. Damping is
+    /// what turns the same pull into a hold.
+    pub fn damp(&mut self, cx: f32, cy: f32, radius: f32, rate: f32, dt: f32) {
+        if self.active == 0
+            || !cx.is_finite()
+            || !cy.is_finite()
+            || !radius.is_finite()
+            || radius <= 0.0
+        {
+            return;
+        }
+        let dt = finite_or(dt, 0.0).clamp(0.0, MAX_STEP);
+        let k = 1.0 - decay(finite_or(rate, 0.0).max(0.0), dt);
+        let r2 = radius * radius;
+
+        for i in 0..self.active {
+            if self.life[i] <= 0.0 {
+                continue;
+            }
+            let dx = self.x[i] - cx;
+            let dy = self.y[i] - cy;
+            let d2 = dx * dx + dy * dy;
+            if d2 > r2 || d2.is_nan() {
+                continue;
+            }
+            let w = k * smoothstep(radius, 0.0, d2.sqrt());
+            self.vx[i] = tame(self.vx[i] * (1.0 - w));
+            self.vy[i] = tame(self.vy[i] * (1.0 - w));
+        }
+    }
 }
 
 impl Frame<'_> {
