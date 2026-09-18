@@ -91,6 +91,13 @@ const ATTRACT_RATIO: f32 = 0.45;
 /// second at the palm. High enough that they settle into a held clump within a
 /// fraction of a second, low enough that they still visibly stream inward.
 const GRIP_RATE: f32 = 25.0;
+/// Radius of the positional hold, as a multiple of the palm radius. Kept close
+/// to the palm so only what the fist actually swallowed travels with it.
+const GRIP_RADIUS_SCALE: f32 = 1.2;
+/// Rate, per second, at which a gripped particle's position closes on the palm.
+/// Fast enough that the clump tracks a moving fist, not instant, so the pull
+/// still reads as suction rather than teleporting.
+const GRIP_PULL: f32 = 8.0;
 const RADIAL_RADIUS_SCALE: f32 = 2.6;
 /// Radial acceleration applied to particles, in grid cells per second squared.
 const PARTICLE_ACCEL: f32 = 2200.0;
@@ -351,6 +358,9 @@ pub fn apply(
                 // shoot through the palm and orbit back out.
                 if hand.spell == Spell::Attract {
                     particles.damp(palm[0], palm[1], outer, GRIP_RATE, dt);
+                    // Positional hold: inside the palm the clump is carried with
+                    // the fist instead of being swept off by the flow.
+                    particles.grip(palm[0], palm[1], radius * GRIP_RADIUS_SCALE, GRIP_PULL, dt);
                 }
                 let dye = tint(hand.spell, RADIAL_DYE * force * dt);
                 fluid.add_dye(palm[0], palm[1], dye, radius);
