@@ -97,6 +97,13 @@ const DIFFUSION_ITERS: usize = 20;
 /// well under it: diffusion costs nothing unless the HUD asks for it.
 const VISCOSITY_EPSILON: f32 = 1e-4;
 
+/// Ceiling on a cell's speed, in grid cells per second.
+///
+/// A hand push peaks around 40-60 here, so this is headroom rather than a
+/// governor on ordinary motion; it exists only to stop the field ratcheting up
+/// without bound while gestures keep feeding it.
+const MAX_CELL_SPEED: f32 = 110.0;
+
 /// Ceiling on the velocity change one confinement step may apply, in cells/s.
 ///
 /// Confinement is an anti-dissipation term — it *adds* energy — so an
@@ -334,6 +341,15 @@ impl Fluid {
         if params.vorticity > 0.0 {
             self.confine_vorticity(dt, params.vorticity);
         }
+
+        // Nothing else bounds the field: every gesture adds momentum, and with a
+        // gentle dissipation a person standing in front of the camera drives it
+        // up until dye is advected far further than a cell per step and the
+        // frame reads as one saturated smear. The ceiling is well above the
+        // speeds a single push produces, so it only catches that runaway — and
+        // it goes *before* the projection, whose whole job is to remove the
+        // divergence a per-cell rescale leaves behind.
+        self.vel.clamp_speed(MAX_CELL_SPEED);
 
         self.close_solid_faces();
         self.project(params.pressure_iters);
