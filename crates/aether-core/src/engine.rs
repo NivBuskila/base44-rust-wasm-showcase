@@ -319,6 +319,7 @@ impl Engine {
         // that completes this frame lands in the same step as the gesture that
         // completed it.
         let hit = self.combos.update(&self.tracker, warped_dt);
+        let charging = [self.combos.charging(0), self.combos.charging(1)];
         let report = {
             let tracker = &self.tracker;
             let flow = self.flow.flow();
@@ -331,6 +332,7 @@ impl Engine {
                 &mut self.spell_state,
                 &self.params,
                 hit,
+                charging,
                 warped_dt,
             )
         };

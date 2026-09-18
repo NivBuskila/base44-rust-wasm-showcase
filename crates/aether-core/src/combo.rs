@@ -270,6 +270,32 @@ impl ComboTracker {
         hit
     }
 
+    /// How deep into a sequence one hand is, as 0..1.
+    ///
+    /// Non-zero only once a step has actually been matched: the first gesture of
+    /// a combo is indistinguishable from casting that gesture on its own, so it
+    /// must keep its full effect. Past that point the caster is winding up, and
+    /// [`crate::spells`] uses this to fade the intermediate gestures' own
+    /// effects out instead of firing them at full strength inside the combo.
+    pub fn charging(&self, slot: usize) -> f32 {
+        let mut best = 0.0f32;
+        for (ci, def) in COMBOS.iter().enumerate().take(MAX_COMBOS) {
+            let lane = match self.lanes.get(slot).map(|l| l[ci]) {
+                Some(l) if l.matched > 0 => l,
+                _ => continue,
+            };
+            let step = def.steps[lane.matched.min(def.steps.len() - 1)];
+            let charge = if step.hold > 0.0 {
+                (lane.held / step.hold).clamp(0.0, 1.0)
+            } else {
+                1.0
+            };
+            let depth = (lane.matched as f32 - 1.0 + charge) / def.steps.len() as f32;
+            best = best.max(depth.clamp(0.0, 1.0));
+        }
+        best
+    }
+
     /// The furthest-along candidate across both hands, for the HUD.
     pub fn progress(&self) -> ComboProgress {
         let mut best = ComboProgress {
