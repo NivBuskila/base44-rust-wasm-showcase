@@ -576,18 +576,23 @@ impl Fluid {
     /// Central-difference curl, `omega = dv/dx - du/dy`, zero inside walls.
     fn compute_curl(&mut self) {
         let (w, h) = (self.w, self.h);
-        self.curl.zero();
-        for y in 1..h.saturating_sub(1) {
-            for x in 1..w.saturating_sub(1) {
+        // Taken out of `self` so the rows can be written while the velocity and
+        // the wall mask are read through `&Self` — see `interior_rows`.
+        let mut curl = core::mem::take(&mut self.curl.data);
+        curl.fill(0.0);
+        let this: &Self = self;
+        interior_rows(&mut curl, w, h, |y, row| {
+            for x in 1..w - 1 {
                 let i = y * w + x;
-                if self.solid.data[i] >= 0.5 {
+                if this.solid.data[i] >= 0.5 {
                     continue;
                 }
-                let dvdx = self.vel.v.data[i + 1] - self.vel.v.data[i - 1];
-                let dudy = self.vel.u.data[i + w] - self.vel.u.data[i - w];
-                self.curl.data[i] = 0.5 * (dvdx - dudy);
+                let dvdx = this.vel.v.data[i + 1] - this.vel.v.data[i - 1];
+                let dudy = this.vel.u.data[i + w] - this.vel.u.data[i - w];
+                row[x] = 0.5 * (dvdx - dudy);
             }
-        }
+        });
+        self.curl.data = curl;
     }
 
     /// Fedkiw-style confinement: `f = eps * (N x omega)` with
@@ -595,22 +600,27 @@ impl Fluid {
     /// back towards the nearest vorticity peak.
     fn confine_vorticity(&mut self, dt: f32, strength: f32) {
         let (w, h) = (self.w, self.h);
-        for y in 1..h.saturating_sub(1) {
-            for x in 1..w.saturating_sub(1) {
+        let mut u = core::mem::take(&mut self.vel.u.data);
+        let mut v = core::mem::take(&mut self.vel.v.data);
+        let this: &Self = self;
+        interior_row_pairs(&mut u, &mut v, w, h, |y, ur, vr| {
+            for x in 1..w - 1 {
                 let i = y * w + x;
-                if self.solid.data[i] >= 0.5 {
+                if this.solid.data[i] >= 0.5 {
                     continue;
                 }
-                let gx = 0.5 * (self.curl.data[i + 1].abs() - self.curl.data[i - 1].abs());
-                let gy = 0.5 * (self.curl.data[i + w].abs() - self.curl.data[i - w].abs());
+                let gx = 0.5 * (this.curl.data[i + 1].abs() - this.curl.data[i - 1].abs());
+                let gy = 0.5 * (this.curl.data[i + w].abs() - this.curl.data[i - w].abs());
                 // Returns (0, 0) on a vanishing gradient, so flat regions get
                 // no force instead of a normalised division by ~0.
                 let (nx, ny) = normalize(gx, gy);
-                let f = strength * self.curl.data[i] * dt;
-                self.vel.u.data[i] += bounded_impulse(ny * f, MAX_CONFINE_IMPULSE);
-                self.vel.v.data[i] += bounded_impulse(-nx * f, MAX_CONFINE_IMPULSE);
+                let f = strength * this.curl.data[i] * dt;
+                ur[x] += bounded_impulse(ny * f, MAX_CONFINE_IMPULSE);
+                vr[x] += bounded_impulse(-nx * f, MAX_CONFINE_IMPULSE);
             }
-        }
+        });
+        self.vel.u.data = u;
+        self.vel.v.data = v;
     }
 
     // ------------------------------------------------------------ projection
@@ -663,20 +673,23 @@ impl Fluid {
 
     fn compute_divergence(&mut self) {
         let (w, h) = (self.w, self.h);
-        self.divergence.zero();
-        for y in 1..h.saturating_sub(1) {
-            for x in 1..w.saturating_sub(1) {
+        let mut div = core::mem::take(&mut self.divergence.data);
+        div.fill(0.0);
+        let this: &Self = self;
+        interior_rows(&mut div, w, h, |y, row| {
+            for x in 1..w - 1 {
                 let i = y * w + x;
-                if self.solid.data[i] >= 0.5 {
+                if this.solid.data[i] >= 0.5 {
                     continue;
                 }
                 // Faces touching a wall carry no flux and have already been
                 // zeroed, so the no-penetration condition needs no branch here.
-                let du = self.vel.u.data[i] - self.vel.u.data[i - 1];
-                let dv = self.vel.v.data[i] - self.vel.v.data[i - w];
-                self.divergence.data[i] = du + dv;
+                let du = this.vel.u.data[i] - this.vel.u.data[i - 1];
+                let dv = this.vel.v.data[i] - this.vel.v.data[i - w];
+                row[x] = du + dv;
             }
-        }
+        });
+        self.divergence.data = div;
     }
 
     /// Removes the constant component of the pressure.
@@ -715,22 +728,27 @@ impl Fluid {
 
     fn subtract_pressure_gradient(&mut self) {
         let (w, h) = (self.w, self.h);
-        for y in 1..h.saturating_sub(1) {
-            for x in 1..w.saturating_sub(1) {
+        let mut u = core::mem::take(&mut self.vel.u.data);
+        let mut v = core::mem::take(&mut self.vel.v.data);
+        let this: &Self = self;
+        interior_row_pairs(&mut u, &mut v, w, h, |y, ur, vr| {
+            for x in 1..w - 1 {
                 let i = y * w + x;
-                if self.solid.data[i] >= 0.5 {
+                if this.solid.data[i] >= 0.5 {
                     continue;
                 }
-                let pc = self.pressure.data[i];
+                let pc = this.pressure.data[i];
                 // Forward difference, matching the backward-difference
                 // divergence: `wall_pick` makes the gradient vanish across a
                 // closed face, leaving that face's zero flux untouched.
-                let r = wall_pick(self.pressure.data[i + 1], self.solid.data[i + 1], pc);
-                let d = wall_pick(self.pressure.data[i + w], self.solid.data[i + w], pc);
-                self.vel.u.data[i] -= r - pc;
-                self.vel.v.data[i] -= d - pc;
+                let r = wall_pick(this.pressure.data[i + 1], this.solid.data[i + 1], pc);
+                let d = wall_pick(this.pressure.data[i + w], this.solid.data[i + w], pc);
+                ur[x] -= r - pc;
+                vr[x] -= d - pc;
             }
-        }
+        });
+        self.vel.u.data = u;
+        self.vel.v.data = v;
     }
 
     /// `max |div u|` over the non-solid interior — the residual the projection
@@ -1142,6 +1160,45 @@ fn jacobi_diffuse(
 #[inline]
 fn kernel_unusable(n: usize, w: usize, h: usize, lens: [usize; 4]) -> bool {
     w < 3 || h < 3 || lens.iter().any(|&l| l < n)
+}
+
+/// Runs `f(y, row)` over every interior row of a full-grid buffer, in parallel.
+///
+/// The buffer is passed separately from `&Self` on purpose: a stage that writes
+/// one grid while reading its neighbours out of the others cannot hold `&mut
+/// self`, so the caller `mem::take`s the target's storage, hands it here, and
+/// puts it back. `row` is indexed by `x`, so a stencil can keep using the flat
+/// `y * w + x` index for its reads.
+fn interior_rows<F>(data: &mut [f32], w: usize, h: usize, f: F)
+where
+    F: Fn(usize, &mut [f32]) + Sync + Send,
+{
+    if w < 3 || h < 3 || data.len() < w * h {
+        return;
+    }
+    par::rows_mut(&mut data[w..(h - 1) * w], w, h - 2, |k, row| f(k + 1, row));
+}
+
+/// [`interior_rows`] over two grids at once — the velocity components, which
+/// every force stage writes together.
+fn interior_row_pairs<F>(a: &mut [f32], b: &mut [f32], w: usize, h: usize, f: F)
+where
+    F: Fn(usize, &mut [f32], &mut [f32]) + Sync + Send,
+{
+    if w < 3 || h < 3 || a.len() < w * h || b.len() < w * h {
+        return;
+    }
+    let rows = h - 2;
+    let per = par::chunk_len(rows, 4);
+    let mut lanes: Vec<_> = a[w..(h - 1) * w]
+        .chunks_mut(w)
+        .zip(b[w..(h - 1) * w].chunks_mut(w))
+        .collect();
+    par::chunks_mut(&mut lanes, per, |band, lanes| {
+        for (k, (ar, br)) in lanes.iter_mut().enumerate() {
+            f(band * per + k + 1, ar, br);
+        }
+    });
 }
 
 #[inline]
