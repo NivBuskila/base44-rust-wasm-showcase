@@ -45,6 +45,7 @@
 use crate::config::{Params, PARTICLE_STRIDE};
 use crate::field::{Grid, VecField};
 use crate::math::{decay, length, lerp, normalize, smoothstep};
+use crate::par;
 use crate::rng::Rng;
 
 /// Per-second decay applied to `heat`. Fast enough that an `Ignite` trail
@@ -348,140 +349,96 @@ impl Particles {
 
         let rate = finite_or(params.spawn_rate, 0.0).max(0.0);
         let per_frame = rate * dt;
-        let mut credit = (self.respawn_credit + per_frame).min(per_frame + 1.0);
+        let credit = (self.respawn_credit + per_frame).min(per_frame + 1.0);
 
-        // One linear pass, seven independent streams, no branch in the common
-        // case beyond the cull test.
-        //
-        // The per-particle cost is dominated by the two bilinear gathers RK2
-        // needs, which are dependent (the second samples the midpoint the
-        // first produced). Measured on a 2.8 GHz Xeon, one gather of both
-        // velocity components costs ~10.5 ns whether the grid fits in L1 or
-        // not, and the whole step ~58 ns; hand-pipelining two particles per
-        // iteration to overlap the chains made no difference there, so the
-        // simple form is what stays. On a core that does reorder across
-        // iterations there is nothing here to stop it: `advance` is pure and
-        // every iteration is independent.
-        let mut alive = 0usize;
-        for i in 0..self.active {
-            let life = self.life[i] - dt;
-            // The one branch worth taking: a starved pool would otherwise pay
-            // two bilinear gathers per frame for particles nobody can see.
-            let adv = if life > 0.0 {
-                frame.advance(self.x[i], self.y[i], self.vx[i], self.vy[i])
-            } else {
-                Advance::RECYCLE
-            };
-            alive += usize::from(self.commit(i, adv, life, &frame, &mut credit));
-        }
+        // The pool is cut into lanes — contiguous bands of every SoA stream —
+        // and each lane is advanced independently, on its own thread when the
+        // `parallel` feature is on. Nothing is shared between lanes: each gets
+        // its own RNG stream seeded from the pool's, and an equal slice of the
+        // respawn budget. With one thread this is exactly the old single pass.
+        let lane_len = par::chunk_len(self.active, LANE_MIN);
+        let mut lanes = self.lanes(lane_len, credit);
+        let alive = par::sum_mut(&mut lanes, |lane| lane.run(&frame));
 
-        self.respawn_credit = credit;
+        self.respawn_credit = lanes.iter().map(|l| l.credit).sum();
         self.alive = alive;
     }
 
-    /// Writes one particle's advanced state back, or recycles it.
-    ///
-    /// `life` is the already-aged lifetime and `adv` the candidate state from
-    /// [`Frame::advance`]. Returns whether the particle is alive afterwards, so
-    /// the caller's `alive` tally costs an add rather than a second pass.
-    #[inline(always)]
-    fn commit(&mut self, i: usize, adv: Advance, life: f32, f: &Frame, credit: &mut f32) -> bool {
-        if life > 0.0 && adv.ok {
-            // Speed from the displacement actually applied, which already
-            // includes fluid transport, the particle's own residual velocity
-            // and the curl swirl — no extra field sample needed.
-            let speed = length(
-                (adv.nx - self.x[i]) * f.inv_dt,
-                (adv.ny - self.y[i]) * f.inv_dt,
-            );
-            let floor = (speed * (1.0 / HEAT_SPEED_FULL)).min(1.0);
-
-            self.x[i] = adv.nx;
-            self.y[i] = adv.ny;
-            self.vx[i] = adv.ox;
-            self.vy[i] = adv.oy;
-            let cooled = self.heat[i] * f.heat_keep;
-            // Whichever is hotter: a spell's heat decaying away, or the
-            // ambient heat this particle's own motion earns it.
-            self.heat[i] = if floor > cooled {
-                cooled + (floor - cooled) * f.heat_rise
-            } else {
-                cooled
-            };
-            self.life[i] = life;
-            return true;
+    /// Splits the first `active` particles into lanes of `len`, handing each
+    /// an equal share of `credit` and a fresh RNG stream.
+    fn lanes(&mut self, len: usize, credit: f32) -> Vec<Lane<'_>> {
+        let n = self.active;
+        let count = n.div_ceil(len.max(1)).max(1);
+        let share = credit / count as f32;
+        let Self {
+            x,
+            y,
+            vx,
+            vy,
+            life,
+            max_life,
+            heat,
+            rng,
+            ..
+        } = self;
+        let streams = x[..n]
+            .chunks_mut(len)
+            .zip(y[..n].chunks_mut(len))
+            .zip(vx[..n].chunks_mut(len))
+            .zip(vy[..n].chunks_mut(len))
+            .zip(life[..n].chunks_mut(len))
+            .zip(max_life[..n].chunks_mut(len))
+            .zip(heat[..n].chunks_mut(len));
+        let mut out = Vec::with_capacity(count);
+        for ((((((x, y), vx), vy), life), max_life), heat) in streams {
+            out.push(Lane {
+                x,
+                y,
+                vx,
+                vy,
+                life,
+                max_life,
+                heat,
+                rng: Rng::new(rng.next_u64()),
+                credit: share,
+            });
         }
-        // Old age, out of the world, or inside the silhouette: all the same
-        // fate, and all subject to the same respawn budget.
-        if *credit >= 1.0 {
-            *credit -= 1.0;
-            return self.respawn(i, f);
-        }
-        // No budget: park it. Position is kept in bounds so a dead particle can
-        // never render off-screen if the shader ignores `life`, and the velocity
-        // is dropped so it does not resume mid-flight several frames later.
-        self.life[i] = 0.0;
-        self.vx[i] = 0.0;
-        self.vy[i] = 0.0;
-        self.heat[i] = 0.0;
-        self.x[i] = clamp_finite(self.x[i], f.maxx);
-        self.y[i] = clamp_finite(self.y[i], f.maxy);
-        false
+        out
     }
-
-    /// Scatters particle `i` to a fresh random position with a fresh jittered
-    /// lifetime, returning whether it came back alive. Uniform over the grid
-    /// rather than over the borders: the pool has to stay spatially uniform for
-    /// the fluid to be legible everywhere, and edge respawns leave a visible
-    /// dead band in the middle of the screen whenever the flow is slow.
-    ///
-    /// Every call spends one unit of budget whether or not it found a free
-    /// cell. Refunding a failed attempt instead would let a silhouette that
-    /// covers most of the frame put the *whole* pool through `RESPAWN_TRIES`
-    /// samples every frame; spending it caps the work at the budget and merely
-    /// thins the population while the obstacle is that large.
-    #[cold]
-    #[inline(never)]
-    fn respawn(&mut self, i: usize, frame: &Frame) -> bool {
-        let mut x = 0.0;
-        let mut y = 0.0;
-        let mut free = false;
-        for _ in 0..RESPAWN_TRIES {
-            x = self.rng.range(0.0, frame.maxx);
-            y = self.rng.range(0.0, frame.maxy);
-            if !frame.is_solid(x, y) {
-                free = true;
-                break;
-            }
-        }
-        self.x[i] = x;
-        self.y[i] = y;
-        self.vx[i] = 0.0;
-        self.vy[i] = 0.0;
-        self.heat[i] = 0.0;
-        self.max_life[i] = frame.life * self.rng.range(LIFE_JITTER.0, LIFE_JITTER.1);
-        self.life[i] = if free { self.max_life[i] } else { 0.0 };
-        free
-    }
-
     /// Packs `x, y, heat, life` per particle, with position normalised to
     /// `[0, 1]` against the grid the simulation runs on and `life` normalised
     /// against that particle's own lifetime.
     pub fn build_render_buffer(&mut self, grid_w: usize, grid_h: usize) {
         let sx = 1.0 / (grid_w - 1) as f32;
         let sy = 1.0 / (grid_h - 1) as f32;
-        for i in 0..self.active {
-            let o = i * PARTICLE_STRIDE;
-            let norm_life = if self.max_life[i] > 0.0 {
-                (self.life[i] / self.max_life[i]).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            self.render[o] = self.x[i] * sx;
-            self.render[o + 1] = self.y[i] * sy;
-            self.render[o + 2] = self.heat[i];
-            self.render[o + 3] = norm_life;
-        }
+        let n = self.active;
+        let lane = par::chunk_len(n, LANE_MIN);
+        let (x, y, heat, life, max_life) = (
+            &self.x[..n],
+            &self.y[..n],
+            &self.heat[..n],
+            &self.life[..n],
+            &self.max_life[..n],
+        );
+        par::chunks_mut(
+            &mut self.render[..n * PARTICLE_STRIDE],
+            lane * PARTICLE_STRIDE,
+            |c, out| {
+                let base = c * lane;
+                for (k, px) in out.chunks_exact_mut(PARTICLE_STRIDE).enumerate() {
+                    let i = base + k;
+                    let norm_life = if max_life[i] > 0.0 {
+                        (life[i] / max_life[i]).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    px[0] = x[i] * sx;
+                    px[1] = y[i] * sy;
+                    px[2] = heat[i];
+                    px[3] = norm_life;
+                }
+            },
+        );
     }
 
     /// The interleaved buffer, truncated to the active particle count.
@@ -726,6 +683,147 @@ fn curl_at(vel: &VecField, x: f32, y: f32) -> f32 {
     let dvdx = (vel.v.data[yi * w + xp] - vel.v.data[yi * w + xm]) * inv_dx;
     let dudy = (vel.u.data[yp * w + xi] - vel.u.data[ym * w + xi]) * inv_dy;
     dvdx - dudy
+}
+
+/// Smallest lane worth scheduling on its own thread: below this the bilinear
+/// gathers cost less than the task hand-off.
+const LANE_MIN: usize = 4_096;
+
+/// One contiguous band of the pool — every SoA stream for particles
+/// `[start, start + len)` — plus the private state advancing it needs.
+///
+/// Lanes never overlap, so any number of them can run at once without a lock:
+/// a lane reads only the shared, immutable [`Frame`] and writes only its own
+/// slices. The RNG is per lane so respawn positions never serialise on one
+/// generator, and the respawn budget is split up front rather than shared.
+struct Lane<'a> {
+    x: &'a mut [f32],
+    y: &'a mut [f32],
+    vx: &'a mut [f32],
+    vy: &'a mut [f32],
+    life: &'a mut [f32],
+    max_life: &'a mut [f32],
+    heat: &'a mut [f32],
+    rng: Rng,
+    /// Respawns this lane may still perform, in particles.
+    credit: f32,
+}
+
+impl Lane<'_> {
+    /// Advances every particle in the lane; returns how many are alive after.
+    ///
+    /// One linear pass, seven independent streams, no branch in the common
+    /// case beyond the cull test.
+    ///
+    /// The per-particle cost is dominated by the two bilinear gathers RK2
+    /// needs, which are dependent (the second samples the midpoint the
+    /// first produced). Measured on a 2.8 GHz Xeon, one gather of both
+    /// velocity components costs ~10.5 ns whether the grid fits in L1 or
+    /// not, and the whole step ~58 ns; hand-pipelining two particles per
+    /// iteration to overlap the chains made no difference there, so the
+    /// simple form is what stays. On a core that does reorder across
+    /// iterations there is nothing here to stop it: `advance` is pure and
+    /// every iteration is independent.
+    fn run(&mut self, frame: &Frame) -> usize {
+        let mut alive = 0usize;
+        for i in 0..self.x.len() {
+            let life = self.life[i] - frame.dt;
+            // The one branch worth taking: a starved pool would otherwise pay
+            // two bilinear gathers per frame for particles nobody can see.
+            let adv = if life > 0.0 {
+                frame.advance(self.x[i], self.y[i], self.vx[i], self.vy[i])
+            } else {
+                Advance::RECYCLE
+            };
+            alive += usize::from(self.commit(i, adv, life, frame));
+        }
+        alive
+    }
+
+    /// Writes one particle's advanced state back, or recycles it.
+    ///
+    /// `life` is the already-aged lifetime and `adv` the candidate state from
+    /// [`Frame::advance`]. Returns whether the particle is alive afterwards, so
+    /// the caller's `alive` tally costs an add rather than a second pass.
+    #[inline(always)]
+    fn commit(&mut self, i: usize, adv: Advance, life: f32, f: &Frame) -> bool {
+        if life > 0.0 && adv.ok {
+            // Speed from the displacement actually applied, which already
+            // includes fluid transport, the particle's own residual velocity
+            // and the curl swirl — no extra field sample needed.
+            let speed = length(
+                (adv.nx - self.x[i]) * f.inv_dt,
+                (adv.ny - self.y[i]) * f.inv_dt,
+            );
+            let floor = (speed * (1.0 / HEAT_SPEED_FULL)).min(1.0);
+
+            self.x[i] = adv.nx;
+            self.y[i] = adv.ny;
+            self.vx[i] = adv.ox;
+            self.vy[i] = adv.oy;
+            let cooled = self.heat[i] * f.heat_keep;
+            // Whichever is hotter: a spell's heat decaying away, or the
+            // ambient heat this particle's own motion earns it.
+            self.heat[i] = if floor > cooled {
+                cooled + (floor - cooled) * f.heat_rise
+            } else {
+                cooled
+            };
+            self.life[i] = life;
+            return true;
+        }
+        // Old age, out of the world, or inside the silhouette: all the same
+        // fate, and all subject to the same respawn budget.
+        if self.credit >= 1.0 {
+            self.credit -= 1.0;
+            return self.respawn(i, f);
+        }
+        // No budget: park it. Position is kept in bounds so a dead particle can
+        // never render off-screen if the shader ignores `life`, and the velocity
+        // is dropped so it does not resume mid-flight several frames later.
+        self.life[i] = 0.0;
+        self.vx[i] = 0.0;
+        self.vy[i] = 0.0;
+        self.heat[i] = 0.0;
+        self.x[i] = clamp_finite(self.x[i], f.maxx);
+        self.y[i] = clamp_finite(self.y[i], f.maxy);
+        false
+    }
+
+    /// Scatters particle `i` to a fresh random position with a fresh jittered
+    /// lifetime, returning whether it came back alive. Uniform over the grid
+    /// rather than over the borders: the pool has to stay spatially uniform for
+    /// the fluid to be legible everywhere, and edge respawns leave a visible
+    /// dead band in the middle of the screen whenever the flow is slow.
+    ///
+    /// Every call spends one unit of budget whether or not it found a free
+    /// cell. Refunding a failed attempt instead would let a silhouette that
+    /// covers most of the frame put the *whole* pool through `RESPAWN_TRIES`
+    /// samples every frame; spending it caps the work at the budget and merely
+    /// thins the population while the obstacle is that large.
+    #[cold]
+    #[inline(never)]
+    fn respawn(&mut self, i: usize, frame: &Frame) -> bool {
+        let mut x = 0.0;
+        let mut y = 0.0;
+        let mut free = false;
+        for _ in 0..RESPAWN_TRIES {
+            x = self.rng.range(0.0, frame.maxx);
+            y = self.rng.range(0.0, frame.maxy);
+            if !frame.is_solid(x, y) {
+                free = true;
+                break;
+            }
+        }
+        self.x[i] = x;
+        self.y[i] = y;
+        self.vx[i] = 0.0;
+        self.vy[i] = 0.0;
+        self.heat[i] = 0.0;
+        self.max_life[i] = frame.life * self.rng.range(LIFE_JITTER.0, LIFE_JITTER.1);
+        self.life[i] = if free { self.max_life[i] } else { 0.0 };
+        free
+    }
 }
 
 #[inline(always)]

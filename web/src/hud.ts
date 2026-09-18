@@ -28,6 +28,8 @@
  */
 
 import { FLUID_H, FLUID_W, MAX_PARTICLES, STAT } from './constants';
+import type { EngineTier } from './engine-loader';
+import { PRESETS, type ParamPreset } from './hud-presets';
 import type { HudCallbacks, HudStats, PerceptionStatus, ViewMode } from './types';
 
 /**
@@ -106,6 +108,7 @@ interface CellSpec {
 }
 
 const CELLS: readonly CellSpec[] = [
+  { id: 'engine', label: 'engine' },
   { id: 'particles', label: 'particles' },
   { id: 'energy', label: 'energy' },
   { id: 'speed', label: 'max speed' },
@@ -148,14 +151,14 @@ const PARAMS: readonly ParamSpec[] = [
   // Both dissipations clamp to 0..10 in Rust, but past ~3 per second the field
   // is gone inside a frame or two and the whole top of the travel is the same
   // black screen, so the slider stops where the range is still expressive.
-  { key: 'dye_dissipation', label: 'dye decay', min: 0, max: 3, step: 0.01, value: 0.55, fmt: d2 },
+  { key: 'dye_dissipation', label: 'dye decay', min: 0, max: 3, step: 0.01, value: 1, fmt: d2 },
   {
     key: 'velocity_dissipation',
     label: 'flow decay',
     min: 0,
     max: 2,
     step: 0.01,
-    value: 0.15,
+    value: 0.3,
     fmt: d2,
   },
   { key: 'hand_force', label: 'hand force', min: 0, max: 8, step: 0.05, value: 1, fmt: d2 },
@@ -242,6 +245,7 @@ const GESTURES: readonly GestureSpec[] = [
 const SHORTCUTS: readonly [string, string][] = [
   ['1 – 4', 'aether / camera / debug / particles'],
   ['C', 'camera feed behind the fluid'],
+  ['O', 'overdrive: the full 1M particle pool'],
   ['H', 'hide or show this panel'],
   ['R', 'reset the field'],
   ['?', 'this sheet'],
@@ -376,6 +380,7 @@ export class Hud {
   private readonly collapseBtn: HTMLButtonElement;
   private readonly fpsEl: HTMLElement;
   private readonly ambientEl: HTMLElement;
+  private readonly engineBadge: HTMLElement;
   private readonly meters: Meter[] = [];
   private readonly spark: HTMLCanvasElement;
   private readonly sparkCtx: CanvasRenderingContext2D | null;
@@ -394,6 +399,7 @@ export class Hud {
   private readonly camValue: HTMLElement;
   private readonly particleInput: HTMLInputElement;
   private readonly particleValue: HTMLElement;
+  private readonly presetBtns = new Map<string, HTMLButtonElement>();
 
   /** Frame-time history, newest last, as a fill-then-shift window. */
   private readonly history = new Float32Array(SPARK_SAMPLES);
@@ -404,6 +410,10 @@ export class Hud {
   private updates = 0;
 
   private cameraOn = true;
+  private overdriveOn = false;
+  private readonly overdriveBtn: HTMLButtonElement;
+  /** Slider position to restore when overdrive is switched off. */
+  private particlesBeforeOverdrive = 0;
   private collapsed = true;
   private hiddenAll = false;
   private helpOpen = false;
@@ -426,6 +436,7 @@ export class Hud {
     this.collapseBtn = this.q('[data-act="collapse"]');
     this.fpsEl = this.q('[data-fps]');
     this.ambientEl = this.q('[data-ambient]');
+    this.engineBadge = this.q('[data-engine]');
     this.spark = this.q('canvas.hud-spark');
     this.sparkCtx = this.spark.getContext('2d');
     this.warpValue = this.q('[data-warp-value]');
@@ -439,6 +450,7 @@ export class Hud {
     this.camValue = this.q('[data-camera-value]');
     this.particleInput = this.q('[data-particles]');
     this.particleValue = this.q('[data-particles-value]');
+    this.overdriveBtn = this.q('[data-act="overdrive"]');
 
     for (const m of METERS) {
       this.meters.push(
@@ -587,6 +599,18 @@ export class Hud {
     this.paintPerception(s.perception);
   }
 
+  /**
+   * Shows which engine build is running. Static for the session, so it is set
+   * once rather than re-derived on every `update`.
+   */
+  setEngineTier(tier: EngineTier): void {
+    const label = tier.name === 'threads' ? `${tier.threads} thr · simd` : '1 thr · simd';
+    this.cell('engine', label);
+    this.engineBadge.hidden = tier.name !== 'threads';
+    this.setText(this.engineBadge, `${tier.threads} threads`);
+    this.engineBadge.title = `Rust engine on ${tier.threads} worker threads (${tier.reason})`;
+  }
+
   /** Detaches global listeners. Not used by `main.ts`; here for teardown. */
   dispose(): void {
     window.removeEventListener('keydown', this.onKey);
@@ -610,6 +634,7 @@ export class Hud {
       this.modeBtns.push(btn);
     }
     this.camBtn.addEventListener('click', () => this.setCamera(!this.cameraOn));
+    this.overdriveBtn.addEventListener('click', () => this.setOverdrive(!this.overdriveOn));
     this.q('[data-act="reset"]').addEventListener('click', () => this.cb.onReset());
 
     this.particleInput.value = String(countToDetent(120_000));
@@ -621,8 +646,16 @@ export class Hud {
       this.setText(this.particleValue, thousands(detentToCount(this.particleInput.valueAsNumber)));
     });
     this.particleInput.addEventListener('change', () => {
+      // Dragging the slider by hand leaves overdrive; it is a preset, not a lock.
+      if (this.overdriveOn) this.setOverdrive(false, false);
       this.cb.onParticleCount(detentToCount(this.particleInput.valueAsNumber));
     });
+
+    for (const preset of PRESETS) {
+      const btn = this.q<HTMLButtonElement>(`[data-preset="${preset.id}"]`);
+      btn.addEventListener('click', () => this.applyPreset(preset));
+      this.presetBtns.set(preset.id, btn);
+    }
 
     for (const p of PARAMS) {
       const input = this.q<HTMLInputElement>(`[data-param="${p.key}"]`);
@@ -632,7 +665,32 @@ export class Hud {
         const v = Number.isFinite(raw) ? Math.min(p.max, Math.max(p.min, raw)) : p.value;
         this.setText(value, p.fmt(v));
         this.cb.onParam(p.key, v);
+        // Hand-tuning past a preset means the panel is no longer showing it.
+        this.markPreset(null);
       });
+    }
+  }
+
+  /**
+   * Writes every parameter of a preset, including the ones it does not name —
+   * those fall back to the slider's own default, so the result is the same
+   * whatever was set before, rather than a mix of two presets.
+   */
+  private applyPreset(preset: ParamPreset): void {
+    for (const p of PARAMS) {
+      const v = preset.values[p.key] ?? p.value;
+      const input = this.q<HTMLInputElement>(`[data-param="${p.key}"]`);
+      input.valueAsNumber = v;
+      this.setText(this.q(`[data-param-value="${p.key}"]`), p.fmt(v));
+      this.cb.onParam(p.key, v);
+    }
+    this.markPreset(preset.id);
+  }
+
+  /** Lights the active preset button, or none of them after a manual edit. */
+  private markPreset(id: string | null): void {
+    for (const [key, btn] of this.presetBtns) {
+      btn.setAttribute('aria-pressed', String(key === id));
     }
   }
 
@@ -657,6 +715,8 @@ export class Hud {
       this.setMode(mode.mode);
     } else if (e.key === 'c' || e.key === 'C') {
       this.setCamera(!this.cameraOn);
+    } else if (e.key === 'o' || e.key === 'O') {
+      this.setOverdrive(!this.overdriveOn);
     } else if (e.key === 'h' || e.key === 'H') {
       this.setHiddenAll(!this.hiddenAll);
     } else if (e.key === 'r' || e.key === 'R') {
@@ -686,6 +746,25 @@ export class Hud {
     this.camBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
     this.setText(this.camValue, on ? 'on' : 'off');
     this.cb.onToggleCamera(on);
+  }
+
+  /**
+   * Toggles the 1M-particle preset. `restoreSlider` is false when the user is
+   * the one moving the slider, so their new position is not overwritten.
+   */
+  private setOverdrive(on: boolean, restoreSlider = true): void {
+    if (on === this.overdriveOn) return;
+    this.overdriveOn = on;
+    this.overdriveBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (on) {
+      this.particlesBeforeOverdrive = this.particleInput.valueAsNumber;
+      this.particleInput.value = String(PARTICLE_DETENTS);
+      this.setText(this.particleValue, thousands(MAX_PARTICLES));
+    } else if (restoreSlider) {
+      this.particleInput.value = String(this.particlesBeforeOverdrive);
+      this.setText(this.particleValue, thousands(detentToCount(this.particlesBeforeOverdrive)));
+    }
+    this.cb.onOverdrive(on);
   }
 
   private setCollapsed(collapsed: boolean): void {
@@ -909,6 +988,16 @@ function svg(paths: string): string {
 
 /** The whole panel, built once. */
 function markup(): string {
+  const presetBtns = PRESETS.map(
+    (p) => `
+      <button
+        type="button"
+        class="seg-btn"
+        data-preset="${p.id}"
+        aria-pressed="${p.id === 'default'}"
+        title="${esc(p.hint)}"
+      >${esc(p.label)}</button>`,
+  ).join('');
   const modeBtns = MODES.map(
     (m) => `
       <button
@@ -947,6 +1036,7 @@ function markup(): string {
         </button>
       </div>
       <span class="hud-badge" data-ambient hidden>ambient</span>
+      <span class="hud-badge is-engine" data-engine hidden></span>
     </header>
 
     <div class="hud-body">
@@ -972,6 +1062,9 @@ function markup(): string {
           <input type="range" data-particles min="0" max="${PARTICLE_DETENTS}" step="1" value="0" aria-label="Particle count" />
           <span class="p-val" data-particles-value>120k</span>
         </label>
+        <button type="button" class="row-btn is-overdrive" data-act="overdrive" aria-pressed="false">
+          <span>overdrive · 1M particles</span><b>O</b>
+        </button>
         <button type="button" class="row-btn is-action" data-act="reset">
           <span>reset the field</span><b>R</b>
         </button>
@@ -991,6 +1084,7 @@ function markup(): string {
 
       <details class="hud-sec hud-adv">
         <summary>engine parameters</summary>
+        <div class="seg is-presets" role="group" aria-label="Parameter presets">${presetBtns}</div>
         ${PARAMS.map(paramRow).join('')}
       </details>
     </div>

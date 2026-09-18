@@ -334,6 +334,30 @@ impl VecField {
         0.5 * sum / n
     }
 
+    /// Scales down any cell whose speed exceeds `limit`, leaving slower cells
+    /// untouched.
+    ///
+    /// A per-cell scale is not divergence-free, unlike the uniform one in
+    /// `scale`, so this leaves a little divergence behind wherever it bites —
+    /// the next step's projection removes it. That is the cheaper trade: the
+    /// alternative is a field that ratchets upward for as long as someone keeps
+    /// gesturing, until advection outruns the grid and every colour smears into
+    /// one flat wash.
+    pub fn clamp_speed(&mut self, limit: f32) {
+        if !(limit > 0.0) {
+            return;
+        }
+        let max_sq = limit * limit;
+        for (u, v) in self.u.data.iter_mut().zip(&mut self.v.data) {
+            let sq = *u * *u + *v * *v;
+            if sq > max_sq {
+                let k = limit / sq.sqrt();
+                *u *= k;
+                *v *= k;
+            }
+        }
+    }
+
     pub fn max_speed(&self) -> f32 {
         self.u
             .data

@@ -6,20 +6,16 @@
 
 /// Fluid simulation grid width, in cells.
 ///
-/// 192x108 keeps the 16:9 aspect — so cells are square in screen space and no
-/// stage needs an anisotropic correction — and costs 56% of the cells that
-/// 256x144 does. Measured, that is most of the difference between a 28 ms and a
-/// 16 ms engine step in wasm.
-///
-/// The visible loss is small because the dye field is never shown at its own
-/// resolution: the renderer upscales it with a wide tap pattern and
-/// domain-warped noise, and all the high-frequency detail the eye reads comes
-/// from the 120k particles, which are resolution-independent. Doubling the dye
-/// grid instead would buy sharper *smoke edges* at the cost of the frame rate
-/// that makes the whole thing feel alive.
-pub const FLUID_W: usize = 192;
+/// 256x144 keeps the 16:9 aspect — so cells are square in screen space and no
+/// stage needs an anisotropic correction — and is the simulation-quality
+/// setting: 1.8x the cells of 192x108, which is what sharp smoke edges and
+/// resolvable small vortices are made of. It costs it, too: measured in wasm
+/// the engine step goes from ~16 ms to ~28 ms, so a loaded machine leans on
+/// `performance-governor.ts`, which drops internal render resolution and
+/// pressure iterations before it ever touches the grid.
+pub const FLUID_W: usize = 256;
 /// Fluid simulation grid height, in cells.
-pub const FLUID_H: usize = 108;
+pub const FLUID_H: usize = 144;
 /// Number of cells in the fluid / dye / obstacle grids.
 pub const FLUID_CELLS: usize = FLUID_W * FLUID_H;
 
@@ -32,7 +28,12 @@ pub const FLOW_H: usize = 72;
 pub const FLOW_CELLS: usize = FLOW_W * FLOW_H;
 
 /// Hard ceiling on particles; the render buffer is allocated once at this size.
-pub const MAX_PARTICLES: usize = 220_000;
+///
+/// One million is the "overdrive" demo ceiling: eleven f32 streams per
+/// particle (seven SoA fields plus the four-float render buffer) is 44 MB of
+/// linear memory, allocated once at boot and never resized. The normal session
+/// runs at [`DEFAULT_PARTICLES`]; overdrive activates the whole pool.
+pub const MAX_PARTICLES: usize = 1_000_000;
 /// Particle count the engine starts at.
 pub const DEFAULT_PARTICLES: usize = 120_000;
 /// Floats per particle in the render buffer: `x, y, heat, life`.
@@ -106,7 +107,14 @@ pub struct Params {
 impl Default for Params {
     fn default() -> Self {
         Self {
-            velocity_dissipation: 0.15,
+            // 0.15 was the original value and it is the bug: momentum from a
+            // held gesture kept accumulating for tens of seconds, so the field
+            // sat permanently blown out instead of settling between gestures.
+            // 0.5 fixed that but also ate the swirl the solver produces, so
+            // this is the compromise — a push coasts noticeably longer than at
+            // 0.5 (the e-folding time goes 2 s -> 3.3 s) while the decay is
+            // still twice the rate that let the field ratchet up.
+            velocity_dissipation: 0.3,
             // Raised from 0.55 after looking at it: dye accumulates wherever a
             // gesture dwells, and at 0.55 a held vortex pinned a whole plume at
             // the tone-map ceiling — one flat saturated blob with none of the

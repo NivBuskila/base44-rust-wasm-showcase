@@ -15,10 +15,21 @@
 
 import './styles.css';
 
-import init, { AetherEngine } from './wasm/aether';
+import type { AetherEngine } from './wasm/aether';
 import { Camera, CameraError } from './camera';
+import { ensureCrossOriginIsolation } from './cross-origin-isolation';
+import { loadEngine, type EngineTier } from './engine-loader';
 import { Hud } from './hud';
+import {
+  DEFAULT_SPAWN_RATE,
+  OVERDRIVE_PARTICLES,
+  OVERDRIVE_SPAWN_RATE,
+  OverdriveBanner,
+} from './overdrive';
+import { PerformanceGovernor } from './performance-governor';
+import { QaRecorder, clearQaSession, readQaSession, type QaSession } from './qa-recorder';
 import { MediaPipePerception } from './perception';
+import { WorkerPerception } from './perception-worker-client';
 import { Renderer } from './render/renderer';
 import { PARTICLE_STRIDE, STAT, assertLayout } from './constants';
 import type { PerceptionSource, PerceptionStatus, RenderFrame, ViewMode } from './types';
@@ -72,6 +83,13 @@ const PERCEPTION_GIVE_UP_STRIKES = 3;
  */
 const PERCEPTION_DUTY = 0.3;
 
+/**
+ * `Params::default().pressure_iters` from `crates/aether-core/src/config.rs`.
+ * The solver's iteration count is not HUD-exposed, so this is what the adaptive
+ * quality ladder treats as 100%.
+ */
+const DEFAULT_PRESSURE_ITERS = 28;
+
 /** Rolling window for the fps readout. */
 const FPS_SMOOTHING = 0.9;
 
@@ -87,6 +105,18 @@ class App {
   private readonly memory: WebAssembly.Memory;
   private readonly renderer: Renderer;
   private readonly hud: Hud;
+  /** Which engine build is running and on how many threads. */
+  readonly tier: EngineTier;
+  private readonly overdrive: OverdriveBanner;
+  /** Adaptive quality; keeps the frame rate up on slower devices. */
+  private readonly governor: PerformanceGovernor;
+  /**
+   * Records the session for later inspection. Only a real tab runs the loop, so
+   * this is the only trace a QA pass leaves behind.
+   */
+  private readonly qa = new QaRecorder();
+  /** Particle count to return to when overdrive is switched off. */
+  private particlesBeforeOverdrive = 0;
   private readonly camera = new Camera();
 
   private perception: PerceptionSource | null = null;
@@ -107,6 +137,11 @@ class App {
   private lastCameraTime = -1;
   private lastCameraMs = 0;
   private lastPerceptionMs = 0;
+  /**
+   * True when the source runs the models on a worker, so `process` is cheap and
+   * self-pacing and the render loop should drain it every frame.
+   */
+  private perceptionOffThread = false;
   /** Current inference cadence, adapted from measured cost. */
   private perceptionIntervalMs = PERCEPTION_MIN_INTERVAL_MS;
   /** Smoothed wall time one `process` call costs the render loop. */
@@ -122,12 +157,33 @@ class App {
   private stepMs = 0;
   private renderMs = 0;
   private inferenceMs = 0;
+  /** Camera pump: grabbing the video frame and handing it to perception. */
+  private cameraMs = 0;
+  /** HUD DOM update, which touches layout and is not free at 60 Hz. */
+  private hudMs = 0;
+  /** Everything the callback did, so the measured rows can be checked to sum. */
+  private frameMs = 0;
+  /**
+   * The gap the callback did not spend: wall time between frames minus the work
+   * of the previous one. `step`/`render`/`infer` summing far below the frame
+   * period means the cost is here — GPU work the driver finishes after the GL
+   * calls return, compositing, or another task blocking the loop — and without
+   * this row that time is invisible and the HUD appears to contradict the frame
+   * rate it sits next to.
+   */
+  private outsideMs = 0;
   private frames = 0;
 
-  constructor(engine: AetherEngine, memory: WebAssembly.Memory, renderer: Renderer) {
+  constructor(
+    engine: AetherEngine,
+    memory: WebAssembly.Memory,
+    renderer: Renderer,
+    tier: EngineTier,
+  ) {
     this.engine = engine;
     this.memory = memory;
     this.renderer = renderer;
+    this.tier = tier;
     this.views = this.makeViews();
     this.hud = new Hud(document.getElementById('hud')!, {
       onParam: (key, value) => {
@@ -139,7 +195,10 @@ class App {
         // Resizing the pool can reallocate, which detaches every view.
         this.engine.set_particle_count(n);
         this.views = this.makeViews();
+        // The user's number is the new 100% for the quality ladder.
+        this.governor.rebase(DEFAULT_PRESSURE_ITERS, n);
       },
+      onOverdrive: (on) => this.setOverdrive(on),
       onViewMode: (mode) => {
         this.mode = mode;
       },
@@ -151,6 +210,23 @@ class App {
         this.views = this.makeViews();
       },
     });
+    this.governor = new PerformanceGovernor(
+      {
+        setPressureIters: (iters) => {
+          this.engine.set_param('pressure_iters', iters);
+        },
+        setParticleCount: (count) => {
+          this.engine.set_particle_count(count);
+          this.views = this.makeViews();
+        },
+        setRenderScale: (scale) => this.renderer.setQualityScale(scale),
+      },
+      DEFAULT_PRESSURE_ITERS,
+      engine.particle_count(),
+    );
+    // After the HUD, which owns and rewrites #hud's markup.
+    this.overdrive = new OverdriveBanner(document.getElementById('hud')!, tier);
+    this.hud.setEngineTier(tier);
   }
 
   /**
@@ -248,8 +324,12 @@ class App {
       this.views = this.makeViews();
     }
 
+    const frameStart = performance.now();
+    this.outsideMs = Math.max(0, realDt * 1000 - this.frameMs);
+
     this.pumpCamera(nowMs);
     this.pumpPerception(nowMs);
+    this.cameraMs = performance.now() - frameStart;
 
     const stepStart = performance.now();
     this.engine.step(simDt);
@@ -260,6 +340,9 @@ class App {
     this.renderer.render(this.buildFrame(stats));
     this.renderMs = performance.now() - renderStart;
 
+    this.governor.update(this.fps);
+    this.overdrive.update(stats, this.fps, this.stepMs);
+    const hudStart = performance.now();
     this.hud.update({
       fps: this.fps,
       stepMs: this.stepMs,
@@ -269,6 +352,12 @@ class App {
       spells: [this.engine.spell_name(0), this.engine.spell_name(1)],
       perception: this.perceptionStatus,
     });
+    this.hudMs = performance.now() - hudStart;
+    this.frameMs = performance.now() - frameStart;
+
+    // Last in the frame: the recorder reads the values this frame just produced,
+    // and it rate-limits itself to 2 Hz internally.
+    this.qa.sample(this.diagnostics);
   };
 
   /** Feeds the luma plane, but only when the camera produced a new frame. */
@@ -290,10 +379,24 @@ class App {
   /** Runs inference at a cadence derived from its own measured cost. */
   private pumpPerception(nowMs: number): void {
     if (!this.perception || !this.cameraAvailable || !this.camera.hasFrame) return;
-    if (nowMs - this.lastPerceptionMs < this.perceptionIntervalMs) return;
 
+    // Off-thread perception paces itself: the worker takes one frame at a time,
+    // and `process` only decodes a bitmap and hands back whatever has already
+    // come back. Throttling it here would do nothing but hold a finished result
+    // for up to a full interval before the engine sees it — pure added latency,
+    // which is what made gestures feel late. The interval gate stays for the
+    // inline source, where every call really does run the models in this frame.
+    if (
+      !this.perceptionOffThread &&
+      nowMs - this.lastPerceptionMs < this.perceptionIntervalMs
+    ) {
+      return;
+    }
+
+    // Time since the last result actually reached the engine — not since the
+    // last attempt — because that is the interval the gesture velocities are
+    // differentiated over.
     const dt = this.lastPerceptionMs === 0 ? 1 / 30 : (nowMs - this.lastPerceptionMs) / 1000;
-    this.lastPerceptionMs = nowMs;
 
     let result;
     const start = performance.now();
@@ -312,7 +415,7 @@ class App {
     // matters for pacing is the wall time this call cost *the render loop*,
     // including anything the source does around the inference itself.
     const cost = performance.now() - start;
-    if (result) {
+    if (result && !this.perceptionOffThread) {
       this.inferenceCostMs = this.inferenceCostMs * 0.8 + cost * 0.2;
       const wanted = this.inferenceCostMs / PERCEPTION_DUTY;
       this.perceptionIntervalMs = Math.min(
@@ -340,8 +443,14 @@ class App {
       }
     }
     if (!result) return;
+    this.lastPerceptionMs = nowMs;
 
-    this.inferenceMs = result.latencyMs;
+    // `cost`, not `result.latencyMs`: the HUD row sits in the frame budget, so
+    // it must report what the render loop actually paid. With perception on a
+    // worker the model still takes ~26 ms, but the loop pays only the bitmap
+    // decode — charging it the full inference would show a blown budget on a
+    // frame that comfortably made 60 Hz.
+    this.inferenceMs = cost;
     this.lastHands = result.hands;
     this.engine.push_hands(result.hands, dt);
     this.engine.push_pose(result.pose, dt);
@@ -397,8 +506,29 @@ class App {
    * Rust optical-flow path keeps driving the fluid, so the app stays fully
    * responsive and the HUD explains what is missing.
    */
+  /**
+   * Prefers perception on a worker, falling back to the inline source.
+   *
+   * Off-thread is strictly better — a 26 ms inference stops being a 26 ms hole
+   * in the render loop — but it needs module workers and `createImageBitmap`,
+   * and the worker can fail to start for reasons the page cannot inspect. So
+   * the inline path stays as the fallback rather than the default: same models,
+   * same results, just paid for out of the frame budget.
+   */
+  private async buildPerception(): Promise<PerceptionSource> {
+    const offloaded = new WorkerPerception();
+    try {
+      await offloaded.init();
+      return offloaded;
+    } catch (err) {
+      console.warn('[aether] perception worker unusable, running inference inline', err);
+      offloaded.close();
+      return new MediaPipePerception();
+    }
+  }
+
   private async attachPerception(): Promise<void> {
-    const perception = new MediaPipePerception();
+    const perception = await this.buildPerception();
     try {
       await perception.init();
       // A scripted source may have been injected while the models loaded
@@ -409,6 +539,7 @@ class App {
         return;
       }
       this.perception = perception;
+      this.perceptionOffThread = perception instanceof WorkerPerception;
       this.perceptionStatus = perception.status;
     } catch (err) {
       const reason = `Vision models unavailable: ${String(err)}`;
@@ -431,6 +562,7 @@ class App {
     this.engine.clear_perception();
     this.lastHands = null;
     this.lastPerceptionMs = 0;
+    this.perceptionOffThread = source instanceof WorkerPerception;
     // A scripted source has nothing to do with the real one's cost, so the
     // adaptive cadence has to start over or a slow MediaPipe load would leave
     // an injected test source throttled to once every two seconds.
@@ -457,16 +589,34 @@ class App {
       stepMs: this.stepMs,
       renderMs: this.renderMs,
       inferenceMs: this.inferenceMs,
+      /** Camera pump, inclusive of the bitmap decode charged to `inferenceMs`. */
+      cameraMs: this.cameraMs,
+      hudMs: this.hudMs,
+      frameMs: this.frameMs,
+      outsideMs: this.outsideMs,
       cameraAvailable: this.cameraAvailable,
       perception: this.perceptionStatus,
       stats: Array.from(this.engine.stats()),
       spells: [this.engine.spell_name(0), this.engine.spell_name(1)] as [string, string],
       particleCount: this.engine.particle_count(),
       mode: this.mode,
+      engine: this.tier,
       /** Effective inference cadence in Hz, after adaptive throttling. */
       perceptionHz: 1000 / this.perceptionIntervalMs,
       inferenceCostMs: this.inferenceCostMs,
+      /** Adaptive quality rung; 0 is full quality. */
+      qualityTier: this.governor.level,
     };
+  }
+
+  /** The session record so far, without waiting for the next storage write. */
+  qaSession(): QaSession {
+    return this.qa.summary();
+  }
+
+  /** Flushes the record immediately — e.g. before closing the tab. */
+  flushQaSession(): void {
+    this.qa.persist();
   }
 
   get rawEngine(): AetherEngine {
@@ -489,6 +639,29 @@ class App {
   }
 
   /**
+   * Overdrive: the full 1M pool plus a spawn rate that fills it. Off restores
+   * the pool size the user had and the default spawn rate. Reallocation
+   * detaches views, hence the rebuild.
+   */
+  setOverdrive(on: boolean): void {
+    if (on === this.overdrive.active) return;
+    if (on) {
+      this.particlesBeforeOverdrive = this.engine.particle_count();
+      this.engine.set_particle_count(OVERDRIVE_PARTICLES);
+      this.engine.set_param('spawn_rate', OVERDRIVE_SPAWN_RATE);
+    } else {
+      this.engine.set_particle_count(this.particlesBeforeOverdrive);
+      this.engine.set_param('spawn_rate', DEFAULT_SPAWN_RATE);
+    }
+    this.views = this.makeViews();
+    // Overdrive is a ceiling demo: quality must not be pulled out from under it,
+    // and switching back restores the pool the user had, which is the new base.
+    this.governor.setPaused(on);
+    if (!on) this.governor.rebase(DEFAULT_PRESSURE_ITERS, this.engine.particle_count());
+    this.overdrive.setActive(on);
+  }
+
+  /**
    * Mean luminance of the last rendered frame. Expensive — see `diagnostics`.
    */
   luminance(): number {
@@ -507,6 +680,12 @@ export interface AetherTestHooks {
   /** Framebuffer readback; do not poll this on every frame. */
   luminance(): number;
   reset(): void;
+  /** The live session record from this tab. */
+  qaSession(): QaSession;
+  /** The last session persisted on this origin, from any tab. */
+  lastQaSession(): QaSession | null;
+  /** Discards the persisted record. */
+  clearQaSession(): void;
 }
 
 declare global {
@@ -529,9 +708,12 @@ async function boot(): Promise<void> {
   };
 
   try {
-    setStatus('loading the engine…');
-    const wasm = await init();
-    const engine = new AetherEngine(SEED);
+    // Must precede loadEngine: it decides the tier from `crossOriginIsolated`,
+    // and this is what can still turn that true.
+    await ensureCrossOriginIsolation();
+
+    const loaded = await loadEngine(setStatus);
+    const engine = new loaded.module.AetherEngine(SEED);
     assertLayout(engine.layout());
 
     const canvas = document.getElementById('stage');
@@ -540,7 +722,7 @@ async function boot(): Promise<void> {
     setStatus('starting the renderer…');
     const renderer = new Renderer(canvas);
 
-    const app = new App(engine, wasm.memory, renderer);
+    const app = new App(engine, loaded.memory, renderer, loaded.tier);
     window.__aether = {
       app,
       diagnostics: () => app.diagnostics,
@@ -550,7 +732,14 @@ async function boot(): Promise<void> {
       forceMode: (mode) => app.forceMode(mode),
       luminance: () => app.luminance(),
       reset: () => engine.reset(),
+      qaSession: () => app.qaSession(),
+      lastQaSession: () => readQaSession(),
+      clearQaSession,
     };
+
+    // A tab is usually closed rather than idled out, and the 2 Hz writer may be
+    // up to two seconds behind when that happens.
+    window.addEventListener('pagehide', () => app.flushQaSession());
 
     await app.start(setStatus);
     bootEl?.classList.add('done');

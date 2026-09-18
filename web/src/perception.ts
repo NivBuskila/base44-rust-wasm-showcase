@@ -539,6 +539,23 @@ export interface PerceptionDiagnostics {
 }
 
 export class MediaPipePerception implements PerceptionSource {
+  /**
+   * When false, the duty-cycle limiter is disabled.
+   *
+   * The limiter exists for one reason: inference is synchronous, so on the main
+   * thread an expensive pass stalls the render loop and rationing is the only
+   * way to keep the app alive. Inside `perception.worker.ts` none of that
+   * applies — the worker blocks nobody, and its client already keeps exactly
+   * one inference in flight. Rationing there only inserts idle time between
+   * landmarks: at a 60 ms pass it drops gestures from ~16 Hz to ~6 Hz, felt
+   * directly as hands lagging behind the fluid they are supposed to push.
+   */
+  private readonly rationInference: boolean;
+
+  constructor(options: { rationInference?: boolean } = {}) {
+    this.rationInference = options.rationInference ?? true;
+  }
+
   private state: PerceptionStatus = { kind: 'loading' };
   private readonly hands = new Float32Array(HAND_BUFFER);
   private readonly pose = new Float32Array(POSE_STRIDE);
@@ -682,15 +699,31 @@ export class MediaPipePerception implements PerceptionSource {
    * both wasted work and a graph error.
    */
   process(video: HTMLVideoElement, timestampMs: number): PerceptionFrame | null {
-    const recognizer = this.recognizer;
-    const landmarker = this.landmarker;
-    if (!recognizer || !landmarker) return null;
-    if (performance.now() < this.nextRunMs) return null;
     if (video.readyState < 2 || video.videoWidth === 0 || video.videoHeight === 0) return null;
 
     const videoTime = video.currentTime;
     if (videoTime === this.lastVideoTime) return null;
     this.lastVideoTime = videoTime;
+
+    return this.processSource(video, timestampMs);
+  }
+
+  /**
+   * Runs both models on an already-decoded frame.
+   *
+   * Split out of `process` so `perception.worker.ts` can feed the `ImageBitmap`
+   * it was handed instead of a video element it does not have. The freshness
+   * check stays in `process`, because only whoever owns the video can tell
+   * whether `currentTime` advanced.
+   */
+  processSource(
+    source: ImageBitmap | HTMLVideoElement,
+    timestampMs: number,
+  ): PerceptionFrame | null {
+    const recognizer = this.recognizer;
+    const landmarker = this.landmarker;
+    if (!recognizer || !landmarker) return null;
+    if (performance.now() < this.nextRunMs) return null;
 
     const stamp = nextTimestamp(this.lastStamp, timestampMs);
     this.lastStamp = stamp;
@@ -702,8 +735,8 @@ export class MediaPipePerception implements PerceptionSource {
     let count = 0;
     let mask: MaskFrame | null = null;
     try {
-      const handResult = recognizer.recognizeForVideo(video, stamp);
-      const poseResult = landmarker.detectForVideo(video, stamp);
+      const handResult = recognizer.recognizeForVideo(source, stamp);
+      const poseResult = landmarker.detectForVideo(source, stamp);
       try {
         count = readDetections(handResult, this.dets);
         // An empty pose buffer is a result, not a non-result: the engine needs
@@ -754,6 +787,7 @@ export class MediaPipePerception implements PerceptionSource {
 
   /** Idle time the duty-cycle limiter owes after an inference costing `costMs`. */
   private gap(): number {
+    if (!this.rationInference) return 0;
     return this.costMs <= BUDGET_MS ? 0 : this.costMs * (1 / MAX_DUTY - 1);
   }
 

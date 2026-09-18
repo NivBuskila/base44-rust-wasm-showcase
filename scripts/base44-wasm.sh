@@ -9,14 +9,17 @@ if ! command -v wasm-pack >/dev/null 2>&1; then
 fi
 
 touch /tmp/aether-wasm-built
+# Baseline first so the healthcheck passes as soon as the app can run at all;
+# the threaded engine (nightly, build-std) follows and is optional.
 bash scripts/build-wasm.sh release
 touch /tmp/aether-wasm-ready
+bash scripts/build-wasm.sh release --threads || echo 'threaded engine build failed; running single-threaded' >&2
 
 while sleep 2; do
   if find crates Cargo.toml Cargo.lock scripts/build-wasm.sh -type f \
     -newer /tmp/aether-wasm-built -print -quit | grep -q .; then
     touch /tmp/aether-wasm-built
-    if ! bash scripts/build-wasm.sh release; then
+    if ! bash scripts/build-wasm.sh release --both; then
       echo 'WASM rebuild failed; fix the source to retry.' >&2
     fi
   fi

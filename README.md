@@ -65,6 +65,38 @@ npm run dev              # builds the wasm, then serves on :5173
 
 Open the page and allow camera access. Show your hands.
 
+### The multithreaded engine
+
+`npm run dev` builds the baseline engine: single-threaded, SIMD128. A second
+build, `scripts/build-wasm.sh --threads`, compiles the same crate with the
+`parallel` feature: the fluid kernels and the particle system run on a
+[rayon](https://github.com/rayon-rs/rayon) pool of Web Workers over shared
+WASM linear memory. The engine picks it at boot whenever the page is
+cross-origin isolated (the dev server sends COOP/COEP for this) and falls back
+to the baseline otherwise, so nothing breaks in an embedded frame or an old
+browser. `?engine=single` forces the baseline for side-by-side comparison; the
+HUD shows the tier and thread count either way.
+
+The threaded build needs the nightly toolchain, because `std` itself has to be
+recompiled with atomics:
+
+```bash
+rustup toolchain install nightly -c rust-src -t wasm32-unknown-unknown
+scripts/build-wasm.sh release --both     # baseline into web/src/wasm, threads into web/src/wasm-mt
+```
+
+The script installs nightly on demand and treats a failed threaded build as a
+warning, so a machine without it still gets a working app.
+
+Isolation is the part that usually bites. `SharedArrayBuffer` requires both
+`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy`,
+and hosts or preview proxies routinely forward the first while dropping the
+second — isolation then fails silently and the HUD stays on `1 thr`. Since
+headers cannot be set from the page, `public/coi-serviceworker.js` re-attaches
+both from a Service Worker and the app reloads once to pick them up. Inside an
+iframe this is skipped: isolation is a property of the whole frame tree, so an
+embedded page follows its host and runs single-threaded.
+
 Without `fetch:models` the app loads the models from Google's CDN on first run,
 so it works out of the box; fetching them locally just makes it work offline and
 start faster.
