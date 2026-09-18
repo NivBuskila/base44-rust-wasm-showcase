@@ -102,14 +102,19 @@ const VISCOSITY_EPSILON: f32 = 1e-4;
 /// A hand push peaks around 40-60 here, so this is headroom rather than a
 /// governor on ordinary motion; it exists only to stop the field ratcheting up
 /// without bound while gestures keep feeding it.
-const MAX_CELL_SPEED: f32 = 110.0;
+///
+/// In *cells* per second, so it tracks the grid: raising the resolution to
+/// 256x144 raised this and [`MAX_CONFINE_IMPULSE`] by the same 4/3 the grid
+/// grew by, leaving both ceilings at the screen-relative speed they were tuned
+/// at.
+const MAX_CELL_SPEED: f32 = 147.0;
 
 /// Ceiling on the velocity change one confinement step may apply, in cells/s.
 ///
 /// Confinement is an anti-dissipation term — it *adds* energy — so an
 /// unbounded version turns one fast gesture into an explosion a few frames
 /// later, on exactly the frames where `dt` also spikes.
-const MAX_CONFINE_IMPULSE: f32 = 50.0;
+const MAX_CONFINE_IMPULSE: f32 = 67.0;
 
 /// Relaxation factor for the pressure sweep.
 ///
