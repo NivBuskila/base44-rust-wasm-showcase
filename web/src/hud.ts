@@ -29,6 +29,7 @@
 
 import { FLUID_H, FLUID_W, MAX_PARTICLES, STAT } from './constants';
 import type { EngineTier } from './engine-loader';
+import { PRESETS, type ParamPreset } from './hud-presets';
 import type { HudCallbacks, HudStats, PerceptionStatus, ViewMode } from './types';
 
 /**
@@ -398,6 +399,7 @@ export class Hud {
   private readonly camValue: HTMLElement;
   private readonly particleInput: HTMLInputElement;
   private readonly particleValue: HTMLElement;
+  private readonly presetBtns = new Map<string, HTMLButtonElement>();
 
   /** Frame-time history, newest last, as a fill-then-shift window. */
   private readonly history = new Float32Array(SPARK_SAMPLES);
@@ -649,6 +651,12 @@ export class Hud {
       this.cb.onParticleCount(detentToCount(this.particleInput.valueAsNumber));
     });
 
+    for (const preset of PRESETS) {
+      const btn = this.q<HTMLButtonElement>(`[data-preset="${preset.id}"]`);
+      btn.addEventListener('click', () => this.applyPreset(preset));
+      this.presetBtns.set(preset.id, btn);
+    }
+
     for (const p of PARAMS) {
       const input = this.q<HTMLInputElement>(`[data-param="${p.key}"]`);
       const value = this.q(`[data-param-value="${p.key}"]`);
@@ -657,7 +665,32 @@ export class Hud {
         const v = Number.isFinite(raw) ? Math.min(p.max, Math.max(p.min, raw)) : p.value;
         this.setText(value, p.fmt(v));
         this.cb.onParam(p.key, v);
+        // Hand-tuning past a preset means the panel is no longer showing it.
+        this.markPreset(null);
       });
+    }
+  }
+
+  /**
+   * Writes every parameter of a preset, including the ones it does not name —
+   * those fall back to the slider's own default, so the result is the same
+   * whatever was set before, rather than a mix of two presets.
+   */
+  private applyPreset(preset: ParamPreset): void {
+    for (const p of PARAMS) {
+      const v = preset.values[p.key] ?? p.value;
+      const input = this.q<HTMLInputElement>(`[data-param="${p.key}"]`);
+      input.valueAsNumber = v;
+      this.setText(this.q(`[data-param-value="${p.key}"]`), p.fmt(v));
+      this.cb.onParam(p.key, v);
+    }
+    this.markPreset(preset.id);
+  }
+
+  /** Lights the active preset button, or none of them after a manual edit. */
+  private markPreset(id: string | null): void {
+    for (const [key, btn] of this.presetBtns) {
+      btn.setAttribute('aria-pressed', String(key === id));
     }
   }
 
@@ -955,6 +988,16 @@ function svg(paths: string): string {
 
 /** The whole panel, built once. */
 function markup(): string {
+  const presetBtns = PRESETS.map(
+    (p) => `
+      <button
+        type="button"
+        class="seg-btn"
+        data-preset="${p.id}"
+        aria-pressed="${p.id === 'default'}"
+        title="${esc(p.hint)}"
+      >${esc(p.label)}</button>`,
+  ).join('');
   const modeBtns = MODES.map(
     (m) => `
       <button
@@ -1041,6 +1084,7 @@ function markup(): string {
 
       <details class="hud-sec hud-adv">
         <summary>engine parameters</summary>
+        <div class="seg is-presets" role="group" aria-label="Parameter presets">${presetBtns}</div>
         ${PARAMS.map(paramRow).join('')}
       </details>
     </div>
