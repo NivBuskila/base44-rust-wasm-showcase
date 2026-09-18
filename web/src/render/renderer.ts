@@ -244,6 +244,8 @@ export class Renderer {
   private pixelBudget = SCENE_PIXEL_BUDGET;
   /** `?rscale=` override, which wins over the budget. */
   private readonly pinnedScale: number | null;
+  /** Adaptive multiplier on the budgeted scale; 1 until the governor lowers it. */
+  private qualityScale = 1;
 
   /** Video texture allocation state; `0` means "not allocated yet". */
   private videoTexW = 0;
@@ -435,6 +437,19 @@ export class Renderer {
 
   // ------------------------------------------------------------------ size
 
+  /**
+   * Sets the adaptive resolution multiplier and re-sizes the scene targets.
+   *
+   * Separate from `pixelBudget`, which is a static property of the context:
+   * this one tracks how the frame rate is actually doing.
+   */
+  setQualityScale(scale: number): void {
+    const next = clamp(scale, MIN_SCENE_SCALE, 1);
+    if (next === this.qualityScale) return;
+    this.qualityScale = next;
+    this.resize();
+  }
+
   /** Matches the drawing buffer and every target to the CSS size and DPR. */
   resize(): void {
     // Ceiling only, no floor. `devicePixelRatio` drops below 1 whenever the
@@ -455,7 +470,13 @@ export class Renderer {
 
     const pixels = w * h;
     const budgeted = pixels > this.pixelBudget ? Math.sqrt(this.pixelBudget / pixels) : 1;
-    this.sceneScale = clamp(this.pinnedScale ?? budgeted, MIN_SCENE_SCALE, 1);
+    // `?rscale=` is a diagnostic pin and outranks both the budget and the
+    // governor, so someone comparing resolutions gets the one they asked for.
+    this.sceneScale = clamp(
+      this.pinnedScale ?? budgeted * this.qualityScale,
+      MIN_SCENE_SCALE,
+      1,
+    );
     const sw = Math.max(1, Math.round(w * this.sceneScale));
     const sh = Math.max(1, Math.round(h * this.sceneScale));
     res.scene.resize(sw, sh);
@@ -685,7 +706,9 @@ export class Renderer {
     // Energy normalisation: the pool is user-adjustable from 2k to 220k, and
     // without this the 220k setting is a white screen and the 2k setting is
     // nearly invisible. Total emitted light stays roughly constant instead.
-    p.f1('u_gain', style.particles * clamp(90_000 / count, 0.3, 2.0));
+    // The floor sits low enough that the 1M overdrive pool reads as dense
+    // dust rather than a saturated sheet.
+    p.f1('u_gain', style.particles * clamp(90_000 / count, 0.1, 2.0));
     // Point size follows the target, not the canvas: the scene can be drawn
     // below canvas resolution, and a size in canvas pixels would then make the
     // dust swell into blobs when the composite scales it back up.

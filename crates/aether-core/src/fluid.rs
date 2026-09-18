@@ -78,6 +78,7 @@
 use crate::config::Params;
 use crate::field::{Grid, VecField};
 use crate::math::{decay, length, normalize};
+use crate::par;
 
 #[cfg(all(target_arch = "wasm32", feature = "simd"))]
 use core::arch::wasm32::{
@@ -96,12 +97,24 @@ const DIFFUSION_ITERS: usize = 20;
 /// well under it: diffusion costs nothing unless the HUD asks for it.
 const VISCOSITY_EPSILON: f32 = 1e-4;
 
+/// Ceiling on a cell's speed, in grid cells per second.
+///
+/// A hand push peaks around 40-60 here, so this is headroom rather than a
+/// governor on ordinary motion; it exists only to stop the field ratcheting up
+/// without bound while gestures keep feeding it.
+///
+/// In *cells* per second, so it tracks the grid: raising the resolution to
+/// 256x144 raised this and [`MAX_CONFINE_IMPULSE`] by the same 4/3 the grid
+/// grew by, leaving both ceilings at the screen-relative speed they were tuned
+/// at.
+const MAX_CELL_SPEED: f32 = 147.0;
+
 /// Ceiling on the velocity change one confinement step may apply, in cells/s.
 ///
 /// Confinement is an anti-dissipation term — it *adds* energy — so an
 /// unbounded version turns one fast gesture into an explosion a few frames
 /// later, on exactly the frames where `dt` also spikes.
-const MAX_CONFINE_IMPULSE: f32 = 50.0;
+const MAX_CONFINE_IMPULSE: f32 = 67.0;
 
 /// Relaxation factor for the pressure sweep.
 ///
@@ -334,6 +347,15 @@ impl Fluid {
             self.confine_vorticity(dt, params.vorticity);
         }
 
+        // Nothing else bounds the field: every gesture adds momentum, and with a
+        // gentle dissipation a person standing in front of the camera drives it
+        // up until dye is advected far further than a cell per step and the
+        // frame reads as one saturated smear. The ceiling is well above the
+        // speeds a single push produces, so it only catches that runaway — and
+        // it goes *before* the projection, whose whole job is to remove the
+        // divergence a per-cell rescale leaves behind.
+        self.vel.clamp_speed(MAX_CELL_SPEED);
+
         self.close_solid_faces();
         self.project(params.pressure_iters);
 
@@ -370,27 +392,46 @@ impl Fluid {
     /// one obstacle walk and one clamp-floor-fraction conversion.
     fn build_traces(&mut self, dt: f32) {
         let (w, h) = (self.w, self.h);
-        for y in 0..h {
-            for x in 0..w {
-                let i = y * w + x;
-                let fx = x as f32;
+        // The trace maps are written while the rest of `self` is read through
+        // `integrate`, so they are taken out for the duration: `Advector::new(0)`
+        // allocates nothing.
+        let mut advector = core::mem::replace(&mut self.advector, Advector::new(0));
+        let this: &Self = self;
+        let rows = h.min(advector.back.cells.len() / w.max(1));
+        let mut lanes: Vec<_> = advector
+            .back
+            .cells
+            .chunks_mut(w)
+            .zip(advector.fwd.cells.chunks_mut(w))
+            .take(rows)
+            .collect();
+        par::chunks_mut(&mut lanes, par::chunk_len(rows, 4), |band, lanes| {
+            let per = lanes.len();
+            for (k, (back, fwd)) in lanes.iter_mut().enumerate() {
+                let y = band * per + k;
                 let fy = y as f32;
-                let u0 = self.vel.u.data[i];
-                let v0 = self.vel.v.data[i];
+                for x in 0..w {
+                    let i = y * w + x;
+                    let fx = x as f32;
+                    let u0 = this.vel.u.data[i];
+                    let v0 = this.vel.v.data[i];
 
-                // Midpoint (RK2) rather than Euler: at the 200+ cells/s a
-                // swipe produces, first-order backtracing rounds the dye off
-                // into mush inside a second and no number of pressure
-                // iterations brings the structure back.
-                let (bx, by) = self.integrate(fx, fy, -dt, u0, v0);
-                let (bx, by) = self.trace_to_fluid(fx, fy, bx, by);
-                self.advector.back.set(i, bx, by, w, h);
+                    // Midpoint (RK2) rather than Euler: at the 200+ cells/s a
+                    // swipe produces, first-order backtracing rounds the dye
+                    // off into mush inside a second and no number of pressure
+                    // iterations brings the structure back.
+                    let (bx, by) = this.integrate(fx, fy, -dt, u0, v0);
+                    let (bx, by) = this.trace_to_fluid(fx, fy, bx, by);
+                    back[x] = Stencil::at(bx, by, w, h);
 
-                let (gx, gy) = self.integrate(fx, fy, dt, u0, v0);
-                let (gx, gy) = self.trace_to_fluid(fx, fy, gx, gy);
-                self.advector.fwd.set(i, gx, gy, w, h);
+                    let (gx, gy) = this.integrate(fx, fy, dt, u0, v0);
+                    let (gx, gy) = this.trace_to_fluid(fx, fy, gx, gy);
+                    fwd[x] = Stencil::at(gx, gy, w, h);
+                }
             }
-        }
+        });
+        drop(lanes);
+        self.advector = advector;
     }
 
     /// Traces `(x, y)` along the velocity field for `dt` seconds — negative to
@@ -535,18 +576,23 @@ impl Fluid {
     /// Central-difference curl, `omega = dv/dx - du/dy`, zero inside walls.
     fn compute_curl(&mut self) {
         let (w, h) = (self.w, self.h);
-        self.curl.zero();
-        for y in 1..h.saturating_sub(1) {
-            for x in 1..w.saturating_sub(1) {
+        // Taken out of `self` so the rows can be written while the velocity and
+        // the wall mask are read through `&Self` — see `interior_rows`.
+        let mut curl = core::mem::take(&mut self.curl.data);
+        curl.fill(0.0);
+        let this: &Self = self;
+        interior_rows(&mut curl, w, h, |y, row| {
+            for x in 1..w - 1 {
                 let i = y * w + x;
-                if self.solid.data[i] >= 0.5 {
+                if this.solid.data[i] >= 0.5 {
                     continue;
                 }
-                let dvdx = self.vel.v.data[i + 1] - self.vel.v.data[i - 1];
-                let dudy = self.vel.u.data[i + w] - self.vel.u.data[i - w];
-                self.curl.data[i] = 0.5 * (dvdx - dudy);
+                let dvdx = this.vel.v.data[i + 1] - this.vel.v.data[i - 1];
+                let dudy = this.vel.u.data[i + w] - this.vel.u.data[i - w];
+                row[x] = 0.5 * (dvdx - dudy);
             }
-        }
+        });
+        self.curl.data = curl;
     }
 
     /// Fedkiw-style confinement: `f = eps * (N x omega)` with
@@ -554,22 +600,27 @@ impl Fluid {
     /// back towards the nearest vorticity peak.
     fn confine_vorticity(&mut self, dt: f32, strength: f32) {
         let (w, h) = (self.w, self.h);
-        for y in 1..h.saturating_sub(1) {
-            for x in 1..w.saturating_sub(1) {
+        let mut u = core::mem::take(&mut self.vel.u.data);
+        let mut v = core::mem::take(&mut self.vel.v.data);
+        let this: &Self = self;
+        interior_row_pairs(&mut u, &mut v, w, h, |y, ur, vr| {
+            for x in 1..w - 1 {
                 let i = y * w + x;
-                if self.solid.data[i] >= 0.5 {
+                if this.solid.data[i] >= 0.5 {
                     continue;
                 }
-                let gx = 0.5 * (self.curl.data[i + 1].abs() - self.curl.data[i - 1].abs());
-                let gy = 0.5 * (self.curl.data[i + w].abs() - self.curl.data[i - w].abs());
+                let gx = 0.5 * (this.curl.data[i + 1].abs() - this.curl.data[i - 1].abs());
+                let gy = 0.5 * (this.curl.data[i + w].abs() - this.curl.data[i - w].abs());
                 // Returns (0, 0) on a vanishing gradient, so flat regions get
                 // no force instead of a normalised division by ~0.
                 let (nx, ny) = normalize(gx, gy);
-                let f = strength * self.curl.data[i] * dt;
-                self.vel.u.data[i] += bounded_impulse(ny * f, MAX_CONFINE_IMPULSE);
-                self.vel.v.data[i] += bounded_impulse(-nx * f, MAX_CONFINE_IMPULSE);
+                let f = strength * this.curl.data[i] * dt;
+                ur[x] += bounded_impulse(ny * f, MAX_CONFINE_IMPULSE);
+                vr[x] += bounded_impulse(-nx * f, MAX_CONFINE_IMPULSE);
             }
-        }
+        });
+        self.vel.u.data = u;
+        self.vel.v.data = v;
     }
 
     // ------------------------------------------------------------ projection
@@ -622,20 +673,23 @@ impl Fluid {
 
     fn compute_divergence(&mut self) {
         let (w, h) = (self.w, self.h);
-        self.divergence.zero();
-        for y in 1..h.saturating_sub(1) {
-            for x in 1..w.saturating_sub(1) {
+        let mut div = core::mem::take(&mut self.divergence.data);
+        div.fill(0.0);
+        let this: &Self = self;
+        interior_rows(&mut div, w, h, |y, row| {
+            for x in 1..w - 1 {
                 let i = y * w + x;
-                if self.solid.data[i] >= 0.5 {
+                if this.solid.data[i] >= 0.5 {
                     continue;
                 }
                 // Faces touching a wall carry no flux and have already been
                 // zeroed, so the no-penetration condition needs no branch here.
-                let du = self.vel.u.data[i] - self.vel.u.data[i - 1];
-                let dv = self.vel.v.data[i] - self.vel.v.data[i - w];
-                self.divergence.data[i] = du + dv;
+                let du = this.vel.u.data[i] - this.vel.u.data[i - 1];
+                let dv = this.vel.v.data[i] - this.vel.v.data[i - w];
+                row[x] = du + dv;
             }
-        }
+        });
+        self.divergence.data = div;
     }
 
     /// Removes the constant component of the pressure.
@@ -674,22 +728,27 @@ impl Fluid {
 
     fn subtract_pressure_gradient(&mut self) {
         let (w, h) = (self.w, self.h);
-        for y in 1..h.saturating_sub(1) {
-            for x in 1..w.saturating_sub(1) {
+        let mut u = core::mem::take(&mut self.vel.u.data);
+        let mut v = core::mem::take(&mut self.vel.v.data);
+        let this: &Self = self;
+        interior_row_pairs(&mut u, &mut v, w, h, |y, ur, vr| {
+            for x in 1..w - 1 {
                 let i = y * w + x;
-                if self.solid.data[i] >= 0.5 {
+                if this.solid.data[i] >= 0.5 {
                     continue;
                 }
-                let pc = self.pressure.data[i];
+                let pc = this.pressure.data[i];
                 // Forward difference, matching the backward-difference
                 // divergence: `wall_pick` makes the gradient vanish across a
                 // closed face, leaving that face's zero flux untouched.
-                let r = wall_pick(self.pressure.data[i + 1], self.solid.data[i + 1], pc);
-                let d = wall_pick(self.pressure.data[i + w], self.solid.data[i + w], pc);
-                self.vel.u.data[i] -= r - pc;
-                self.vel.v.data[i] -= d - pc;
+                let r = wall_pick(this.pressure.data[i + 1], this.solid.data[i + 1], pc);
+                let d = wall_pick(this.pressure.data[i + w], this.solid.data[i + w], pc);
+                ur[x] -= r - pc;
+                vr[x] -= d - pc;
             }
-        }
+        });
+        self.vel.u.data = u;
+        self.vel.v.data = v;
     }
 
     /// `max |div u|` over the non-solid interior — the residual the projection
@@ -774,6 +833,20 @@ struct Stencil {
     fy: f32,
 }
 
+impl Stencil {
+    /// The stencil for a trace endpoint `(x, y)`, clamped into the grid.
+    #[inline]
+    fn at(x: f32, y: f32, w: usize, h: usize) -> Self {
+        let (ix, fx) = corner_of(x, w);
+        let (iy, fy) = corner_of(y, h);
+        Self {
+            corner: (iy * w + ix) as u32,
+            fx,
+            fy,
+        }
+    }
+}
+
 /// One [`Stencil`] per cell: where this cell's value comes from this step.
 struct TraceMap {
     cells: Vec<Stencil>,
@@ -791,18 +864,6 @@ impl TraceMap {
                 n
             ],
         }
-    }
-
-    /// Records the trace endpoint for cell `i`, clamped into the grid.
-    #[inline]
-    fn set(&mut self, i: usize, x: f32, y: f32, w: usize, h: usize) {
-        let (ix, fx) = corner_of(x, w);
-        let (iy, fy) = corner_of(y, h);
-        self.cells[i] = Stencil {
-            corner: (iy * w + ix) as u32,
-            fx,
-            fy,
-        };
     }
 
     #[inline]
@@ -873,21 +934,43 @@ impl Advector {
             return;
         }
 
-        for i in 0..n {
-            let (value, lo, hi) = self.back.fetch_limited(field, w, i);
-            self.hat[i] = value;
-            self.lo[i] = lo;
-            self.hi[i] = hi;
-        }
+        // Both passes are gathers into private output ranges, so each runs
+        // over row bands in parallel; the barrier between them is the one the
+        // MacCormack correction needs anyway (`bar` gathers from all of `hat`).
+        let band = par::chunk_len(h, 4) * w;
+        let back = &self.back;
+        let field_ro: &[f32] = field;
+        let mut outs: Vec<_> = self
+            .hat
+            .chunks_mut(band)
+            .zip(self.lo.chunks_mut(band))
+            .zip(self.hi.chunks_mut(band))
+            .collect();
+        par::chunks_mut(&mut outs, 1, |c, one| {
+            let ((hat, lo), hi) = &mut one[0];
+            let base = c * band;
+            for k in 0..hat.len() {
+                let (value, l, h) = back.fetch_limited(field_ro, w, base + k);
+                hat[k] = value;
+                lo[k] = l;
+                hi[k] = h;
+            }
+        });
+        drop(outs);
 
-        for (i, cell) in field.iter_mut().enumerate() {
-            let bar = self.fwd.fetch(&self.hat, w, i);
-            let corrected = self.hat[i] + 0.5 * (*cell - bar);
-            // `max`/`min` rather than `clamp`: they return the bound when one
-            // operand is not a number, so a stray NaN dies here instead of
-            // spreading one cell further every frame.
-            *cell = corrected.max(self.lo[i]).min(self.hi[i]);
-        }
+        let (fwd, hat, lo, hi) = (&self.fwd, &self.hat, &self.lo, &self.hi);
+        par::chunks_mut(field, band, |c, cells| {
+            let base = c * band;
+            for (k, cell) in cells.iter_mut().enumerate() {
+                let i = base + k;
+                let bar = fwd.fetch(hat, w, i);
+                let corrected = hat[i] + 0.5 * (*cell - bar);
+                // `max`/`min` rather than `clamp`: they return the bound when
+                // one operand is not a number, so a stray NaN dies here
+                // instead of spreading one cell further every frame.
+                *cell = corrected.max(lo[i]).min(hi[i]);
+            }
+        });
     }
 }
 
@@ -1079,6 +1162,45 @@ fn kernel_unusable(n: usize, w: usize, h: usize, lens: [usize; 4]) -> bool {
     w < 3 || h < 3 || lens.iter().any(|&l| l < n)
 }
 
+/// Runs `f(y, row)` over every interior row of a full-grid buffer, in parallel.
+///
+/// The buffer is passed separately from `&Self` on purpose: a stage that writes
+/// one grid while reading its neighbours out of the others cannot hold `&mut
+/// self`, so the caller `mem::take`s the target's storage, hands it here, and
+/// puts it back. `row` is indexed by `x`, so a stencil can keep using the flat
+/// `y * w + x` index for its reads.
+fn interior_rows<F>(data: &mut [f32], w: usize, h: usize, f: F)
+where
+    F: Fn(usize, &mut [f32]) + Sync + Send,
+{
+    if w < 3 || h < 3 || data.len() < w * h {
+        return;
+    }
+    par::rows_mut(&mut data[w..(h - 1) * w], w, h - 2, |k, row| f(k + 1, row));
+}
+
+/// [`interior_rows`] over two grids at once — the velocity components, which
+/// every force stage writes together.
+fn interior_row_pairs<F>(a: &mut [f32], b: &mut [f32], w: usize, h: usize, f: F)
+where
+    F: Fn(usize, &mut [f32], &mut [f32]) + Sync + Send,
+{
+    if w < 3 || h < 3 || a.len() < w * h || b.len() < w * h {
+        return;
+    }
+    let rows = h - 2;
+    let per = par::chunk_len(rows, 4);
+    let mut lanes: Vec<_> = a[w..(h - 1) * w]
+        .chunks_mut(w)
+        .zip(b[w..(h - 1) * w].chunks_mut(w))
+        .collect();
+    par::chunks_mut(&mut lanes, per, |band, lanes| {
+        for (k, (ar, br)) in lanes.iter_mut().enumerate() {
+            f(band * per + k + 1, ar, br);
+        }
+    });
+}
+
 #[inline]
 fn zero_walls(out: &mut [f32], w: usize, h: usize) {
     if w < 2 || h < 2 || out.len() < w * h {
@@ -1108,13 +1230,12 @@ fn jacobi_pressure_scalar(
         return;
     }
     zero_walls(out, w, h);
-    for y in 1..h - 1 {
-        let rows = StencilRows::new(p, solid, div, w, y);
-        let o = &mut out[y * w..y * w + w];
+    par::rows_mut(&mut out[w..(h - 1) * w], w, h - 2, |k, o| {
+        let rows = StencilRows::new(p, solid, div, w, k + 1);
         for (x, cell) in o.iter_mut().enumerate().take(w - 1).skip(1) {
             *cell = rows.pressure(x);
         }
-    }
+    });
 }
 
 #[cfg_attr(all(target_arch = "wasm32", feature = "simd"), allow(dead_code))]
@@ -1134,13 +1255,12 @@ fn jacobi_diffuse_scalar(
     }
     let inv = 1.0 / (1.0 + 4.0 * a);
     zero_walls(out, w, h);
-    for y in 1..h - 1 {
-        let rows = StencilRows::new(x, solid, rhs, w, y);
-        let o = &mut out[y * w..y * w + w];
+    par::rows_mut(&mut out[w..(h - 1) * w], w, h - 2, |k, o| {
+        let rows = StencilRows::new(x, solid, rhs, w, k + 1);
         for (i, cell) in o.iter_mut().enumerate().take(w - 1).skip(1) {
             *cell = rows.diffuse(i, a, inv);
         }
-    }
+    });
 }
 
 // --- wasm32 SIMD128 paths -------------------------------------------------
@@ -1192,9 +1312,8 @@ fn jacobi_pressure_simd(
     let omega = f32x4_splat(PRESSURE_OMEGA);
 
     zero_walls(out, w, h);
-    for y in 1..h - 1 {
-        let rows = StencilRows::new(p, solid, div, w, y);
-        let o = &mut out[y * w..y * w + w];
+    par::rows_mut(&mut out[w..(h - 1) * w], w, h - 2, |k, o| {
+        let rows = StencilRows::new(p, solid, div, w, k + 1);
         let mut x = 1;
         // A row is contiguous, so the left/right neighbour vectors are just
         // this row shifted by one element — no shuffles needed.
@@ -1215,7 +1334,7 @@ fn jacobi_pressure_simd(
             o[x] = rows.pressure(x);
             x += 1;
         }
-    }
+    });
 }
 
 #[cfg(all(target_arch = "wasm32", feature = "simd"))]
@@ -1240,9 +1359,8 @@ fn jacobi_diffuse_simd(
     let inv = f32x4_splat(inv_scalar);
 
     zero_walls(out, w, h);
-    for y in 1..h - 1 {
-        let rows = StencilRows::new(x, solid, rhs, w, y);
-        let o = &mut out[y * w..y * w + w];
+    par::rows_mut(&mut out[w..(h - 1) * w], w, h - 2, |k, o| {
+        let rows = StencilRows::new(x, solid, rhs, w, k + 1);
         let mut i = 1;
         while i + 4 <= w - 1 {
             let sum = f32x4_add(
@@ -1258,7 +1376,7 @@ fn jacobi_diffuse_simd(
             o[i] = rows.diffuse(i, a, inv_scalar);
             i += 1;
         }
-    }
+    });
 }
 
 #[cfg(test)]

@@ -13,10 +13,26 @@ import { FLOW_H, FLOW_W } from './constants';
 export interface CameraOptions {
   width: number;
   height: number;
+  /**
+   * Capture rate asked of the device, in frames per second.
+   *
+   * `ideal` rather than `min`: a webcam that only does 30 must still be
+   * accepted. It matters because every downstream rate is bounded by this one —
+   * perception submits a frame only when `currentTime` advances, so at 30 fps a
+   * gesture cannot be seen sooner than 33 ms after it happens no matter how
+   * fast inference gets, and the optical-flow plane is sampled from the same
+   * frames.
+   */
+  frameRate: number;
   facingMode: 'user' | 'environment';
 }
 
-const DEFAULTS: CameraOptions = { width: 1280, height: 720, facingMode: 'user' };
+const DEFAULTS: CameraOptions = {
+  width: 1280,
+  height: 720,
+  frameRate: 60,
+  facingMode: 'user',
+};
 
 export class CameraError extends Error {
   constructor(
@@ -65,6 +81,7 @@ export class Camera {
         video: {
           width: { ideal: opts.width },
           height: { ideal: opts.height },
+          frameRate: { ideal: opts.frameRate },
           facingMode: opts.facingMode,
         },
       });

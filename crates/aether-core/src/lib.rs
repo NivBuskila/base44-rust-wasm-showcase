@@ -26,9 +26,11 @@ pub mod flow;
 pub mod gesture;
 pub mod mask;
 pub mod math;
+pub mod par;
 pub mod particles;
 pub mod rng;
 pub mod spells;
+pub mod visual;
 
 pub use config::Params;
 pub use engine::Engine;
