@@ -86,18 +86,18 @@ const REPEL_ACCEL: f32 = 1500.0;
 /// Attract is deliberately weaker than repel. An inward well concentrates
 /// everything it touches, so at equal strength it piles the whole field into a
 /// few cells and the projection has to resolve a pressure spike every frame.
-const ATTRACT_RATIO: f32 = 0.45;
+const ATTRACT_RATIO: f32 = 0.6;
 /// How fast a closed fist bleeds the speed off the particles it gathered, per
 /// second at the palm. High enough that they settle into a held clump within a
 /// fraction of a second, low enough that they still visibly stream inward.
 const GRIP_RATE: f32 = 25.0;
 /// Radius of the positional hold, as a multiple of the palm radius. Kept close
 /// to the palm so only what the fist actually swallowed travels with it.
-const GRIP_RADIUS_SCALE: f32 = 1.2;
+const GRIP_RADIUS_SCALE: f32 = 2.2;
 /// Rate, per second, at which a gripped particle's position closes on the palm.
 /// Fast enough that the clump tracks a moving fist, not instant, so the pull
 /// still reads as suction rather than teleporting.
-const GRIP_PULL: f32 = 8.0;
+const GRIP_PULL: f32 = 26.0;
 const RADIAL_RADIUS_SCALE: f32 = 2.6;
 /// Radial acceleration applied to particles, in grid cells per second squared.
 const PARTICLE_ACCEL: f32 = 2200.0;
