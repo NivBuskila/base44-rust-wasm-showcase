@@ -27,6 +27,7 @@ import {
   OverdriveBanner,
 } from './overdrive';
 import { PerformanceGovernor } from './performance-governor';
+import { QaRecorder, clearQaSession, readQaSession, type QaSession } from './qa-recorder';
 import { MediaPipePerception } from './perception';
 import { WorkerPerception } from './perception-worker-client';
 import { Renderer } from './render/renderer';
@@ -109,6 +110,11 @@ class App {
   private readonly overdrive: OverdriveBanner;
   /** Adaptive quality; keeps the frame rate up on slower devices. */
   private readonly governor: PerformanceGovernor;
+  /**
+   * Records the session for later inspection. Only a real tab runs the loop, so
+   * this is the only trace a QA pass leaves behind.
+   */
+  private readonly qa = new QaRecorder();
   /** Particle count to return to when overdrive is switched off. */
   private particlesBeforeOverdrive = 0;
   private readonly camera = new Camera();
@@ -326,6 +332,10 @@ class App {
       spells: [this.engine.spell_name(0), this.engine.spell_name(1)],
       perception: this.perceptionStatus,
     });
+
+    // Last in the frame: the recorder reads the values this frame just produced,
+    // and it rate-limits itself to 2 Hz internally.
+    this.qa.sample(this.diagnostics);
   };
 
   /** Feeds the luma plane, but only when the camera produced a new frame. */
@@ -572,6 +582,16 @@ class App {
     };
   }
 
+  /** The session record so far, without waiting for the next storage write. */
+  qaSession(): QaSession {
+    return this.qa.summary();
+  }
+
+  /** Flushes the record immediately — e.g. before closing the tab. */
+  flushQaSession(): void {
+    this.qa.persist();
+  }
+
   get rawEngine(): AetherEngine {
     return this.engine;
   }
@@ -633,6 +653,12 @@ export interface AetherTestHooks {
   /** Framebuffer readback; do not poll this on every frame. */
   luminance(): number;
   reset(): void;
+  /** The live session record from this tab. */
+  qaSession(): QaSession;
+  /** The last session persisted on this origin, from any tab. */
+  lastQaSession(): QaSession | null;
+  /** Discards the persisted record. */
+  clearQaSession(): void;
 }
 
 declare global {
@@ -679,7 +705,14 @@ async function boot(): Promise<void> {
       forceMode: (mode) => app.forceMode(mode),
       luminance: () => app.luminance(),
       reset: () => engine.reset(),
+      qaSession: () => app.qaSession(),
+      lastQaSession: () => readQaSession(),
+      clearQaSession,
     };
+
+    // A tab is usually closed rather than idled out, and the 2 Hz writer may be
+    // up to two seconds behind when that happens.
+    window.addEventListener('pagehide', () => app.flushQaSession());
 
     await app.start(setStatus);
     bootEl?.classList.add('done');
