@@ -15,6 +15,18 @@
 import type { FromWorker, ToWorker } from './perception-protocol';
 import type { MaskFrame, PerceptionFrame, PerceptionSource, PerceptionStatus } from './types';
 
+/**
+ * Width the camera frame is decoded down to before inference, in pixels.
+ *
+ * The camera runs at 1280x720 but MediaPipe's hand and pose graphs resize their
+ * input to a couple of hundred pixels on the way in, so the extra detail is
+ * thrown away after being paid for twice: once in the main thread's decode and
+ * once in the worker's own rescale. Decoding straight to this width cuts both,
+ * which is latency off the front of every gesture — and it stays comfortably
+ * above the models' own input size, so the landmarks do not move.
+ */
+const INFERENCE_WIDTH = 480;
+
 export class WorkerPerception implements PerceptionSource {
   private readonly worker: Worker;
   private state: PerceptionStatus = { kind: 'loading' };
@@ -119,7 +131,14 @@ export class WorkerPerception implements PerceptionSource {
     this.lastVideoTime = video.currentTime;
 
     this.decoding = true;
-    createImageBitmap(video)
+    const scale = Math.min(1, INFERENCE_WIDTH / video.videoWidth);
+    createImageBitmap(video, {
+      resizeWidth: Math.round(video.videoWidth * scale),
+      resizeHeight: Math.round(video.videoHeight * scale),
+      // `low` is a box filter, which is what a downscale for a CNN wants; the
+      // sharper kernels cost more and buy the model nothing.
+      resizeQuality: 'low',
+    })
       .then((bitmap) => {
         this.decoding = false;
         if (this.closed) {
