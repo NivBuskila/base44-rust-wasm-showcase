@@ -179,6 +179,31 @@ impl AetherEngine {
         self.inner.spell_name(slot).to_string()
     }
 
+    /// The gesture-sequence spellbook, as `name:step,step;name:step,...`.
+    ///
+    /// Serialised from `aether_core::combo::COMBOS` rather than duplicated in
+    /// TypeScript: the HUD teaches the sequences, and a spellbook that drifts
+    /// from the recogniser is worse than none at all.
+    pub fn combo_book(&self) -> String {
+        aether_core::combo::COMBOS
+            .iter()
+            .map(|c| {
+                let steps: Vec<&str> = c.steps.iter().map(|s| s.spell.name()).collect();
+                format!("{}:{}", c.name, steps.join(","))
+            })
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    /// Sequence progress: `0` combo index (-1 when idle), `1` steps matched,
+    /// `2` charge 0..1 through the current step, `3` combo that just fired
+    /// (-1 when none).
+    pub fn combo_progress(&self) -> Vec<f32> {
+        let p = self.inner.combo_progress();
+        let idx = |v: usize| if v == usize::MAX { -1.0 } else { v as f32 };
+        vec![idx(p.combo), p.matched as f32, p.charge, idx(p.fired)]
+    }
+
     // ---------------------------------------------------------------- config
 
     /// Sets a named tunable; returns false if the key is unknown.
@@ -211,6 +236,22 @@ mod tests {
     fn stats_array_length_matches_the_constant() {
         let e = AetherEngine::new(1.0);
         assert_eq!(e.stats().len(), STATS_LEN);
+    }
+
+    #[test]
+    fn the_combo_book_is_parseable_and_progress_is_idle_at_rest() {
+        let e = AetherEngine::new(3.0);
+        let book = e.combo_book();
+        assert!(!book.is_empty());
+        for entry in book.split(';') {
+            let (name, steps) = entry.split_once(':').expect("no name:steps separator");
+            assert!(!name.is_empty(), "combo with no name");
+            assert!(steps.split(',').count() >= 2, "a one-step combo is a gesture");
+        }
+        let p = e.combo_progress();
+        assert_eq!(p.len(), 4);
+        assert_eq!(p[0], -1.0, "a fresh engine reports a sequence in progress");
+        assert_eq!(p[3], -1.0);
     }
 
     #[test]

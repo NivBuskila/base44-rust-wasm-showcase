@@ -27,6 +27,7 @@
 //! force may exceed `MAX_IMPULSE` grid units per second — an unclamped
 //! impulse is how a fluid solver turns into NaN soup.
 
+use crate::combo::{ComboEffect, ComboHit};
 use crate::config::Params;
 use crate::field::VecField;
 use crate::fluid::Fluid;
@@ -144,6 +145,32 @@ const RELEASE_MAX: usize = 16_000;
 /// Seconds the HUD keeps showing "release" after the ring fires.
 const RELEASE_SHOW: f32 = 0.45;
 
+/// Combo payloads. These are events, so like `Shatter` and `Release` their
+/// impulses are velocity *steps* and are deliberately not scaled by `dt`: a
+/// sequence the caster performed once must hit exactly as hard at 30 fps as at
+/// 144, or the reward for landing it depends on the machine.
+///
+/// Nova: a fast bright shell, tuned to always read even in a busy field.
+const NOVA_RING_SCALE: f32 = 1.6;
+const NOVA_SPEED: f32 = 330.0;
+const NOVA_IMPULSE: f32 = 520.0;
+const NOVA_DYE: f32 = 2.4;
+const NOVA_FRACTION: usize = 4;
+/// Tempest: a wide, long-lived rotation rather than a flash.
+const TEMPEST_RADIUS_SCALE: f32 = 7.0;
+const TEMPEST_SPEED: f32 = 420.0;
+const TEMPEST_DYE: f32 = 1.5;
+/// Supernova: the charged combo. Reaches far, kicks hard, and recycles a big
+/// slice of the pool into the shell so the screen visibly reorganises.
+const SUPERNOVA_RING_SCALE: f32 = 2.4;
+const SUPERNOVA_SPEED: f32 = 560.0;
+const SUPERNOVA_IMPULSE: f32 = 780.0;
+const SUPERNOVA_REACH_SCALE: f32 = 6.5;
+const SUPERNOVA_DYE: f32 = 3.4;
+const SUPERNOVA_FRACTION: usize = 2;
+/// Hard cap on particles any one combo may recycle.
+const COMBO_MAX: usize = 24_000;
+
 /// Seconds of rotation rate mapped into one unit of time scale.
 const TIME_GAIN: f32 = 0.32;
 /// Smoothing rate of the requested time scale, per second. Without it the time
@@ -218,6 +245,9 @@ pub fn apply(
     particles: &mut Particles,
     state: &mut SpellState,
     params: &Params,
+    // A gesture sequence that completed this step, recognised by
+    // `crate::combo`. Its effect is applied at the casting hand's palm.
+    combo: Option<ComboHit>,
     dt: f32,
 ) -> SpellReport {
     let dt = clamp_dt(dt);
@@ -473,6 +503,13 @@ pub fn apply(
             report.spells[slot] = Spell::Release;
         }
 
+        // A completed sequence fires on top of whatever the hand is currently
+        // doing: the last gesture of the combo is still a spell, and cutting it
+        // off would make a successful cast feel like a dropped frame.
+        if let Some(hit) = combo.filter(|h| h.slot == slot) {
+            fire_combo(hit.effect, fluid, particles, params, palm, radius, &mut report);
+        }
+
         state.last_tip[slot] = tip;
         state.has_tip[slot] = true;
     }
@@ -551,6 +588,138 @@ fn fire_release(
             palm[1] + theta.sin() * ring,
             dye,
             radius * 0.45,
+        );
+    }
+}
+
+/// Applies a completed sequence's payload at `palm`.
+///
+/// Split by effect rather than parameterised into one blend, because these are
+/// meant to be *recognisably different* rewards: a caster who lands the hard
+/// sequence has to see something the easy one never produces.
+fn fire_combo(
+    effect: ComboEffect,
+    fluid: &mut Fluid,
+    particles: &mut Particles,
+    params: &Params,
+    palm: [f32; 2],
+    radius: f32,
+    report: &mut SpellReport,
+) {
+    let (gw, gh) = (fluid.width(), fluid.height());
+    report.bursts += 1;
+    match effect {
+        ComboEffect::Nova => {
+            let ring = radius * NOVA_RING_SCALE;
+            let count = (particles.active() / NOVA_FRACTION).min(COMBO_MAX);
+            particles.spawn_ring(
+                palm[0],
+                palm[1],
+                count,
+                ring,
+                NOVA_SPEED,
+                1.0,
+                params.particle_life,
+            );
+            radial_kick(fluid, gw, gh, palm, ring * 2.5, NOVA_IMPULSE, report);
+            ring_dye(fluid, palm, ring, radius * 0.5, tint(Spell::Shatter, NOVA_DYE));
+        }
+        ComboEffect::Tempest => {
+            // Pure rotation, no radial term: the storm has to keep spinning
+            // after the impulse lands, and an outward push would blow the
+            // structure apart before the swirl becomes visible.
+            let outer = radius * TEMPEST_RADIUS_SCALE;
+            let mut injected = 0.0;
+            let vel = fluid.velocity_mut();
+            for_disc(gw, gh, palm, outer, |x, y, dx, dy, r, w| {
+                let (nx, ny) = radial(dx, dy, r);
+                let du = clamp_impulse(-ny * TEMPEST_SPEED * w);
+                let dv = clamp_impulse(nx * TEMPEST_SPEED * w);
+                vel.add(x, y, du, dv);
+                injected += du * du + dv * dv;
+            });
+            report.injected += injected;
+            ring_dye(
+                fluid,
+                palm,
+                outer * 0.55,
+                outer * 0.3,
+                tint(Spell::Vortex, TEMPEST_DYE),
+            );
+        }
+        ComboEffect::Supernova => {
+            let ring = radius * SUPERNOVA_RING_SCALE;
+            let count = (particles.active() / SUPERNOVA_FRACTION).min(COMBO_MAX);
+            particles.spawn_ring(
+                palm[0],
+                palm[1],
+                count,
+                ring,
+                SUPERNOVA_SPEED,
+                1.0,
+                params.particle_life,
+            );
+            radial_kick(
+                fluid,
+                gw,
+                gh,
+                palm,
+                radius * SUPERNOVA_REACH_SCALE,
+                SUPERNOVA_IMPULSE,
+                report,
+            );
+            // Heat first, then dye: the flash is what sells the charge time.
+            particles.impulse(palm[0], palm[1], ring * 2.0, 0.0, 1.0);
+            ring_dye(
+                fluid,
+                palm,
+                ring,
+                radius * 0.8,
+                tint(Spell::Ignite, SUPERNOVA_DYE),
+            );
+            fluid.add_dye(
+                palm[0],
+                palm[1],
+                tint(Spell::Shatter, SUPERNOVA_DYE * 0.6),
+                radius,
+            );
+        }
+    }
+}
+
+/// An outward velocity step over a disc, falling off to zero at `reach`.
+fn radial_kick(
+    fluid: &mut Fluid,
+    gw: usize,
+    gh: usize,
+    center: [f32; 2],
+    reach: f32,
+    impulse: f32,
+    report: &mut SpellReport,
+) {
+    let mut injected = 0.0;
+    let vel = fluid.velocity_mut();
+    for_disc(gw, gh, center, reach, |x, y, dx, dy, r, w| {
+        let (nx, ny) = radial(dx, dy, r);
+        let du = clamp_impulse(nx * impulse * w);
+        let dv = clamp_impulse(ny * impulse * w);
+        vel.add(x, y, du, dv);
+        injected += du * du + dv * dv;
+    });
+    report.injected += injected;
+}
+
+/// Lays dye around a circle instead of on a disc, so the effect reads as a
+/// shell expanding outward rather than a blob fading out.
+fn ring_dye(fluid: &mut Fluid, center: [f32; 2], ring: f32, splat: f32, dye: [f32; 3]) {
+    let n = 28;
+    for i in 0..n {
+        let theta = i as f32 / n as f32 * core::f32::consts::TAU;
+        fluid.add_dye(
+            center[0] + theta.cos() * ring,
+            center[1] + theta.sin() * ring,
+            dye,
+            splat,
         );
     }
 }
@@ -790,6 +959,16 @@ mod tests {
         }
 
         fn run(&mut self, tracker: &GestureTracker, dt: f32) -> SpellReport {
+            self.run_with(tracker, None, dt)
+        }
+
+        /// One step with a completed sequence handed in, as the engine does it.
+        fn run_with(
+            &mut self,
+            tracker: &GestureTracker,
+            combo: Option<ComboHit>,
+            dt: f32,
+        ) -> SpellReport {
             apply(
                 tracker,
                 &self.flow,
@@ -798,6 +977,7 @@ mod tests {
                 &mut self.particles,
                 &mut self.state,
                 &self.params,
+                combo,
                 dt,
             )
         }
@@ -1147,6 +1327,35 @@ mod tests {
     }
 
     #[test]
+    fn every_combo_payload_moves_the_field_and_stays_finite() {
+        for effect in [
+            ComboEffect::Nova,
+            ComboEffect::Tempest,
+            ComboEffect::Supernova,
+        ] {
+            let mut rig = Rig::new();
+            let tracker = holding(&Hand::at(0.5, 0.5).gesture(synth::CLOSED_FIST));
+            let hit = ComboHit {
+                combo: 0,
+                effect,
+                slot: 0,
+            };
+            let report = rig.run_with(&tracker, Some(hit), DT);
+            assert_eq!(report.bursts, 1, "{effect:?} did not report its burst");
+            assert!(
+                report.injected > 0.0 && report.injected.is_finite(),
+                "{effect:?} injected {}",
+                report.injected
+            );
+            // A payload is an event; it must not leave the solver unstable.
+            for _ in 0..30 {
+                rig.run(&tracker, DT);
+            }
+            assert_eq!(rig.fluid.sanitize(), 0, "{effect:?} destabilised the fluid");
+        }
+    }
+
+    #[test]
     fn freeze_damps_the_fluid_locally_and_leaves_the_rest_alone() {
         let mut rig = Rig::new();
         rig.fluid.velocity_mut().u.data.fill(50.0);
@@ -1429,6 +1638,7 @@ mod tests {
             &mut none,
             &mut state,
             &Params::default(),
+            None,
             DT,
         );
         assert!(report.injected.is_finite());
