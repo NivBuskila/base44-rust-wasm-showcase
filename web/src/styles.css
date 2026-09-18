@@ -543,6 +543,11 @@ body {
   overflow: hidden;
 }
 
+/* Preset row: same segmented control, but it sits above the slider stack. */
+.seg.is-presets {
+  margin-bottom: 10px;
+}
+
 .seg-btn {
   position: relative;
   flex: 1 1 0;
