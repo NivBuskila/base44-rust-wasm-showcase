@@ -1,5 +1,6 @@
-# aether-core is deliberately dependency-free: it compiles for both
-# x86_64 (tests, benches) and wasm32 with no external crates at all.
+# aether-core is dependency-free by default: it compiles for both x86_64
+# (tests, benches) and wasm32 with no external crates at all. The one optional
+# dependency, rayon, is pulled in only by the `parallel` feature.
 [package]
 name = "aether-core"
 edition.workspace = true
@@ -10,6 +11,13 @@ license.workspace = true
 default = []
 # Enables explicit wasm32 SIMD128 intrinsics in the fluid hot loops.
 simd = []
+# Runs the particle system and the fluid kernels across a rayon thread pool.
+# Natively that is the machine's cores; on wasm32 it is Web Workers sharing
+# linear memory, which needs the atomics target feature and a nightly std.
+parallel = ["dep:rayon"]
+
+[dependencies]
+rayon = { version = "1.10", optional = true }
 
 [lib]
 bench = false

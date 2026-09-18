@@ -95,6 +95,7 @@ export interface HudStats {
 export interface HudCallbacks {
   onParam(key: string, value: number): void;
   onParticleCount(n: number): void;
+  onOverdrive(on: boolean): void;
   onViewMode(mode: ViewMode): void;
   onToggleCamera(on: boolean): void;
   onReset(): void;

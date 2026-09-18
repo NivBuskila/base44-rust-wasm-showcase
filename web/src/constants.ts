@@ -8,15 +8,15 @@
  */
 
 /** Fluid / dye / obstacle grid width, in cells. */
-export const FLUID_W = 192;
+export const FLUID_W = 256;
 /** Fluid / dye / obstacle grid height, in cells. */
-export const FLUID_H = 108;
+export const FLUID_H = 144;
 /** Optical-flow working width; the camera luma plane is downscaled to this. */
 export const FLOW_W = 128;
 /** Optical-flow working height. */
 export const FLOW_H = 72;
 /** Hard particle ceiling in the engine. */
-export const MAX_PARTICLES = 220_000;
+export const MAX_PARTICLES = 1_000_000;
 /** Floats per particle in the render buffer: x, y, heat, life. */
 export const PARTICLE_STRIDE = 4;
 
