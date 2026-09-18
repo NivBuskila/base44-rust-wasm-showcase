@@ -289,8 +289,11 @@ pub fn apply(
             state.release_show[slot] = 0.0;
             continue;
         }
-        let force =
-            base_force * (1.0 - COMBO_CHARGE_DAMP * fin(charging[slot]).clamp(0.0, 1.0));
+        // How far this hand is into a sequence, and the matching fade applied to
+        // its own spell effects while it winds that sequence up.
+        let winding = fin(charging[slot]).clamp(0.0, 1.0);
+        let wind_gain = 1.0 - COMBO_CHARGE_DAMP * winding;
+        let force = base_force * wind_gain;
         report.spells[slot] = hand.spell;
         // Releasing the gesture is what re-arms the one-shot.
         if hand.spell != Spell::Shatter {
@@ -505,7 +508,10 @@ pub fn apply(
             state.charge[slot] = smoothstep(0.0, RELEASE_CHARGE_TIME, hand.spell_age);
         }
         if opened_fist {
-            let charge = state.charge[slot];
+            // Mid-sequence the ring is a side effect of changing gesture, not a
+            // cast: fading it with the wind-up keeps the combo's own flash the
+            // only thing that reads as an event.
+            let charge = state.charge[slot] * wind_gain;
             state.charge[slot] = 0.0;
             if charge >= RELEASE_MIN_CHARGE {
                 fire_release(fluid, particles, params, palm, radius, charge, &mut report);
