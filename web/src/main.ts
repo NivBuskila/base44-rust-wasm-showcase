@@ -26,6 +26,7 @@ import {
   OVERDRIVE_SPAWN_RATE,
   OverdriveBanner,
 } from './overdrive';
+import { PerformanceGovernor } from './performance-governor';
 import { MediaPipePerception } from './perception';
 import { WorkerPerception } from './perception-worker-client';
 import { Renderer } from './render/renderer';
@@ -81,6 +82,13 @@ const PERCEPTION_GIVE_UP_STRIKES = 3;
  */
 const PERCEPTION_DUTY = 0.3;
 
+/**
+ * `Params::default().pressure_iters` from `crates/aether-core/src/config.rs`.
+ * The solver's iteration count is not HUD-exposed, so this is what the adaptive
+ * quality ladder treats as 100%.
+ */
+const DEFAULT_PRESSURE_ITERS = 28;
+
 /** Rolling window for the fps readout. */
 const FPS_SMOOTHING = 0.9;
 
@@ -99,6 +107,8 @@ class App {
   /** Which engine build is running and on how many threads. */
   readonly tier: EngineTier;
   private readonly overdrive: OverdriveBanner;
+  /** Adaptive quality; keeps the frame rate up on slower devices. */
+  private readonly governor: PerformanceGovernor;
   /** Particle count to return to when overdrive is switched off. */
   private particlesBeforeOverdrive = 0;
   private readonly camera = new Camera();
@@ -164,6 +174,8 @@ class App {
         // Resizing the pool can reallocate, which detaches every view.
         this.engine.set_particle_count(n);
         this.views = this.makeViews();
+        // The user's number is the new 100% for the quality ladder.
+        this.governor.rebase(DEFAULT_PRESSURE_ITERS, n);
       },
       onOverdrive: (on) => this.setOverdrive(on),
       onViewMode: (mode) => {
@@ -177,6 +189,20 @@ class App {
         this.views = this.makeViews();
       },
     });
+    this.governor = new PerformanceGovernor(
+      {
+        setPressureIters: (iters) => {
+          this.engine.set_param('pressure_iters', iters);
+        },
+        setParticleCount: (count) => {
+          this.engine.set_particle_count(count);
+          this.views = this.makeViews();
+        },
+        setRenderScale: (scale) => this.renderer.setQualityScale(scale),
+      },
+      DEFAULT_PRESSURE_ITERS,
+      engine.particle_count(),
+    );
     // After the HUD, which owns and rewrites #hud's markup.
     this.overdrive = new OverdriveBanner(document.getElementById('hud')!, tier);
     this.hud.setEngineTier(tier);
@@ -289,6 +315,7 @@ class App {
     this.renderer.render(this.buildFrame(stats));
     this.renderMs = performance.now() - renderStart;
 
+    this.governor.update(this.fps);
     this.overdrive.update(stats, this.fps, this.stepMs);
     this.hud.update({
       fps: this.fps,
@@ -540,6 +567,8 @@ class App {
       /** Effective inference cadence in Hz, after adaptive throttling. */
       perceptionHz: 1000 / this.perceptionIntervalMs,
       inferenceCostMs: this.inferenceCostMs,
+      /** Adaptive quality rung; 0 is full quality. */
+      qualityTier: this.governor.level,
     };
   }
 
@@ -578,6 +607,10 @@ class App {
       this.engine.set_param('spawn_rate', DEFAULT_SPAWN_RATE);
     }
     this.views = this.makeViews();
+    // Overdrive is a ceiling demo: quality must not be pulled out from under it,
+    // and switching back restores the pool the user had, which is the new base.
+    this.governor.setPaused(on);
+    if (!on) this.governor.rebase(DEFAULT_PRESSURE_ITERS, this.engine.particle_count());
     this.overdrive.setActive(on);
   }
 
