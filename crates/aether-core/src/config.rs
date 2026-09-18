@@ -6,20 +6,16 @@
 
 /// Fluid simulation grid width, in cells.
 ///
-/// 192x108 keeps the 16:9 aspect — so cells are square in screen space and no
-/// stage needs an anisotropic correction — and costs 56% of the cells that
-/// 256x144 does. Measured, that is most of the difference between a 28 ms and a
-/// 16 ms engine step in wasm.
-///
-/// The visible loss is small because the dye field is never shown at its own
-/// resolution: the renderer upscales it with a wide tap pattern and
-/// domain-warped noise, and all the high-frequency detail the eye reads comes
-/// from the 120k particles, which are resolution-independent. Doubling the dye
-/// grid instead would buy sharper *smoke edges* at the cost of the frame rate
-/// that makes the whole thing feel alive.
-pub const FLUID_W: usize = 192;
+/// 256x144 keeps the 16:9 aspect — so cells are square in screen space and no
+/// stage needs an anisotropic correction — and is the simulation-quality
+/// setting: 1.8x the cells of 192x108, which is what sharp smoke edges and
+/// resolvable small vortices are made of. It costs it, too: measured in wasm
+/// the engine step goes from ~16 ms to ~28 ms, so a loaded machine leans on
+/// `performance-governor.ts`, which drops internal render resolution and
+/// pressure iterations before it ever touches the grid.
+pub const FLUID_W: usize = 256;
 /// Fluid simulation grid height, in cells.
-pub const FLUID_H: usize = 108;
+pub const FLUID_H: usize = 144;
 /// Number of cells in the fluid / dye / obstacle grids.
 pub const FLUID_CELLS: usize = FLUID_W * FLUID_H;
 
