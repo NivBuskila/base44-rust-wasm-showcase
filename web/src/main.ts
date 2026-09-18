@@ -17,6 +17,7 @@ import './styles.css';
 
 import type { AetherEngine } from './wasm/aether';
 import { Camera, CameraError } from './camera';
+import { ensureCrossOriginIsolation } from './cross-origin-isolation';
 import { loadEngine, type EngineTier } from './engine-loader';
 import { Hud } from './hud';
 import {
@@ -572,6 +573,10 @@ async function boot(): Promise<void> {
   };
 
   try {
+    // Must precede loadEngine: it decides the tier from `crossOriginIsolated`,
+    // and this is what can still turn that true.
+    await ensureCrossOriginIsolation();
+
     const loaded = await loadEngine(setStatus);
     const engine = new loaded.module.AetherEngine(SEED);
     assertLayout(engine.layout());
