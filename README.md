@@ -88,6 +88,15 @@ scripts/build-wasm.sh release --both     # baseline into web/src/wasm, threads i
 The script installs nightly on demand and treats a failed threaded build as a
 warning, so a machine without it still gets a working app.
 
+Isolation is the part that usually bites. `SharedArrayBuffer` requires both
+`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy`,
+and hosts or preview proxies routinely forward the first while dropping the
+second — isolation then fails silently and the HUD stays on `1 thr`. Since
+headers cannot be set from the page, `public/coi-serviceworker.js` re-attaches
+both from a Service Worker and the app reloads once to pick them up. Inside an
+iframe this is skipped: isolation is a property of the whole frame tree, so an
+embedded page follows its host and runs single-threaded.
+
 Without `fetch:models` the app loads the models from Google's CDN on first run,
 so it works out of the box; fetching them locally just makes it work offline and
 start faster.
