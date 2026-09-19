@@ -37,6 +37,15 @@ const AT_LENS: f32 = 0.72;
 /// demands this much clearance over the curled fingers, well past `LONGER`.
 const AT_LENS_LONGER: f32 = 1.4;
 
+/// How much closer to the lens the fingertip must sit than the wrist, in hand
+/// scales, to read as aimed at the viewer. This is the *reliable* test: the
+/// screen-reach floors above can only ever infer depth from foreshortening,
+/// which a half-curled hand mimics exactly, whereas MediaPipe's per-landmark
+/// `z` states it outright. A finger pointed at the camera clears this even when
+/// its on-screen reach still looks like an ordinary extended finger, which is
+/// why aiming at the lens used to be nearly impossible to hit.
+const AT_LENS_DEPTH: f32 = 0.5;
+
 /// Thumb tip to index knuckle, in hand scales. Above `COCKED` the hammer is up
 /// and the gun is armed; below `PULLED` the thumb has dropped and it fires.
 /// The gap is the hysteresis that stops a wobbling thumb from double-tapping.
@@ -151,9 +160,15 @@ fn pose(hand: &HandState) -> Option<Pose> {
     if !extended || !curled {
         return None;
     }
-    if index < EXTENDED {
+    // Fingertip depth relative to the wrist, in hand scales; positive means the
+    // tip is nearer the lens.
+    let depth = (hand.landmarks[LM_WRIST][2] - hand.landmarks[LM_INDEX_TIP][2]) / scale;
+    let at_lens_by_depth = depth.is_finite() && depth >= AT_LENS_DEPTH;
+    if at_lens_by_depth || index < EXTENDED {
         // Pointed at the viewer: there is no screen bearing to shoot along.
-        if index < longest_curled * AT_LENS_LONGER {
+        // Foreshortening alone is a weak signal, so without the depth reading
+        // the pose still has to out-reach the curled fingers by a wide margin.
+        if !at_lens_by_depth && index < longest_curled * AT_LENS_LONGER {
             return None;
         }
         let thumb = dist(lm(LM_THUMB_TIP), lm(LM_INDEX_MCP)) / scale;
