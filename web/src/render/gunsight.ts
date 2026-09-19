@@ -25,8 +25,15 @@ const DASH_FILL = 0.55;
 /** Beam length in normalised units — long enough to always leave the frame. */
 const BEAM = 1.6;
 
-/** Two vertices per dash, per hand. */
-export const GUNSIGHT_CAPACITY = HANDS * DASHES * 2;
+/** Segments in the at-lens reticle: a ring plus a cross. */
+const RING_SEGMENTS = 16;
+const RETICLE_VERTICES = (RING_SEGMENTS + 2) * 2;
+
+/** Reticle radius in normalised units. */
+const RETICLE_R = 0.05;
+
+/** Two vertices per dash, per hand; the reticle never exceeds a beam. */
+export const GUNSIGHT_CAPACITY = HANDS * Math.max(DASHES * 2, RETICLE_VERTICES);
 
 /**
  * Writes the dashed beams into `out` and returns the vertex count. The vertex
@@ -56,7 +63,13 @@ export function buildGunSight(aim: Float32Array, out: Float32Array): number {
     const dy = aim[base + 4];
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     const len = Math.hypot(dx, dy);
-    if (!(len > 0.001)) continue;
+    if (!(len > 0.001)) {
+      // Aimed at the lens: no bearing to draw, so the sight becomes a reticle
+      // at the fingertip — the only cue that the shot will come at the viewer
+      // instead of across the field.
+      pushReticle(push, x, y);
+      continue;
+    }
 
     const ux = dx / len;
     const uy = dy / len;
@@ -73,4 +86,20 @@ export function buildGunSight(aim: Float32Array, out: Float32Array): number {
   }
 
   return n;
+}
+
+type Push = (x: number, y: number, glow: number) => void;
+
+/** A ring with a cross through it, centred on the fingertip. */
+function pushReticle(push: Push, x: number, y: number): void {
+  for (let i = 0; i < RING_SEGMENTS; i++) {
+    const a0 = (i / RING_SEGMENTS) * Math.PI * 2;
+    const a1 = ((i + 1) / RING_SEGMENTS) * Math.PI * 2;
+    push(x + Math.cos(a0) * RETICLE_R, y + Math.sin(a0) * RETICLE_R, 1);
+    push(x + Math.cos(a1) * RETICLE_R, y + Math.sin(a1) * RETICLE_R, 1);
+  }
+  push(x - RETICLE_R * 1.6, y, 0.7);
+  push(x + RETICLE_R * 1.6, y, 0.7);
+  push(x, y - RETICLE_R * 1.6, 0.7);
+  push(x, y + RETICLE_R * 1.6, 0.7);
 }
