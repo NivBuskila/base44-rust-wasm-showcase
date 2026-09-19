@@ -33,6 +33,7 @@ pub mod math;
 pub mod par;
 pub mod particles;
 pub mod rng;
+pub mod rush;
 pub mod spells;
 pub mod visual;
 

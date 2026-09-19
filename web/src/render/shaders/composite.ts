@@ -29,6 +29,20 @@ uniform float u_vignette;
 uniform float u_grade;
 /** Frame counter, to reseed the dither every frame. */
 uniform float u_frame;
+/**
+ * Lens rush: a bolt pushed at the camera. u_rushPower is 0 whenever nothing
+ * is in flight and the whole block below is skipped; u_rushAt is the origin in
+ * this pass's uv space and u_rushProgress runs 0 to 1 over its life.
+ *
+ * The field is two-dimensional, so depth here is entirely a camera trick: the
+ * frame dollies in on the origin, the image smears radially outward from it,
+ * and a core and shell of light grow through the smear. Those three together
+ * are what reads as something arriving at the lens; any one alone reads as a
+ * zoom, a blur or a flash.
+ */
+uniform vec2 u_rushAt;
+uniform float u_rushProgress;
+uniform float u_rushPower;
 ${LUMA}
 
 vec3 bloomAt(vec2 uv, float jitter) {
@@ -49,9 +63,55 @@ vec3 aces(vec3 x) {
   return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
 }
 
+/** Shape of the rush over its life: fast attack, long release. */
+float rushEnvelope(float p) {
+  return (1.0 - smoothstep(0.18, 1.0, p)) * smoothstep(0.0, 0.10, p);
+}
+
 void main() {
   vec2 d = v_uv - 0.5;
   float r2 = dot(d, d);
+
+  // --- lens rush: dolly + radial smear, both skipped when nothing is flying
+  vec2 uv = v_uv;
+  vec3 rushLight = vec3(0.0);
+  float rushAber = 0.0;
+  vec3 sceneColor = vec3(-1.0);
+  if (u_rushPower > 0.0) {
+    float p = clamp(u_rushProgress, 0.0, 1.0);
+    float amt = u_rushPower * rushEnvelope(p);
+    vec2 rd = v_uv - u_rushAt;
+    // Dolly: sampling a smaller window around the origin magnifies the image
+    // out of it, which is the same screen motion as the origin coming closer.
+    uv = u_rushAt + rd / (1.0 + 0.34 * amt);
+
+    // Streaks: five taps walking back towards the origin along the same line
+    // the dolly stretches. A radial smear is the one blur that reads as travel
+    // through the lens rather than as a soft image.
+    vec3 smear = vec3(0.0);
+    float wsum = 0.0;
+    for (int i = 0; i < 5; i++) {
+      float k = float(i) / 4.0;
+      float w = 1.0 - 0.55 * k;
+      smear += DECODE(texture(u_scene, u_rushAt + rd * (1.0 - 0.16 * amt * k)).rgb) * w;
+      wsum += w;
+    }
+    smear /= wsum;
+
+    // Light: a hot core at the origin plus a shell expanding past the frame,
+    // the same cyan the bolt itself is made of, tinted white at the core so it
+    // reads as intensity and not as a coloured blob.
+    float dist = length(rd);
+    float shell = exp(-pow((dist - 1.05 * p) / (0.07 + 0.30 * p), 2.0));
+    float core = exp(-dist * dist / (0.006 + 0.055 * p));
+    vec3 tint = mix(vec3(0.35, 0.85, 1.0), vec3(1.0), 0.45 * core);
+    rushLight = tint * (core * 2.1 + shell * 0.85) * u_rushPower * (1.0 - smoothstep(0.25, 1.0, p));
+
+    // The smear stands in for the scene under the dolly rather than being added
+    // to it: a second copy of the image would only double the exposure.
+    sceneColor = mix(DECODE(texture(u_scene, uv).rgb), smear, 0.75 * amt);
+    rushAber = amt;
+  }
 
   // Two independent white-noise taps, offset per frame so the pattern does not
   // sit still. Shared by the bloom read and the final dither.
@@ -65,11 +125,16 @@ void main() {
   // where the image is bright and soft, which is exactly what the bloom holds,
   // and splitting the scene as well would cost two more full-resolution taps
   // in the most expensive pass of the frame for no visible gain.
-  vec2 off = d * r2 * u_aberration * 0.055;
-  vec3 c = DECODE(texture(u_scene, v_uv).rgb) + vec3(
-    bloomAt(v_uv + off, n.x).r,
-    bloomAt(v_uv, n.y).g,
-    bloomAt(v_uv - off, fract(n.x + n.y)).b);
+  //
+  // During a rush the fringe also grows along the rush axis, not just with r^2:
+  // a lens flexes hardest where the image is moving through it.
+  vec2 rushDir = (v_uv - u_rushAt) * (0.045 * rushAber);
+  vec2 off = d * r2 * u_aberration * 0.055 + rushDir;
+  vec3 scene = sceneColor.r >= 0.0 ? sceneColor : DECODE(texture(u_scene, uv).rgb);
+  vec3 c = scene + vec3(
+    bloomAt(uv + off, n.x).r,
+    bloomAt(uv, n.y).g,
+    bloomAt(uv - off, fract(n.x + n.y)).b) + rushLight;
 
   vec3 mapped;
   if (u_grade >= 1.0) {
