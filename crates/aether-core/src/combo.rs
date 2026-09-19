@@ -194,10 +194,11 @@ impl ComboTracker {
 
     /// Advances every lane by `dt` and returns whatever completed.
     ///
-    /// At most one hit per call: two combos completing on the same frame would
-    /// stack into a single indistinguishable flash, so the first match wins and
-    /// every other lane is rewound.
-    pub fn update(&mut self, tracker: &GestureTracker, dt: f32) -> Option<ComboHit> {
+    /// At most one hit *per hand*: two combos completing on the same frame for
+    /// the same hand would stack into a single indistinguishable flash, so the
+    /// first match wins there. Both hands may land together, which is what makes
+    /// a two-handed cast possible.
+    pub fn update(&mut self, tracker: &GestureTracker, dt: f32) -> [Option<ComboHit>; HANDS] {
         let dt = if dt.is_finite() { dt.clamp(0.0, 0.25) } else { 0.0 };
         if self.show > 0.0 {
             self.show -= dt;
@@ -206,7 +207,7 @@ impl ComboTracker {
             }
         }
 
-        let mut hit = None;
+        let mut hits: [Option<ComboHit>; HANDS] = [None; HANDS];
         for (slot, hand) in tracker.hands().iter().enumerate().take(HANDS) {
             if !hand.present {
                 self.lanes[slot] = [Lane::default(); MAX_COMBOS];
@@ -226,8 +227,8 @@ impl ComboTracker {
                         lane.held = 0.0;
                         if lane.matched >= def.steps.len() {
                             *lane = Lane::default();
-                            if hit.is_none() {
-                                hit = Some(ComboHit {
+                            if hits[slot].is_none() {
+                                hits[slot] = Some(ComboHit {
                                     combo: ci,
                                     effect: def.effect,
                                     slot,
@@ -262,12 +263,15 @@ impl ComboTracker {
             }
         }
 
-        if let Some(h) = hit {
-            self.lanes = [[Lane::default(); MAX_COMBOS]; HANDS];
+        for h in hits.iter().flatten() {
+            // Only the hand that cast is rewound. Wiping both hands' lanes made a
+            // two-handed cast impossible: whichever hand completed first also
+            // cancelled the other one mid-sequence.
+            self.lanes[h.slot] = [Lane::default(); MAX_COMBOS];
             self.show = SHOW_TIME;
             self.shown = h.combo;
         }
-        hit
+        hits
     }
 
     /// How deep into a sequence one hand is, as 0..1.
@@ -361,11 +365,11 @@ mod tests {
             let mut buf = synth::buffer();
             let hand = synth::Hand::at(0.5, 0.5).gesture(gesture);
             synth::write(&mut buf, 0, &hand);
-            let mut hit = None;
+            let mut hit: Option<ComboHit> = None;
             for _ in 0..(seconds / DT).ceil() as usize {
                 self.gestures.update_hands(&buf, DT);
                 self.gestures.update_two_hand(DT);
-                if let Some(h) = self.combos.update(&self.gestures, DT) {
+                for h in self.combos.update(&self.gestures, DT).into_iter().flatten() {
                     hit = hit.or(Some(h));
                 }
             }
