@@ -25,7 +25,7 @@
 
 use crate::config::{
     Params, DEFAULT_PARTICLES, FLOW_CELLS, FLOW_H, FLOW_W, FLUID_CELLS, FLUID_H, FLUID_W,
-    HAND_BUFFER, MAX_PARTICLES, PARTICLE_STRIDE, POSE_STRIDE,
+    HAND_BUFFER, HANDS, MAX_PARTICLES, PARTICLE_STRIDE, POSE_STRIDE,
 };
 use crate::field::{Grid, VecField};
 use crate::fluid::Fluid;
