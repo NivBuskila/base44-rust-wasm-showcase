@@ -174,6 +174,16 @@ const MAX_TRACE_STEPS: usize = 4;
 /// beside it within eight frames.
 const MIN_STENCIL_WEIGHT: f32 = 1e-3;
 
+/// Extra dye dissipation rate, per second, for fluid cells touching the body.
+///
+/// The body is solid, so dye cannot pass through it — and without this the dye
+/// a gesture drives at the subject has nowhere to go and packs into the rim of
+/// cells along the silhouette, which on screen reads as colour *stuck to* the
+/// face and shoulders and staying there long after the gesture ended. Fading
+/// the contact rim keeps the collision (the flow still parts around the body)
+/// while the colour dies out where it lands instead of accumulating.
+const BODY_CONTACT_FADE: f32 = 3.2;
+
 /// A velocity + dye field on a fixed grid.
 pub struct Fluid {
     w: usize,
@@ -366,6 +376,7 @@ impl Fluid {
         for channel in &mut self.dye {
             channel.scale(dye_decay);
         }
+        self.fade_dye_at_body(dt);
 
         self.last_divergence = self.max_divergence();
     }
@@ -476,6 +487,36 @@ impl Fluid {
             fetch(&self.vel.u.data, self.w, corner, fx, fy),
             fetch(&self.vel.v.data, self.w, corner, fx, fy),
         )
+    }
+
+    /// Fades dye in the fluid cells pressed against the body silhouette.
+    ///
+    /// Only runs while a body is in frame; with none the obstacle mask is empty
+    /// and the whole sweep would be a no-op over the grid.
+    fn fade_dye_at_body(&mut self, dt: f32) {
+        if !self.has_obstacle {
+            return;
+        }
+        let (w, h) = (self.w, self.h);
+        let fade = decay(BODY_CONTACT_FADE, dt);
+        let obstacle = &self.obstacle.data;
+        for y in 0..h {
+            for x in 0..w {
+                let i = y * w + x;
+                if obstacle[i] >= 0.5 {
+                    continue;
+                }
+                let touching = (x > 0 && obstacle[i - 1] >= 0.5)
+                    || (x + 1 < w && obstacle[i + 1] >= 0.5)
+                    || (y > 0 && obstacle[i - w] >= 0.5)
+                    || (y + 1 < h && obstacle[i + w] >= 0.5);
+                if touching {
+                    for channel in &mut self.dye {
+                        channel.data[i] *= fade;
+                    }
+                }
+            }
+        }
     }
 
     /// Shortens a trace until its endpoint is out of the walls.
