@@ -85,25 +85,25 @@ pub static COMBOS: &[ComboDef] = &[
     ComboDef {
         name: "nova",
         steps: &[
-            ComboStep::new(Spell::Attract, 0.25),
-            ComboStep::new(Spell::Repel, 0.15),
+            ComboStep::new(Spell::Attract, 0.1),
+            ComboStep::new(Spell::Repel, 0.05),
         ],
         effect: ComboEffect::Nova,
     },
     ComboDef {
         name: "tempest",
         steps: &[
-            ComboStep::new(Spell::Repel, 0.25),
-            ComboStep::new(Spell::Vortex, 0.35),
+            ComboStep::new(Spell::Repel, 0.1),
+            ComboStep::new(Spell::Vortex, 0.12),
         ],
         effect: ComboEffect::Tempest,
     },
     ComboDef {
         name: "supernova",
         steps: &[
-            ComboStep::new(Spell::Attract, 0.2),
-            ComboStep::new(Spell::Freeze, 0.3),
-            ComboStep::new(Spell::Attract, 0.8),
+            ComboStep::new(Spell::Attract, 0.08),
+            ComboStep::new(Spell::Freeze, 0.12),
+            ComboStep::new(Spell::Attract, 0.3),
         ],
         effect: ComboEffect::Supernova,
     },
