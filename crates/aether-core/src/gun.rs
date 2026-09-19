@@ -15,11 +15,15 @@ use crate::config::{
 };
 use crate::gesture::{GestureTracker, HandState};
 
-/// Index fingertip at least this far from the wrist reads as extended; the
-/// other three tips must all be under `CURLED`. A straight finger sits near 2.3
-/// hand scales, a curled one near 0.8, so both thresholds have room.
-const EXTENDED: f32 = 1.75;
-const CURLED: f32 = 1.35;
+/// Index fingertip at least this far from the wrist reads as extended, and the
+/// other three tips must all stay under `CURLED`. The absolute numbers are
+/// deliberately loose — a hand aimed *at* the camera foreshortens, so a real
+/// gun pose measures far shorter than the 2.3 hand scales a flat straight
+/// finger does. What actually separates the pose is `LONGER`: the index must
+/// out-reach the longest curled finger by that ratio, which holds at any angle.
+const EXTENDED: f32 = 1.45;
+const CURLED: f32 = 1.6;
+const LONGER: f32 = 1.3;
 
 /// Thumb tip to index knuckle, in hand scales. Above `COCKED` the hammer is up
 /// and the gun is armed; below `PULLED` the thumb has dropped and it fires.
@@ -103,10 +107,13 @@ fn pose(hand: &HandState) -> Option<Pose> {
     let wrist = lm(LM_WRIST);
     let reach = |i: usize| dist(wrist, lm(i)) / scale;
 
-    let extended = reach(LM_INDEX_TIP) >= EXTENDED;
-    let curled = [LM_MIDDLE_TIP, LM_RING_TIP, LM_PINKY_TIP]
+    let index = reach(LM_INDEX_TIP);
+    let longest_curled = [LM_MIDDLE_TIP, LM_RING_TIP, LM_PINKY_TIP]
         .iter()
-        .all(|&i| reach(i) <= CURLED);
+        .map(|&i| reach(i))
+        .fold(0.0f32, f32::max);
+    let extended = index >= EXTENDED && index >= longest_curled * LONGER;
+    let curled = longest_curled <= CURLED;
     if !extended || !curled {
         return None;
     }
