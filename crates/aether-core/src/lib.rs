@@ -20,6 +20,7 @@
 
 pub mod combo;
 pub mod config;
+pub mod duet;
 pub mod engine;
 pub mod field;
 pub mod fluid;
