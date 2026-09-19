@@ -83,15 +83,20 @@ FEATURES="aether-core/simd"
 EXTRA=()
 
 if [ "$THREADS" = "1" ]; then
-  if ! rustup toolchain list 2> /dev/null | grep -q '^nightly'; then
-    echo "==> installing the nightly toolchain for the threaded build"
-    rustup toolchain install nightly --profile minimal -c rust-src -t wasm32-unknown-unknown
+  # A dated nightly, not the moving `nightly` channel: `-Zbuild-std` and the
+  # atomics target features are unstable, so an unpinned nightly can break the
+  # threaded build overnight with no change to this repo. Bump deliberately
+  # (or override with AETHER_NIGHTLY=nightly-YYYY-MM-DD) and rebuild.
+  NIGHTLY="${AETHER_NIGHTLY:-nightly-2026-09-19}"
+  if ! rustup toolchain list 2> /dev/null | grep -q "^$NIGHTLY"; then
+    echo "==> installing $NIGHTLY for the threaded build"
+    rustup toolchain install "$NIGHTLY" --profile minimal -c rust-src -t wasm32-unknown-unknown
   fi
   # rust-src must be present for -Zbuild-std; a nightly installed without it
   # is silently useless here, so make sure.
-  rustup component add rust-src --toolchain nightly > /dev/null 2>&1 || true
-  rustup target add wasm32-unknown-unknown --toolchain nightly > /dev/null 2>&1 || true
-  export RUSTUP_TOOLCHAIN=nightly
+  rustup component add rust-src --toolchain "$NIGHTLY" > /dev/null 2>&1 || true
+  rustup target add wasm32-unknown-unknown --toolchain "$NIGHTLY" > /dev/null 2>&1 || true
+  export RUSTUP_TOOLCHAIN="$NIGHTLY"
   export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}/wasm-mt"
   # The target features make std thread-safe; the link args make the memory
   # itself shared and imported, so every worker instantiates the module over
