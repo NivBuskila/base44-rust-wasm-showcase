@@ -356,7 +356,7 @@ impl Engine {
 
         // Thrown bolts: pure motion, so they are recognised from the same hand
         // state the spells just used and fired straight into the field.
-        let thrown = self.throws.update(&self.tracker);
+        let thrown = self.throws.update(&self.tracker, real_dt);
         for throw in thrown.into_iter().flatten() {
             bolt::fire(
                 &mut self.fluid,
