@@ -1,0 +1,6 @@
+# The stable toolchain the native tests and the baseline WASM build are pinned
+# to. The threaded engine needs a nightly, which `scripts/build-wasm.sh` pins
+# separately (see AETHER_NIGHTLY there) and selects via RUSTUP_TOOLCHAIN.
+[toolchain]
+channel = "1.90.0"
+targets = ["wasm32-unknown-unknown"]

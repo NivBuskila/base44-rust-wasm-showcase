@@ -27,10 +27,25 @@
  * never exceeds the clamp, so no value ever gets silently rewritten.
  */
 
-import { FLUID_H, FLUID_W, MAX_PARTICLES, STAT } from './constants';
+import { MAX_PARTICLES, STAT } from './constants';
 import type { EngineTier } from './engine-loader';
 import { ComboBook, comboState, duetState } from './hud-combos';
+import { markup } from './hud-markup';
+import { Meter, finite, frameTone } from './hud-meter';
 import { PRESETS, type ParamPreset } from './hud-presets';
+import { Sparkline } from './hud-spark';
+import {
+  CELLS,
+  GESTURES,
+  METERS,
+  MODES,
+  PARAMS,
+  PARTICLE_DETENTS,
+  clamp01,
+  countToDetent,
+  detentToCount,
+  thousands,
+} from './hud-spec';
 import type { HudCallbacks, HudStats, PerceptionStatus, ViewMode } from './types';
 
 /**
@@ -39,18 +54,6 @@ import type { HudCallbacks, HudStats, PerceptionStatus, ViewMode } from './types
  * to redraw digits nobody can read at 60 Hz.
  */
 const PAINT_MS = 100;
-
-/** One frame at 60 Hz. The scale every timing bar is measured against. */
-const FRAME_BUDGET_MS = 1000 / 60;
-
-/**
- * Inference is allowed twice the frame budget: `main.ts` throttles it to 30 Hz,
- * so it competes with every other frame rather than every frame.
- */
-const INFERENCE_BUDGET_MS = FRAME_BUDGET_MS * 2;
-
-/** Columns in the frame-time sparkline — at 10 Hz this is ~9 s of history. */
-const SPARK_SAMPLES = 92;
 
 /**
  * Longer than this between two `update` calls is the tab having been
@@ -69,231 +72,6 @@ const FPS_WARMUP_FRAMES = 20;
 
 /** How long the "show your hands" hint lingers when nothing is detected. */
 const HINT_MS = 12_000;
-
-/** Bottom of the particle-count slider; below this there is nothing to see. */
-const PARTICLE_MIN = 1_000;
-
-/** Slider detents for the log-scale particle control. */
-const PARTICLE_DETENTS = 1_000;
-
-/** Bar tone thresholds, as a fraction of the metric's budget. */
-const TONE_WARN = 0.6;
-
-/**
- * Whole-frame thresholds in ms, deliberately not `ratio >= 1`.
- * A healthy 60 Hz session measures *exactly* one budget per frame, so a strict
- * comparison would paint a perfect session permanently red. These are the
- * points where a user actually feels it: ~54 fps and ~48 fps.
- */
-const FRAME_WARN_MS = 18.5;
-const FRAME_OVER_MS = 21;
-
-type Tone = 'ok' | 'warn' | 'over';
-
-interface MeterSpec {
-  readonly id: string;
-  readonly label: string;
-  readonly budget: number;
-  readonly digits: number;
-}
-
-const METERS: readonly MeterSpec[] = [
-  { id: 'step', label: 'step', budget: FRAME_BUDGET_MS, digits: 2 },
-  { id: 'render', label: 'render', budget: FRAME_BUDGET_MS, digits: 2 },
-  { id: 'infer', label: 'infer', budget: INFERENCE_BUDGET_MS, digits: 1 },
-];
-
-interface CellSpec {
-  readonly id: string;
-  readonly label: string;
-}
-
-const CELLS: readonly CellSpec[] = [
-  { id: 'engine', label: 'engine' },
-  { id: 'particles', label: 'particles' },
-  { id: 'energy', label: 'energy' },
-  { id: 'speed', label: 'max speed' },
-  { id: 'divergence', label: 'divergence' },
-  { id: 'motion', label: 'motion' },
-  { id: 'hands', label: 'hands' },
-  { id: 'body', label: 'body' },
-  { id: 'repairs', label: 'nan repairs' },
-];
-
-interface ParamSpec {
-  readonly key: string;
-  readonly label: string;
-  readonly min: number;
-  readonly max: number;
-  readonly step: number;
-  readonly value: number;
-  readonly fmt: (v: number) => string;
-}
-
-const d1 = (v: number): string => v.toFixed(1);
-const d2 = (v: number): string => v.toFixed(2);
-
-/** `120000` -> `120k`, `1500` -> `1.5k`. Keeps the columns narrow. */
-function thousands(v: number): string {
-  if (!Number.isFinite(v)) return '—';
-  if (Math.abs(v) < 1000) return v.toFixed(0);
-  const k = v / 1000;
-  return `${Math.abs(k) < 10 ? k.toFixed(1) : k.toFixed(0)}k`;
-}
-
-/**
- * The parameters that change how the fluid *feels*. Defaults match
- * `Params::default` and `ParticleConfig::default` so the panel reads true
- * before anything is touched — the HUD is deliberately not told the engine's
- * state at construction, and sending these on boot would be a pointless write.
- */
-const PARAMS: readonly ParamSpec[] = [
-  { key: 'vorticity', label: 'vorticity', min: 0, max: 60, step: 0.5, value: 14, fmt: d1 },
-  // Both dissipations clamp to 0..10 in Rust, but past ~3 per second the field
-  // is gone inside a frame or two and the whole top of the travel is the same
-  // black screen, so the slider stops where the range is still expressive.
-  { key: 'dye_dissipation', label: 'dye decay', min: 0, max: 3, step: 0.01, value: 1, fmt: d2 },
-  {
-    key: 'velocity_dissipation',
-    label: 'flow decay',
-    min: 0,
-    max: 2,
-    step: 0.01,
-    value: 0.3,
-    fmt: d2,
-  },
-  { key: 'hand_force', label: 'hand force', min: 0, max: 8, step: 0.05, value: 1, fmt: d2 },
-  { key: 'flow_force', label: 'flow force', min: 0, max: 8, step: 0.05, value: 0.45, fmt: d2 },
-  { key: 'curl_influence', label: 'curl swirl', min: 0, max: 20, step: 0.1, value: 2.2, fmt: d1 },
-  {
-    key: 'time_scale',
-    label: 'time scale',
-    min: 0.05,
-    max: 4,
-    step: 0.05,
-    value: 1,
-    fmt: (v) => `${v.toFixed(2)}×`,
-  },
-  { key: 'body_push', label: 'body push', min: 0, max: 4, step: 0.05, value: 1, fmt: d2 },
-  {
-    key: 'spawn_rate',
-    label: 'spawn rate',
-    min: 0,
-    max: 400_000,
-    step: 2_000,
-    value: 30_000,
-    fmt: (v) => `${thousands(v)}/s`,
-  },
-  // How long a particle lives before it respawns somewhere random. High up the
-  // travel the pool barely recycles, so a gathered cloud stays gathered
-  // instead of dissolving under the hand holding it.
-  {
-    key: 'particle_life',
-    label: 'particle life',
-    min: 0.2,
-    max: 30,
-    step: 0.1,
-    value: 4.5,
-    fmt: (v) => `${v.toFixed(1)}s`,
-  },
-];
-
-interface ModeSpec {
-  readonly mode: ViewMode;
-  readonly key: string;
-  readonly hint: string;
-}
-
-const MODES: readonly ModeSpec[] = [
-  { mode: 'aether', key: '1', hint: 'dye, particles and bloom' },
-  { mode: 'camera', key: '2', hint: 'the camera feed alone' },
-  { mode: 'blend', key: '3', hint: 'the camera feed under the full aether look' },
-  { mode: 'debug', key: '4', hint: 'obstacles, flow and pressure' },
-  { mode: 'particles', key: '5', hint: 'particles on black' },
-];
-
-interface GestureSpec {
-  /** Matches `Spell::name` in `aether_core::gesture`, or `warp` for time. */
-  readonly spell: string;
-  readonly hand: string;
-  readonly effect: string;
-  readonly icon: string;
-}
-
-/**
- * Abstract effect glyphs rather than little hands: the row already names the
- * hand shape, and a 18 px pictogram of a fist is unreadable while "everything
- * rushes inward" is not.
- */
-const ICONS: Record<string, string> = {
-  attract:
-    '<circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/>' +
-    '<path d="M9.6 3.4 12 6.2l2.4-2.8M9.6 20.6 12 17.8l2.4 2.8M3.4 9.6 6.2 12l-2.8 2.4M20.6 9.6 17.8 12l2.8 2.4"/>',
-  repel:
-    '<circle cx="12" cy="12" r="2.8"/>' +
-    '<path d="M9.6 6.2 12 3.4l2.4 2.8M9.6 17.8 12 20.6l2.4-2.8M6.2 9.6 3.4 12l2.8 2.4M17.8 9.6 20.6 12l-2.8 2.4"/>',
-  vortex:
-    '<path d="M12 12.4c0-1.5 1.2-2.7 2.7-2.7 2.1 0 3.9 1.8 3.9 4 0 3-2.5 5.5-5.6 5.5-4 0-7.2-3.3-7.2-7.3 0-4.9 4-8.9 8.9-8.9"/>',
-  ignite:
-    '<path d="M12 3.4c3.3 3.8 5.1 6.3 5.1 9.1a5.1 5.1 0 0 1-10.2 0c0-2 .9-3.6 2.6-5.6.5 1.4 1.2 2.2 2 2.4-.2-2 0-3.9.5-5.9z"/>',
-  freeze:
-    '<path d="M12 3v18M4.2 7.5l15.6 9M19.8 7.5l-15.6 9"/>' +
-    '<path d="M9.6 5.2 12 6.7l2.4-1.5M9.6 18.8 12 17.3l2.4 1.5"/>',
-  shatter:
-    '<circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/>' +
-    '<path d="M12 6V3M12 21v-3M6 12H3M21 12h-3M7.2 7.2 5.1 5.1M18.9 18.9l-2.1-2.1M7.2 16.8l-2.1 2.1M18.9 5.1l-2.1 2.1"/>',
-  warp:
-    '<path d="M20 12a8 8 0 1 1-2.7-6"/><path d="M20.2 3.6V7.8h-4.2"/><path d="M12 7.8v4.6l3 1.8"/>',
-  release:
-    '<circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="3.2" stroke-dasharray="2 2"/>' +
-    '<path d="M12 1.5v1.8M12 20.7v1.8M1.5 12h1.8M20.7 12h1.8"/>',
-};
-
-const GESTURES: readonly GestureSpec[] = [
-  { spell: 'attract', hand: 'closed fist', effect: 'gravity well', icon: ICONS.attract },
-  { spell: 'repel', hand: 'open palm', effect: 'push everything out', icon: ICONS.repel },
-  { spell: 'vortex', hand: 'pinch', effect: 'spin a vortex', icon: ICONS.vortex },
-  { spell: 'ignite', hand: 'point', effect: 'paint a hot trail', icon: ICONS.ignite },
-  { spell: 'freeze', hand: 'victory', effect: 'chill and damp', icon: ICONS.freeze },
-  { spell: 'shatter', hand: 'thumb up', effect: 'burst outward', icon: ICONS.shatter },
-  { spell: 'release', hand: 'open a held fist', effect: 'ring shockwave', icon: ICONS.release },
-  { spell: 'warp', hand: 'two hands, rotate', effect: 'warp time', icon: ICONS.warp },
-];
-
-const SHORTCUTS: readonly [string, string][] = [
-  ['1 – 5', 'aether / camera / blend / debug / particles'],
-  ['C', 'camera feed behind the fluid'],
-  ['O', 'overdrive: the full 1M particle pool'],
-  ['H', 'hide or show this panel'],
-  ['R', 'reset the field'],
-  ['?', 'this sheet'],
-  ['ESC', 'close'],
-];
-
-/** Log-scale slider position (0..PARTICLE_DETENTS) -> particle count. */
-function detentToCount(detent: number): number {
-  const t = clamp01(detent / PARTICLE_DETENTS);
-  const n = PARTICLE_MIN * Math.pow(MAX_PARTICLES / PARTICLE_MIN, t);
-  // Round to a readable step so the label does not show 118,431.
-  const quantum = n < 10_000 ? 500 : n < 100_000 ? 1_000 : 5_000;
-  return Math.max(PARTICLE_MIN, Math.min(MAX_PARTICLES, Math.round(n / quantum) * quantum));
-}
-
-/** Inverse of {@link detentToCount}, for seeding the slider. */
-function countToDetent(count: number): number {
-  const n = Math.max(PARTICLE_MIN, Math.min(MAX_PARTICLES, count));
-  const t = Math.log(n / PARTICLE_MIN) / Math.log(MAX_PARTICLES / PARTICLE_MIN);
-  return Math.round(clamp01(t) * PARTICLE_DETENTS);
-}
-
-function clamp01(v: number): number {
-  return Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
-}
-
-/** Any non-finite engine value reads as zero rather than poisoning the DOM. */
-function finite(v: number | undefined): number {
-  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
-}
 
 /** A latched spell name, or `idle` for anything the engine did not send. */
 function spellAt(spells: HudStats['spells'] | undefined, slot: number): string {
@@ -326,69 +104,6 @@ function presence(hands: number, spells: HudStats['spells'] | undefined): [boole
   return [true, false];
 }
 
-function toneOf(ratio: number): Tone {
-  if (ratio >= 1) return 'over';
-  if (ratio >= TONE_WARN) return 'warn';
-  return 'ok';
-}
-
-/** Tone for a whole-frame time in ms. See {@link FRAME_WARN_MS}. */
-function frameTone(ms: number): Tone {
-  if (ms >= FRAME_OVER_MS) return 'over';
-  if (ms >= FRAME_WARN_MS) return 'warn';
-  return 'ok';
-}
-
-/** Escapes text destined for the one-shot markup build. */
-function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-/**
- * A label / track / number triple with peak-hold. `sample` is called every
- * frame; `paint` drains the peak and is called at 10 Hz.
- */
-class Meter {
-  private peak = 0;
-  private lastWidth = -1;
-  private lastTone: Tone | '' = '';
-
-  constructor(
-    private readonly fill: HTMLElement,
-    private readonly value: HTMLElement,
-    private readonly budget: number,
-    private readonly digits: number,
-  ) {}
-
-  sample(ms: number): void {
-    const v = finite(ms);
-    if (v > this.peak) this.peak = v;
-  }
-
-  /** Drops the held peak without touching the DOM, for when nobody is looking. */
-  drain(): void {
-    this.peak = 0;
-  }
-
-  paint(): void {
-    const ms = this.peak;
-    this.peak = 0;
-    const ratio = ms / this.budget;
-    const width = Math.round(Math.min(1, ratio) * 100);
-    if (width !== this.lastWidth) {
-      this.lastWidth = width;
-      this.fill.style.setProperty('--v', `${width}%`);
-    }
-    const tone = toneOf(ratio);
-    if (tone !== this.lastTone) {
-      this.lastTone = tone;
-      this.fill.dataset.tone = tone;
-    }
-    const text = ms.toFixed(this.digits);
-    if (this.value.textContent !== text) this.value.textContent = text;
-  }
-}
-
 export class Hud {
   private readonly root: HTMLElement;
   private readonly cb: HudCallbacks;
@@ -400,8 +115,7 @@ export class Hud {
   private readonly ambientEl: HTMLElement;
   private readonly engineBadge: HTMLElement;
   private readonly meters: Meter[] = [];
-  private readonly spark: HTMLCanvasElement;
-  private readonly sparkCtx: CanvasRenderingContext2D | null;
+  private readonly spark: Sparkline;
   private readonly cells = new Map<string, HTMLElement>();
   private readonly spellEls: HTMLElement[] = [];
   private readonly legendEls = new Map<string, HTMLElement>();
@@ -420,9 +134,6 @@ export class Hud {
   private readonly presetBtns = new Map<string, HTMLButtonElement>();
   private readonly combos: ComboBook;
 
-  /** Frame-time history, newest last, as a fill-then-shift window. */
-  private readonly history = new Float32Array(SPARK_SAMPLES);
-  private historyLen = 0;
   private framePeak = 0;
   private lastUpdateMs = 0;
   /** `update` calls so far, capped at {@link FPS_WARMUP_FRAMES}. */
@@ -442,7 +153,6 @@ export class Hud {
   private lastPercep = '';
   private lastFpsTone = '';
   private lastAmbient: boolean | null = null;
-  private readonly resizeObs: ResizeObserver | null = null;
 
   constructor(root: HTMLElement, callbacks: HudCallbacks) {
     this.root = root;
@@ -456,8 +166,7 @@ export class Hud {
     this.fpsEl = this.q('[data-fps]');
     this.ambientEl = this.q('[data-ambient]');
     this.engineBadge = this.q('[data-engine]');
-    this.spark = this.q('canvas.hud-spark');
-    this.sparkCtx = this.spark.getContext('2d');
+    this.spark = new Sparkline(this.q('canvas.hud-spark'));
     this.warpValue = this.q('[data-warp-value]');
     this.warpFill = this.q('[data-warp-fill]');
     this.percepEl = this.q('.hud-percep');
@@ -495,14 +204,6 @@ export class Hud {
     this.wireControls();
     this.wireKeys();
 
-    // The sparkline is the only canvas in the HUD; keeping its backing store in
-    // step with its CSS box is what stops it from looking like a stretched JPEG
-    // on a phone or a high-DPI display.
-    if (typeof ResizeObserver !== 'undefined') {
-      this.resizeObs = new ResizeObserver(() => this.resizeSpark());
-      this.resizeObs.observe(this.spark);
-    }
-    this.resizeSpark();
   }
 
   /**
@@ -557,7 +258,7 @@ export class Hud {
       this.framePeak > 0.001 ? this.framePeak : this.updates >= FPS_WARMUP_FRAMES ? loopMs : 0;
     this.framePeak = 0;
     if (frameMs > 0.001) {
-      this.push(frameMs);
+      this.spark.push(frameMs);
       const worstFps = 1000 / frameMs;
       this.setText(this.fpsEl, worstFps >= 10 ? worstFps.toFixed(0) : worstFps.toFixed(1));
       const fpsTone = frameTone(frameMs);
@@ -584,7 +285,7 @@ export class Hud {
     }
 
     for (const m of this.meters) m.paint();
-    this.drawSpark();
+    this.spark.draw();
 
     const hands = Math.round(finite(st?.[STAT.HANDS_PRESENT]));
     const maskOn = finite(st?.[STAT.MASK_PRESENT]) > 0.5;
@@ -644,7 +345,7 @@ export class Hud {
   /** Detaches global listeners. Not used by `main.ts`; here for teardown. */
   dispose(): void {
     window.removeEventListener('keydown', this.onKey);
-    this.resizeObs?.disconnect();
+    this.spark.dispose();
   }
 
   // ------------------------------------------------------------------ wiring
@@ -804,7 +505,7 @@ export class Hud {
     this.percepEl.hidden = collapsed;
     this.collapseBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
     this.collapseBtn.setAttribute('aria-label', collapsed ? 'Expand the panel' : 'Collapse to fps');
-    if (!collapsed) this.resizeSpark();
+    if (!collapsed) this.spark.resize();
   }
 
   /**
@@ -865,59 +566,6 @@ export class Hud {
 
   // ---------------------------------------------------------------- painting
 
-  private push(ms: number): void {
-    if (this.historyLen < SPARK_SAMPLES) {
-      this.history[this.historyLen++] = ms;
-    } else {
-      this.history.copyWithin(0, 1);
-      this.history[SPARK_SAMPLES - 1] = ms;
-    }
-  }
-
-  private resizeSpark(): void {
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const w = Math.max(1, Math.round(this.spark.clientWidth * dpr));
-    const h = Math.max(1, Math.round(this.spark.clientHeight * dpr));
-    if (this.spark.width !== w) this.spark.width = w;
-    if (this.spark.height !== h) this.spark.height = h;
-    this.drawSpark();
-  }
-
-  private drawSpark(): void {
-    const ctx = this.sparkCtx;
-    if (!ctx) return;
-    const w = this.spark.width;
-    const h = this.spark.height;
-    if (w < 2 || h < 2) return;
-
-    ctx.clearRect(0, 0, w, h);
-    // Scale to two frame budgets, or to the worst spike, so a 30 fps session is
-    // visibly over budget rather than silently clipped at the top.
-    let worst = FRAME_BUDGET_MS * 2;
-    for (let i = 0; i < this.historyLen; i++) {
-      const v = this.history[i] ?? 0;
-      if (v > worst) worst = v;
-    }
-
-    const budgetY = h - (FRAME_BUDGET_MS / worst) * h;
-    ctx.fillStyle = 'rgba(126, 166, 214, 0.22)';
-    ctx.fillRect(0, Math.round(budgetY), w, 1);
-
-    const colW = w / SPARK_SAMPLES;
-    const barW = Math.max(1, colW * 0.68);
-    // Right-aligned: the newest sample always sits at the right edge, so a
-    // partly-filled window reads as history scrolling in rather than a ramp.
-    const offset = SPARK_SAMPLES - this.historyLen;
-    for (let i = 0; i < this.historyLen; i++) {
-      const v = this.history[i] ?? 0;
-      const tone = frameTone(v);
-      ctx.fillStyle =
-        tone === 'over' ? '#ff6b8b' : tone === 'warn' ? '#ffc65c' : 'rgba(53, 214, 255, 0.85)';
-      const bh = Math.max(1, (v / worst) * h);
-      ctx.fillRect((offset + i) * colW, h - bh, barW, bh);
-    }
-  }
-
   private cell(id: string, text: string): void {
     const el = this.cells.get(id);
     if (el) this.setText(el, text);
@@ -952,210 +600,3 @@ function fmtSmall(v: number): string {
   return v.toFixed(4);
 }
 
-function meterRow(m: MeterSpec): string {
-  return `
-    <div class="m-row" data-meter="${m.id}">
-      <span class="m-key">${esc(m.label)}</span>
-      <span class="trk"><i class="trk-fill" data-tone="ok"></i></span>
-      <span class="m-val">0.00</span>
-      <span class="m-unit">ms</span>
-    </div>`;
-}
-
-function cellBox(c: CellSpec): string {
-  return `
-    <div class="c-box" data-cell="${c.id}">
-      <span>${esc(c.label)}</span>
-      <b>—</b>
-    </div>`;
-}
-
-function handCard(slot: number, name: string): string {
-  return `
-    <div class="h-card" data-hand="${slot}" data-state="off">
-      <span>${esc(name)}</span>
-      <b>no hand</b>
-    </div>`;
-}
-
-/**
- * The legend appears twice — in the panel and in the help sheet. Only the panel
- * copy carries `data-spell`, so the live-highlight selectors stay unambiguous.
- */
-function legendRow(g: GestureSpec, live: boolean): string {
-  const id = live ? `data-spell="${g.spell}" data-on=""` : '';
-  return `
-    <li class="g-row" ${id}>
-      <span class="g-ico">${svg(g.icon)}</span>
-      <span class="g-txt"><b>${esc(g.effect)}</b><i>${esc(g.hand)}</i></span>
-    </li>`;
-}
-
-function paramRow(p: ParamSpec): string {
-  return `
-    <label class="p-row">
-      <span class="p-key">${esc(p.label)}</span>
-      <input
-        type="range"
-        data-param="${p.key}"
-        min="${p.min}"
-        max="${p.max}"
-        step="${p.step}"
-        value="${p.value}"
-        aria-label="${esc(p.label)}"
-      />
-      <span class="p-val" data-param-value="${p.key}">${esc(p.fmt(p.value))}</span>
-    </label>`;
-}
-
-function svg(paths: string): string {
-  return (
-    '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" ' +
-    'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" ' +
-    `stroke-linejoin="round">${paths}</svg>`
-  );
-}
-
-/** The whole panel, built once. */
-function markup(): string {
-  const presetBtns = PRESETS.map(
-    (p) => `
-      <button
-        type="button"
-        class="seg-btn"
-        data-preset="${p.id}"
-        aria-pressed="${p.id === 'default'}"
-        title="${esc(p.hint)}"
-      >${esc(p.label)}</button>`,
-  ).join('');
-  const modeBtns = MODES.map(
-    (m) => `
-      <button
-        type="button"
-        class="seg-btn"
-        data-mode="${m.mode}"
-        aria-pressed="${m.mode === 'aether' ? 'true' : 'false'}"
-        title="${esc(m.hint)} (${m.key})"
-      >${esc(m.mode)}<span class="seg-key">${m.key}</span></button>`,
-  ).join('');
-
-  const keyRows = SHORTCUTS.map(
-    ([k, what]) => `<div class="k-row"><kbd>${esc(k)}</kbd><span>${esc(what)}</span></div>`,
-  ).join('');
-
-  const chips = GESTURES.map(
-    (g) => `<span class="chip">${svg(g.icon)}${esc(g.effect)}</span>`,
-  ).join('');
-
-  return `
-  <aside class="hud-panel" aria-label="Aether telemetry and controls">
-    <header class="hud-head">
-      <div class="hud-mark">
-        <b>AETHER</b>
-        <span>fluid reality engine</span>
-      </div>
-      <div class="hud-fps">
-        <b data-fps data-tone="ok">—</b><span>fps</span>
-      </div>
-      <div class="hud-acts">
-        <button type="button" class="ico-btn" data-act="help" aria-label="Help and keyboard shortcuts" title="Help (?)">
-          ${svg('<circle cx="12" cy="12" r="9"/><path d="M9.6 9.2a2.5 2.5 0 1 1 3.6 2.3c-.8.5-1.2 1-1.2 2"/><path d="M12 17.2h.01"/>')}
-        </button>
-        <button type="button" class="ico-btn" data-act="collapse" aria-expanded="false" aria-label="Expand the panel" title="Collapse or expand">
-          ${svg('<path class="chev-d" d="M6 9.5l6 5.5 6-5.5"/><path class="chev-u" d="M6 14.5l6-5.5 6 5.5"/>')}
-        </button>
-      </div>
-      <span class="hud-badge" data-ambient hidden>ambient</span>
-      <span class="hud-badge is-engine" data-engine hidden></span>
-    </header>
-
-    <div class="hud-body">
-      <section class="hud-sec">
-        <h2>frame budget<span>16.7 ms @ 60 hz</span></h2>
-        ${METERS.map(meterRow).join('')}
-        <canvas class="hud-spark" aria-hidden="true"></canvas>
-      </section>
-
-      <section class="hud-sec">
-        <h2>field</h2>
-        <div class="c-grid">${CELLS.map(cellBox).join('')}</div>
-      </section>
-
-      <section class="hud-sec">
-        <h2>view</h2>
-        <div class="seg" role="group" aria-label="View mode">${modeBtns}</div>
-        <button type="button" class="row-btn" data-act="camera" aria-pressed="true">
-          <span>camera feed</span><b data-camera-value>on</b>
-        </button>
-        <label class="p-row">
-          <span class="p-key">particles</span>
-          <input type="range" data-particles min="0" max="${PARTICLE_DETENTS}" step="1" value="0" aria-label="Particle count" />
-          <span class="p-val" data-particles-value>120k</span>
-        </label>
-        <button type="button" class="row-btn is-overdrive" data-act="overdrive" aria-pressed="false">
-          <span>overdrive · 1M particles</span><b>O</b>
-        </button>
-        <button type="button" class="row-btn is-action" data-act="reset">
-          <span>reset the field</span><b>R</b>
-        </button>
-      </section>
-
-      <section class="hud-sec">
-        <h2>spells<span>latched per hand</span></h2>
-        <div class="h-grid">${handCard(0, 'hand i')}${handCard(1, 'hand ii')}</div>
-        <div class="m-row m-warp">
-          <span class="m-key">time</span>
-          <span class="trk"><i class="trk-fill" data-warp-fill data-tone="off"></i></span>
-          <span class="m-val" data-warp-value>1.00×</span>
-          <span class="m-unit"></span>
-        </div>
-        <ul class="g-list">${GESTURES.map((g) => legendRow(g, true)).join('')}</ul>
-      </section>
-
-      <details class="hud-sec hud-adv">
-        <summary>engine parameters</summary>
-        <div class="seg is-presets" role="group" aria-label="Parameter presets">${presetBtns}</div>
-        ${PARAMS.map(paramRow).join('')}
-      </details>
-    </div>
-
-    <p class="hud-percep" data-tone="wait">
-      <i class="dot" aria-hidden="true"></i>
-      <b data-percep-head>starting up</b>
-      <span data-percep-why>optical flow is already driving the fluid</span>
-    </p>
-  </aside>
-
-  <div class="hud-hint" aria-hidden="true">
-    <b>show your hands</b>
-    <div class="chips">${chips}</div>
-    <span class="hint-keys">? gesture guide &middot; H hide</span>
-  </div>
-
-  <div class="hud-help" role="dialog" aria-modal="false" aria-label="Aether reference" aria-hidden="true">
-    <div class="help-sheet">
-      <header>
-        <b>AETHER</b><span>reference</span>
-        <button type="button" class="ico-btn" data-act="help-close" aria-label="Close help" title="Close (Esc)">
-          ${svg('<path d="M6 6l12 12M18 6 6 18"/>')}
-        </button>
-      </header>
-      <div class="help-cols">
-        <div>
-          <h3>gestures</h3>
-          <ul class="g-list is-static">${GESTURES.map((g) => legendRow(g, false)).join('')}</ul>
-        </div>
-        <div>
-          <h3>keys</h3>
-          <div class="k-list">${keyRows}</div>
-          <h3>how it works</h3>
-          <p class="help-note">
-            Hand and body landmarks steer a ${FLUID_W}×${FLUID_H} fluid solver
-            compiled to WebAssembly. With no camera or no models, optical
-            flow — or the engine's own ambient drive — keeps the field alive.
-          </p>
-        </div>
-      </div>
-    </div>
-  </div>`;
-}

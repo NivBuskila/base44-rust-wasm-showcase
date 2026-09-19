@@ -101,6 +101,9 @@ export class PerformanceGovernor {
     this.basePressure = pressure;
     this.baseParticles = particles;
     this.settle = SETTLE_FRAMES;
+    // The caller has just set the knobs to 100%; a device already down the
+    // ladder must not run at full cost until the next tier change.
+    if (this.tier !== 0) this.apply(this.tier);
   }
 
   /**
