@@ -797,7 +797,7 @@ export class Renderer {
    */
   private drawGunSight(res: Resources, frame: RenderFrame, style: ModeStyle): void {
     if (!frame.gunAim) return;
-    const vertices = buildGunSight(frame.gunAim, this.sightScratch);
+    const vertices = buildGunSight(frame.gunAim, this.sightScratch, frame.time);
     if (vertices === 0) return;
 
     const gl = this.gl;
