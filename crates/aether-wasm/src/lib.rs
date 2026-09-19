@@ -204,6 +204,42 @@ impl AetherEngine {
         vec![idx(p.combo), p.matched as f32, p.charge, idx(p.fired)]
     }
 
+    /// The two-hand duet spellbook, as `name:step,step;...`. Steps are spell
+    /// names joined by `+` (both hands at once) or a motion word.
+    pub fn duet_book(&self) -> String {
+        aether_core::duet::DUETS
+            .iter()
+            .map(|d| format!("{}:{}", d.name, d.steps.join(",")))
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    /// Duet progress: `0` duet index being wound up (-1 when idle), `1` charge
+    /// 0..1, `2` duet that just fired (-1 when none).
+    pub fn duet_progress(&self) -> Vec<f32> {
+        let p = self.inner.duet_progress();
+        let idx = |v: usize| if v == usize::MAX { -1.0 } else { v as f32 };
+        vec![idx(p.active), p.charge, idx(p.fired)]
+    }
+
+    /// True while a hand holds the finger-gun pose, for the HUD's aim light.
+    pub fn gun_aiming(&self) -> bool {
+        self.inner.gun_aiming()
+    }
+
+    /// Per-hand gun aim for the renderer's laser sight:
+    /// `[active, x, y, dx, dy]` per hand.
+    pub fn gun_aim(&self) -> Vec<f32> {
+        self.inner.gun_aim().to_vec()
+    }
+
+    /// Packed lens-rush staging for the renderer: `[x, y, progress, power]`,
+    /// with `power == 0` meaning nothing is in flight.
+    pub fn rush_state(&self) -> Vec<f32> {
+        let r = self.inner.rush_state();
+        vec![r.at[0], r.at[1], r.progress, r.power, r.kind.as_f32()]
+    }
+
     // ---------------------------------------------------------------- config
 
     /// Sets a named tunable; returns false if the key is unknown.

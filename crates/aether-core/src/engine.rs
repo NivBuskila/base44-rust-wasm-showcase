@@ -25,7 +25,7 @@
 
 use crate::config::{
     Params, DEFAULT_PARTICLES, FLOW_CELLS, FLOW_H, FLOW_W, FLUID_CELLS, FLUID_H, FLUID_W,
-    HAND_BUFFER, MAX_PARTICLES, PARTICLE_STRIDE, POSE_STRIDE,
+    HAND_BUFFER, HANDS, MAX_PARTICLES, PARTICLE_STRIDE, POSE_STRIDE,
 };
 use crate::field::{Grid, VecField};
 use crate::fluid::Fluid;
@@ -34,7 +34,11 @@ use crate::gesture::{GestureConfig, GestureTracker, Spell};
 use crate::mask::{BodyMask, MaskConfig};
 use crate::math::hue_to_rgb;
 use crate::particles::{ParticleConfig, Particles};
+use crate::bolt::{self, ThrowTracker};
+use crate::gun::GunTracker;
+use crate::rush::Rush;
 use crate::combo::{ComboProgress, ComboTracker};
+use crate::duet::{DuetProgress, DuetTracker};
 use crate::spells::{self, SpellReport, SpellState};
 
 /// Largest segmentation mask the input buffer accepts, per axis. MediaPipe's
@@ -109,6 +113,13 @@ pub struct Engine {
     tracker: GestureTracker,
     spell_state: SpellState,
     combos: ComboTracker,
+    duets: DuetTracker,
+    /// Recognises a flick of an open hand as a thrown energy bolt.
+    throws: ThrowTracker,
+    /// Recognises the finger gun and its trigger pull.
+    gun: GunTracker,
+    /// Stages a bolt thrown at the lens as an approach towards the viewer.
+    rush: Rush,
 
     // --- JS-writable input buffers ---
     luma: Vec<u8>,
@@ -154,6 +165,10 @@ impl Engine {
             tracker: GestureTracker::new(GestureConfig::default()),
             spell_state: SpellState::new(),
             combos: ComboTracker::new(),
+            duets: DuetTracker::new(),
+            throws: ThrowTracker::new(),
+            gun: GunTracker::new(),
+            rush: Rush::new(),
             luma: vec![0; FLOW_CELLS],
             mask_in: vec![0.0; MASK_IN_CAPACITY],
             dye_rgba: vec![0; FLUID_CELLS * 4],
@@ -318,7 +333,15 @@ impl Engine {
         // Sequences are recognised before the spell layer runs, so a combo
         // that completes this frame lands in the same step as the gesture that
         // completed it.
-        let hits = self.combos.update(&self.tracker, warped_dt);
+        // Duets are recognised first: a charged big bang owns both hands, and
+        // its fist -> palm release is also the `nova` combo on each hand. Left
+        // alone the pair fires two small novas a frame before the supernova and
+        // the charged payoff is lost inside them, so those hits are dropped.
+        let duet = self.duets.update(&self.tracker, warped_dt);
+        let mut hits = self.combos.update(&self.tracker, warped_dt);
+        if duet.fire.is_some() || self.duets.claims_hands() {
+            hits = [None, None];
+        }
         let charging = [self.combos.charging(0), self.combos.charging(1)];
         let report = {
             let tracker = &self.tracker;
@@ -333,10 +356,73 @@ impl Engine {
                 &self.params,
                 hits,
                 charging,
+                duet,
                 warped_dt,
             )
         };
         self.report = report;
+
+        // Thrown bolts: pure motion, so they are recognised from the same hand
+        // state the spells just used and fired straight into the field.
+        let thrown = self.throws.update(&self.tracker, real_dt);
+        for throw in thrown.into_iter().flatten() {
+            // A bolt with no screen direction was pushed at the lens: the
+            // detonation below is its muzzle flash, and the rush is the approach
+            // the 2D field has no axis for.
+            if throw.dir == [0.0, 0.0] {
+                self.rush.trigger(throw.from, throw.power);
+            }
+            bolt::fire(
+                &mut self.fluid,
+                &mut self.particles,
+                self.params.particle_life,
+                throw,
+                (FLUID_W - 1) as f32,
+                (FLUID_H - 1) as f32,
+            );
+        }
+        let shots = self.gun.update(&self.tracker, dt);
+        for shot in shots.into_iter().flatten() {
+            // A gun aimed at the lens has no screen bearing, so it is staged the
+            // same way a bolt pushed at the camera is: a rush plus a detonation
+            // at the fingertip rather than a tracer across the field.
+            if shot.dir == [0.0, 0.0] {
+                // A gunshot at the lens is staged as a gunshot, not as energy
+                // arriving: muzzle crack and recoil rather than the bolt's dolly.
+                self.rush.trigger_shot(shot.from, 0.9);
+                bolt::fire(
+                    &mut self.fluid,
+                    &mut self.particles,
+                    self.params.particle_life,
+                    bolt::Throw {
+                        from: shot.from,
+                        dir: [0.0, 0.0],
+                        power: 0.9,
+                    },
+                    (FLUID_W - 1) as f32,
+                    (FLUID_H - 1) as f32,
+                );
+                continue;
+            }
+            bolt::shoot(
+                &mut self.fluid,
+                &mut self.particles,
+                self.params.particle_life,
+                shot,
+                (FLUID_W - 1) as f32,
+                (FLUID_H - 1) as f32,
+            );
+        }
+
+        // After the shots, before the solve: the rush injects force and dye like
+        // any other source, so the same step carries it.
+        self.rush.step(
+            &mut self.fluid,
+            &mut self.particles,
+            real_dt,
+            (FLUID_W - 1) as f32,
+            (FLUID_H - 1) as f32,
+        );
 
         self.fluid.step(warped_dt, &self.params);
 
@@ -524,6 +610,43 @@ impl Engine {
         self.combos.progress()
     }
 
+    /// Whether either hand is holding the finger-gun pose, so the HUD can say
+    /// the aim was recognised before the trigger is pulled: without it a pose
+    /// the recogniser rejected looks exactly like a trigger that did nothing.
+    pub fn gun_aiming(&self) -> bool {
+        (0..crate::config::HANDS).any(|slot| self.gun.aiming(&self.tracker, slot))
+    }
+
+    /// Aim rays of the hands holding the gun pose, for the laser sight the
+    /// renderer draws: per hand `[active, x, y, dx, dy]`, `active == 0` when
+    /// that hand is not aiming and `dir == [0, 0]` when it aims at the lens.
+    pub fn gun_aim(&self) -> [f32; 5 * HANDS] {
+        let mut out = [0.0; 5 * HANDS];
+        for slot in 0..HANDS {
+            if let Some(shot) = self.gun.aim(&self.tracker, slot) {
+                let o = slot * 5;
+                out[o] = 1.0;
+                out[o + 1] = shot.from[0];
+                out[o + 2] = shot.from[1];
+                out[o + 3] = shot.dir[0];
+                out[o + 4] = shot.dir[1];
+            }
+        }
+        out
+    }
+
+    /// Which two-hand duet is being wound up, for the HUD's spellbook.
+    #[inline]
+    pub fn duet_progress(&self) -> DuetProgress {
+        self.duets.progress()
+    }
+
+    /// The in-flight lens rush, for the renderer's composite staging.
+    #[inline]
+    pub fn rush_state(&self) -> crate::rush::RushState {
+        self.rush.state()
+    }
+
     #[inline]
     pub fn tracker(&self) -> &GestureTracker {
         &self.tracker
@@ -610,6 +733,10 @@ impl Engine {
             ..Default::default()
         };
         self.combos.reset();
+        self.duets.reset();
+        self.throws.reset();
+        self.gun.reset();
+        self.rush.reset();
     }
 }
 

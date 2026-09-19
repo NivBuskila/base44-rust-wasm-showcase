@@ -78,6 +78,18 @@ export interface RenderFrame {
   mode: ViewMode;
   /** Draw the camera feed behind the fluid. */
   showCamera: boolean;
+  /**
+   * Lens-rush staging from the engine: `[x, y, progress, power, kind]` (kind 0 =
+   * energy arriving, 1 = a finger-gun shot), the origin in
+   * the engine's normalised view space. `power === 0` means nothing is in
+   * flight, and the renderer then skips the whole effect.
+   */
+  rush: Float32Array | null;
+  /**
+   * Per-hand finger-gun aim from the engine: `[active, x, y, dx, dy]` per hand,
+   * for the laser sight. Null hides it.
+   */
+  gunAim: Float32Array | null;
 }
 
 /** Live numbers for the HUD. */
@@ -92,6 +104,12 @@ export interface HudStats {
   comboBook?: string;
   /** Packed sequence progress: combo, steps matched, charge, fired. */
   comboProgress?: Float32Array;
+  /** Two-hand duet spellbook from the engine, `name:step,step;...`. */
+  duetBook?: string;
+  /** Packed duet progress: active duet, charge, fired. */
+  duetProgress?: Float32Array;
+  /** True while a hand holds the finger-gun pose, so the gun row lights up. */
+  gunAiming?: boolean;
   perception: PerceptionStatus;
 }
 

@@ -104,6 +104,8 @@ class App {
   private readonly engine: AetherEngine;
   /** The engine's gesture-sequence book. Static for the session. */
   private readonly comboBook: string;
+  /** The engine's two-hand duet book. Static for the session. */
+  private readonly duetBook: string;
   private readonly memory: WebAssembly.Memory;
   private readonly renderer: Renderer;
   private readonly hud: Hud;
@@ -184,6 +186,7 @@ class App {
   ) {
     this.engine = engine;
     this.comboBook = engine.combo_book();
+    this.duetBook = engine.duet_book();
     this.memory = memory;
     this.renderer = renderer;
     this.tier = tier;
@@ -355,6 +358,9 @@ class App {
       spells: [this.engine.spell_name(0), this.engine.spell_name(1)],
       comboBook: this.comboBook,
       comboProgress: this.engine.combo_progress(),
+      duetBook: this.duetBook,
+      duetProgress: this.engine.duet_progress(),
+      gunAiming: this.engine.gun_aiming(),
       perception: this.perceptionStatus,
     });
     this.hudMs = performance.now() - hudStart;
@@ -486,6 +492,8 @@ class App {
       intensity,
       mode: this.mode,
       showCamera: this.showCamera && this.cameraAvailable,
+      rush: this.engine.rush_state(),
+      gunAim: stats[STAT.HANDS_PRESENT] > 0 ? this.engine.gun_aim() : null,
     };
   }
 

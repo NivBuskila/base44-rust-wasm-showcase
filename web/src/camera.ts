@@ -28,6 +28,11 @@ export interface CameraOptions {
 }
 
 const DEFAULTS: CameraOptions = {
+  // 720p is the known-good capture. Asking for 540p did cut the per-frame
+  // downscale cost sharply (cameraMs ~42 ms -> ~4.5 ms), but on a real device
+  // the feed stopped being visible, and a camera you cannot see is worse than
+  // a slower one: some cameras have no native 960x540 mode and the synthesised
+  // one is not usable. Change this only with a visible-feed check.
   width: 1280,
   height: 720,
   frameRate: 60,

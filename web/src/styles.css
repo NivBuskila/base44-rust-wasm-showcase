@@ -1314,6 +1314,18 @@ input[type='range']:focus-visible::-webkit-slider-thumb {
   -webkit-backdrop-filter: blur(8px);
 }
 
+/* Sequences and duets are two groups in the same book; the gap between them
+   is the only thing that says where one ends. */
+.cb-section {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.cb-section + .cb-section:not([hidden]) {
+  margin-top: 6px;
+}
+
 .cb-title {
   font-size: 8px;
   font-weight: 400;
