@@ -36,6 +36,7 @@ use crate::math::hue_to_rgb;
 use crate::particles::{ParticleConfig, Particles};
 use crate::bolt::{self, ThrowTracker};
 use crate::gun::GunTracker;
+use crate::rush::Rush;
 use crate::combo::{ComboProgress, ComboTracker};
 use crate::duet::{DuetProgress, DuetTracker};
 use crate::spells::{self, SpellReport, SpellState};
@@ -117,6 +118,8 @@ pub struct Engine {
     throws: ThrowTracker,
     /// Recognises the finger gun and its trigger pull.
     gun: GunTracker,
+    /// Stages a bolt thrown at the lens as an approach towards the viewer.
+    rush: Rush,
 
     // --- JS-writable input buffers ---
     luma: Vec<u8>,
@@ -165,6 +168,7 @@ impl Engine {
             duets: DuetTracker::new(),
             throws: ThrowTracker::new(),
             gun: GunTracker::new(),
+            rush: Rush::new(),
             luma: vec![0; FLOW_CELLS],
             mask_in: vec![0.0; MASK_IN_CAPACITY],
             dye_rgba: vec![0; FLUID_CELLS * 4],
@@ -362,6 +366,12 @@ impl Engine {
         // state the spells just used and fired straight into the field.
         let thrown = self.throws.update(&self.tracker, real_dt);
         for throw in thrown.into_iter().flatten() {
+            // A bolt with no screen direction was pushed at the lens: the
+            // detonation below is its muzzle flash, and the rush is the approach
+            // the 2D field has no axis for.
+            if throw.dir == [0.0, 0.0] {
+                self.rush.trigger(throw.from, throw.power);
+            }
             bolt::fire(
                 &mut self.fluid,
                 &mut self.particles,
@@ -382,6 +392,16 @@ impl Engine {
                 (FLUID_H - 1) as f32,
             );
         }
+
+        // After the shots, before the solve: the rush injects force and dye like
+        // any other source, so the same step carries it.
+        self.rush.step(
+            &mut self.fluid,
+            &mut self.particles,
+            real_dt,
+            (FLUID_W - 1) as f32,
+            (FLUID_H - 1) as f32,
+        );
 
         self.fluid.step(warped_dt, &self.params);
 
@@ -575,6 +595,12 @@ impl Engine {
         self.duets.progress()
     }
 
+    /// The in-flight lens rush, for the renderer's composite staging.
+    #[inline]
+    pub fn rush_state(&self) -> crate::rush::RushState {
+        self.rush.state()
+    }
+
     #[inline]
     pub fn tracker(&self) -> &GestureTracker {
         &self.tracker
@@ -664,6 +690,7 @@ impl Engine {
         self.duets.reset();
         self.throws.reset();
         self.gun.reset();
+        self.rush.reset();
     }
 }
 

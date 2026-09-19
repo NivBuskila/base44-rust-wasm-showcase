@@ -491,6 +491,7 @@ class App {
       intensity,
       mode: this.mode,
       showCamera: this.showCamera && this.cameraAvailable,
+      rush: this.engine.rush_state(),
     };
   }
 
