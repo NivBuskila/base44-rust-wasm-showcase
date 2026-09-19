@@ -18,7 +18,6 @@ import './styles.css';
 import type { AetherEngine } from './wasm/aether';
 import { Camera, CameraError } from './camera';
 import { ensureCrossOriginIsolation } from './cross-origin-isolation';
-import { bindEnergyShots } from './energy-shot';
 import { loadEngine, type EngineTier } from './engine-loader';
 import { Hud } from './hud';
 import {
@@ -732,9 +731,6 @@ async function boot(): Promise<void> {
 
     setStatus('starting the renderer…');
     const renderer = new Renderer(canvas);
-
-    // Click/tap/drag on the stage fires an energy bolt into the simulation.
-    bindEnergyShots(canvas, { shoot: (x, y) => engine.shoot(x, y) });
 
     const app = new App(engine, loaded.memory, renderer, loaded.tier);
     window.__aether = {
