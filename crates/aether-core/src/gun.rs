@@ -31,6 +31,9 @@ const LONGER: f32 = 1.3;
 const COCKED: f32 = 0.62;
 const PULLED: f32 = 0.50;
 
+/// Shortest knuckle-to-tip segment, in hand scales, still trusted for aim.
+const MIN_AIM: f32 = 0.35;
+
 /// Below this size the landmarks are too coarse to tell fingers apart.
 const MIN_SCALE: f32 = 0.02;
 
@@ -120,7 +123,19 @@ fn pose(hand: &HandState) -> Option<Pose> {
 
     let knuckle = lm(LM_INDEX_MCP);
     let tip = lm(LM_INDEX_TIP);
-    let (dx, dy) = (tip[0] - knuckle[0], tip[1] - knuckle[1]);
+    // Aim along the finger, but the knuckle-to-tip segment collapses when the
+    // finger is aimed towards the lens, and a near-zero segment takes its
+    // direction from landmark noise — which is how a shot came out backwards.
+    // The wrist is far enough from the tip that its bearing can never flip, so
+    // it serves both as the fallback for a collapsed finger and as the sanity
+    // check: a finger bearing that disagrees with it by more than a right angle
+    // is noise, not aim.
+    let (wx, wy) = (tip[0] - wrist[0], tip[1] - wrist[1]);
+    let (mut dx, mut dy) = (tip[0] - knuckle[0], tip[1] - knuckle[1]);
+    if (dx * dx + dy * dy).sqrt() < MIN_AIM * scale || dx * wx + dy * wy <= 0.0 {
+        dx = wx;
+        dy = wy;
+    }
     let len = (dx * dx + dy * dy).sqrt();
     if !len.is_finite() || len <= 0.0 {
         return None;
