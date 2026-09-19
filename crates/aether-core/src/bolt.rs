@@ -9,6 +9,11 @@
 //! Speeds here are in **hand widths per second** (palm velocity over the hand
 //! scale), so a throw feels the same near and far from the camera.
 //!
+//! A throw *at the camera* has no on-screen motion to read, so it is read from
+//! the hand growing instead: a fast push towards the lens makes the hand swell
+//! in the frame, and that growth rate is the throw. Such a bolt has nowhere to
+//! fly across the screen, so it detonates at the palm, towards the viewer.
+//!
 //! The effect is applied here rather than in [`crate::spells`] because a bolt is
 //! self-contained: it writes a streak and an impact and nothing else in the
 //! engine needs to know about it.
@@ -35,6 +40,15 @@ const MIN_OPENNESS: f32 = 0.45;
 /// read every twitch as a throw.
 const MIN_SCALE: f32 = 0.02;
 
+/// A push towards the camera: the hand must grow by at least this fraction of
+/// itself per second (`FULL_GROWTH` is full power) and re-arms when the growth
+/// falls back under `REARM_GROWTH`. The rate is smoothed over `GROWTH_HALF_LIFE`
+/// seconds because MediaPipe's hand size jitters frame to frame.
+const THROW_GROWTH: f32 = 1.6;
+const FULL_GROWTH: f32 = 4.0;
+const REARM_GROWTH: f32 = 0.5;
+const GROWTH_HALF_LIFE: f32 = 0.04;
+
 /// How far a bolt flies, in normalised units, at zero and at full power.
 const REACH: f32 = 0.9;
 
@@ -60,22 +74,30 @@ const IMPACT_MAX: usize = 6_000;
 pub struct Throw {
     /// Palm the bolt leaves, normalised `[0, 1]`.
     pub from: [f32; 2],
-    /// Unit direction it was thrown in.
+    /// Unit direction it was thrown in across the screen, or `[0, 0]` for a
+    /// throw at the camera, which detonates at the palm instead of flying.
     pub dir: [f32; 2],
     /// 0..1, from how hard the flick was.
     pub power: f32,
 }
 
-/// Cross-frame arming state, one flag per hand.
+/// Cross-frame state, per hand: arming flags plus the hand-size filter that
+/// reads a push towards the camera.
 #[derive(Clone, Debug)]
 pub struct ThrowTracker {
     armed: [bool; HANDS],
+    /// Last frame's hand scale, `None` until the hand has been seen once.
+    last_scale: [Option<f32>; HANDS],
+    /// Smoothed relative growth of the hand scale, per second.
+    growth: [f32; HANDS],
 }
 
 impl Default for ThrowTracker {
     fn default() -> Self {
         Self {
             armed: [true; HANDS],
+            last_scale: [None; HANDS],
+            growth: [0.0; HANDS],
         }
     }
 }
@@ -90,30 +112,62 @@ impl ThrowTracker {
     }
 
     /// Returns whichever hands threw this step. Both may throw at once.
-    pub fn update(&mut self, tracker: &GestureTracker) -> [Option<Throw>; HANDS] {
+    pub fn update(&mut self, tracker: &GestureTracker, dt: f32) -> [Option<Throw>; HANDS] {
         let mut thrown: [Option<Throw>; HANDS] = [None; HANDS];
+        let dt = if dt.is_finite() && dt > 0.0 { dt } else { 1.0 / 60.0 };
         for (slot, hand) in tracker.hands().iter().enumerate().take(HANDS) {
             if !hand.present {
                 // A hand leaving the frame is not a throw, but the next one to
                 // appear must be able to throw straight away.
                 self.armed[slot] = true;
+                self.last_scale[slot] = None;
+                self.growth[slot] = 0.0;
                 continue;
             }
             let scale = fin(hand.scale).max(MIN_SCALE);
+
+            // Across the screen: palm speed.
             let (vx, vy) = (fin(hand.velocity[0]), fin(hand.velocity[1]));
             let speed = (vx * vx + vy * vy).sqrt() / scale;
-            if speed < REARM_SPEED {
+
+            // Towards the camera: how fast the hand is growing in the frame.
+            let raw = match self.last_scale[slot] {
+                Some(prev) => (scale - prev) / (prev.max(MIN_SCALE) * dt),
+                None => 0.0,
+            };
+            self.last_scale[slot] = Some(scale);
+            let k = 1.0 - (0.5f32).powf(dt / GROWTH_HALF_LIFE);
+            self.growth[slot] += (raw - self.growth[slot]) * k;
+            let growth = self.growth[slot];
+
+            if speed < REARM_SPEED && growth < REARM_GROWTH {
                 self.armed[slot] = true;
             }
-            if !self.armed[slot] || speed < THROW_SPEED || fin(hand.openness) < MIN_OPENNESS {
+            if !self.armed[slot] || fin(hand.openness) < MIN_OPENNESS {
+                continue;
+            }
+            let across = smoothstep(THROW_SPEED, FULL_SPEED, speed);
+            let towards = smoothstep(THROW_GROWTH, FULL_GROWTH, growth);
+            if speed < THROW_SPEED && growth < THROW_GROWTH {
                 continue;
             }
             self.armed[slot] = false;
-            let unit = speed * scale;
-            thrown[slot] = Some(Throw {
-                from: hand.palm,
-                dir: [vx / unit, vy / unit],
-                power: smoothstep(THROW_SPEED, FULL_SPEED, speed),
+            // Whichever reading is the stronger throw decides the kind: a push
+            // at the lens always drifts a little on screen too, and that drift
+            // must not turn it into a sideways bolt.
+            thrown[slot] = Some(if towards >= across {
+                Throw {
+                    from: hand.palm,
+                    dir: [0.0, 0.0],
+                    power: towards,
+                }
+            } else {
+                let unit = speed * scale;
+                Throw {
+                    from: hand.palm,
+                    dir: [vx / unit, vy / unit],
+                    power: across,
+                }
             });
         }
         thrown
@@ -131,14 +185,17 @@ pub fn fire(
 ) {
     let power = fin(throw.power).clamp(0.0, 1.0);
     let (nx, ny) = (fin(throw.dir[0]), fin(throw.dir[1]));
-    if nx == 0.0 && ny == 0.0 {
-        return;
-    }
-    let reach = REACH * (0.55 + 0.45 * power);
     let from = [
         (fin(throw.from[0]) * sx).clamp(0.0, sx),
         (fin(throw.from[1]) * sy).clamp(0.0, sy),
     ];
+    if nx == 0.0 && ny == 0.0 {
+        // At the camera: nothing to fly across, so it all happens at the
+        // palm, bigger than a landing because it is coming at the viewer.
+        impact(fluid, particles, particle_life, from, power, 1.6);
+        return;
+    }
+    let reach = REACH * (0.55 + 0.45 * power);
     let to = [
         (from[0] + nx * reach * sx).clamp(0.0, sx),
         (from[1] + ny * reach * sy).clamp(0.0, sy),
@@ -158,23 +215,31 @@ pub fn fire(
         fluid.add_dye(x, y, [rgb[0] * a, rgb[1] * a, rgb[2] * a], TRAIL_RADIUS);
     }
 
-    let burst = IMPACT_SPEED * (0.5 + 0.5 * power);
-    let count = ((particles.active() / IMPACT_FRACTION) as f32 * (0.5 + 0.5 * power)) as usize;
-    particles.spawn_burst(
-        to[0],
-        to[1],
-        count.min(IMPACT_MAX),
-        burst,
-        1.0,
-        particle_life,
-    );
-    particles.impulse(to[0], to[1], IMPACT_RADIUS * 1.5, 0.0, 1.0);
+    impact(fluid, particles, particle_life, to, power, 1.0);
+}
+
+/// The detonation: an outward puff of particles, a dye flash and a ring of
+/// force. `size` scales the radius; a bolt landing far away is 1.0.
+fn impact(
+    fluid: &mut Fluid,
+    particles: &mut Particles,
+    particle_life: f32,
+    at: [f32; 2],
+    power: f32,
+    size: f32,
+) {
+    let rgb = hue_to_rgb(BOLT_HUE);
+    let radius = IMPACT_RADIUS * size;
+    let burst = IMPACT_SPEED * (0.5 + 0.5 * power) * size;
+    let count = ((particles.active() / IMPACT_FRACTION) as f32 * (0.5 + 0.5 * power) * size) as usize;
+    particles.spawn_burst(at[0], at[1], count.min(IMPACT_MAX), burst, 1.0, particle_life);
+    particles.impulse(at[0], at[1], radius * 1.5, 0.0, 1.0);
     let flash = IMPACT_DYE * (0.5 + 0.5 * power);
     fluid.add_dye(
-        to[0],
-        to[1],
+        at[0],
+        at[1],
         [rgb[0] * flash, rgb[1] * flash, rgb[2] * flash],
-        IMPACT_RADIUS,
+        radius,
     );
     // An event, not a force: a one-off outward push, deliberately un-scaled by
     // dt so a throw hits as hard at 30 fps as at 144.
@@ -183,11 +248,11 @@ pub fn fire(
         let theta = i as f32 / n as f32 * core::f32::consts::TAU;
         let (cx, cy) = (theta.cos(), theta.sin());
         fluid.add_force(
-            to[0] + cx * IMPACT_RADIUS * 0.5,
-            to[1] + cy * IMPACT_RADIUS * 0.5,
+            at[0] + cx * radius * 0.5,
+            at[1] + cy * radius * 0.5,
             cx * burst,
             cy * burst,
-            IMPACT_RADIUS * 0.5,
+            radius * 0.5,
         );
     }
 }
@@ -225,12 +290,27 @@ mod tests {
 
         /// One hand at `x`, stepped through the tracker and the recogniser.
         fn frame(&mut self, gesture: i32, x: f32) -> [Option<Throw>; HANDS] {
+            self.frame_scaled(gesture, x, SCALE)
+        }
+
+        fn frame_scaled(&mut self, gesture: i32, x: f32, scale: f32) -> [Option<Throw>; HANDS] {
             let mut buf = synth::buffer();
-            let hand = synth::Hand::at(x, 0.5).gesture(gesture).scaled(SCALE);
+            let hand = synth::Hand::at(x, 0.5).gesture(gesture).scaled(scale);
             synth::write(&mut buf, 0, &hand);
             self.gestures.update_hands(&buf, DT);
             self.gestures.update_two_hand(DT);
-            self.throws.update(&self.gestures)
+            self.throws.update(&self.gestures, DT)
+        }
+
+        /// The hand grows in place from `SCALE` to `to` over `frames`: a push
+        /// straight at the lens.
+        fn push(&mut self, gesture: i32, to: f32, frames: usize) -> Option<Throw> {
+            let mut thrown = None;
+            for i in 0..frames {
+                let s = SCALE + (to - SCALE) * (i as f32 + 1.0) / frames as f32;
+                thrown = thrown.or(self.frame_scaled(gesture, 0.5, s)[0]);
+            }
+            thrown
         }
 
         /// Holds the hand still, so the gesture latches and the speed decays.
@@ -301,6 +381,45 @@ mod tests {
     }
 
     #[test]
+    fn a_push_at_the_camera_throws_at_the_viewer() {
+        let mut rig = Rig::new();
+        rig.settle(synth::OPEN_PALM, 0.5);
+        let throw = rig
+            .push(synth::OPEN_PALM, SCALE * 1.8, 10)
+            .expect("a fast push at the camera did not throw");
+        assert_eq!(throw.dir, [0.0, 0.0], "a push at the lens flew sideways");
+        assert!(throw.power > 0.0);
+        // A slow approach is just moving closer, not a throw.
+        let mut slow = Rig::new();
+        slow.settle(synth::OPEN_PALM, 0.5);
+        assert!(
+            slow.push(synth::OPEN_PALM, SCALE * 1.3, 90).is_none(),
+            "leaning in threw a bolt"
+        );
+    }
+
+    #[test]
+    fn a_bolt_at_the_viewer_detonates_at_the_palm() {
+        let mut fluid = Fluid::new(FLUID_W, FLUID_H);
+        let mut particles = Particles::new(4096, 7);
+        particles.set_active(4096);
+        particles.seed_uniform(FLUID_W, FLUID_H, 2.0);
+        fire(
+            &mut fluid,
+            &mut particles,
+            2.0,
+            Throw {
+                from: [0.5, 0.5],
+                dir: [0.0, 0.0],
+                power: 1.0,
+            },
+            (FLUID_W - 1) as f32,
+            (FLUID_H - 1) as f32,
+        );
+        assert!(fluid.max_speed() > 0.0, "the bolt injected no velocity");
+    }
+
+    #[test]
     fn a_thrown_bolt_lights_the_field_and_kicks_it() {
         let mut fluid = Fluid::new(FLUID_W, FLUID_H);
         let mut particles = Particles::new(4096, 7);
@@ -326,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn a_directionless_throw_is_ignored() {
+    fn garbage_throw_data_is_harmless() {
         let mut fluid = Fluid::new(FLUID_W, FLUID_H);
         let mut particles = Particles::new(256, 3);
         particles.set_active(256);
@@ -342,6 +461,6 @@ mod tests {
             (FLUID_W - 1) as f32,
             (FLUID_H - 1) as f32,
         );
-        assert_eq!(fluid.max_speed(), 0.0);
+        assert!(fluid.max_speed().is_finite());
     }
 }
