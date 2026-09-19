@@ -79,7 +79,8 @@ export interface RenderFrame {
   /** Draw the camera feed behind the fluid. */
   showCamera: boolean;
   /**
-   * Lens-rush staging from the engine: `[x, y, progress, power]`, the origin in
+   * Lens-rush staging from the engine: `[x, y, progress, power, kind]` (kind 0 =
+   * energy arriving, 1 = a finger-gun shot), the origin in
    * the engine's normalised view space. `power === 0` means nothing is in
    * flight, and the renderer then skips the whole effect.
    */

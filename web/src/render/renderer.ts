@@ -887,6 +887,8 @@ export class Renderer {
     p.f2('u_rushAt', power > 0 ? rush![0] : 0.5, power > 0 ? 1 - rush![1] : 0.5);
     p.f1('u_rushProgress', power > 0 ? rush![2] : 0);
     p.f1('u_rushPower', power);
+    // 0 = energy arriving at the lens, 1 = a finger-gun shot fired at it.
+    p.f1('u_rushKind', power > 0 && rush!.length >= 5 ? rush![4] : 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 

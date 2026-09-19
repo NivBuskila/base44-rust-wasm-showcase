@@ -237,7 +237,7 @@ impl AetherEngine {
     /// with `power == 0` meaning nothing is in flight.
     pub fn rush_state(&self) -> Vec<f32> {
         let r = self.inner.rush_state();
-        vec![r.at[0], r.at[1], r.progress, r.power]
+        vec![r.at[0], r.at[1], r.progress, r.power, r.kind.as_f32()]
     }
 
     // ---------------------------------------------------------------- config
