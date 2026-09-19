@@ -34,6 +34,7 @@ use crate::gesture::{GestureConfig, GestureTracker, Spell};
 use crate::mask::{BodyMask, MaskConfig};
 use crate::math::hue_to_rgb;
 use crate::particles::{ParticleConfig, Particles};
+use crate::combo::{ComboProgress, ComboTracker};
 use crate::spells::{self, SpellReport, SpellState};
 
 /// Largest segmentation mask the input buffer accepts, per axis. MediaPipe's
@@ -107,6 +108,7 @@ pub struct Engine {
     body: BodyMask,
     tracker: GestureTracker,
     spell_state: SpellState,
+    combos: ComboTracker,
 
     // --- JS-writable input buffers ---
     luma: Vec<u8>,
@@ -151,6 +153,7 @@ impl Engine {
             body: BodyMask::new(FLUID_W, FLUID_H, MaskConfig::default()),
             tracker: GestureTracker::new(GestureConfig::default()),
             spell_state: SpellState::new(),
+            combos: ComboTracker::new(),
             luma: vec![0; FLOW_CELLS],
             mask_in: vec![0.0; MASK_IN_CAPACITY],
             dye_rgba: vec![0; FLUID_CELLS * 4],
@@ -312,6 +315,11 @@ impl Engine {
 
         // `spells::apply` needs &mut fluid and &mut particles at once, so the
         // immutable borrows above are resolved into raw references first.
+        // Sequences are recognised before the spell layer runs, so a combo
+        // that completes this frame lands in the same step as the gesture that
+        // completed it.
+        let hits = self.combos.update(&self.tracker, warped_dt);
+        let charging = [self.combos.charging(0), self.combos.charging(1)];
         let report = {
             let tracker = &self.tracker;
             let flow = self.flow.flow();
@@ -323,6 +331,8 @@ impl Engine {
                 &mut self.particles,
                 &mut self.spell_state,
                 &self.params,
+                hits,
+                charging,
                 warped_dt,
             )
         };
@@ -508,6 +518,12 @@ impl Engine {
         self.time
     }
 
+    /// How far the current gesture sequence has got, for the HUD's spellbook.
+    #[inline]
+    pub fn combo_progress(&self) -> ComboProgress {
+        self.combos.progress()
+    }
+
     #[inline]
     pub fn tracker(&self) -> &GestureTracker {
         &self.tracker
@@ -593,6 +609,7 @@ impl Engine {
             time_scale: 1.0,
             ..Default::default()
         };
+        self.combos.reset();
     }
 }
 

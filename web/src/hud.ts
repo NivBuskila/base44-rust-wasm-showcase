@@ -29,6 +29,7 @@
 
 import { FLUID_H, FLUID_W, MAX_PARTICLES, STAT } from './constants';
 import type { EngineTier } from './engine-loader';
+import { ComboBook, comboState } from './hud-combos';
 import { PRESETS, type ParamPreset } from './hud-presets';
 import type { HudCallbacks, HudStats, PerceptionStatus, ViewMode } from './types';
 
@@ -183,6 +184,18 @@ const PARAMS: readonly ParamSpec[] = [
     value: 30_000,
     fmt: (v) => `${thousands(v)}/s`,
   },
+  // How long a particle lives before it respawns somewhere random. High up the
+  // travel the pool barely recycles, so a gathered cloud stays gathered
+  // instead of dissolving under the hand holding it.
+  {
+    key: 'particle_life',
+    label: 'particle life',
+    min: 0.2,
+    max: 30,
+    step: 0.1,
+    value: 4.5,
+    fmt: (v) => `${v.toFixed(1)}s`,
+  },
 ];
 
 interface ModeSpec {
@@ -194,8 +207,9 @@ interface ModeSpec {
 const MODES: readonly ModeSpec[] = [
   { mode: 'aether', key: '1', hint: 'dye, particles and bloom' },
   { mode: 'camera', key: '2', hint: 'the camera feed alone' },
-  { mode: 'debug', key: '3', hint: 'obstacles, flow and pressure' },
-  { mode: 'particles', key: '4', hint: 'particles on black' },
+  { mode: 'blend', key: '3', hint: 'the camera feed under the full aether look' },
+  { mode: 'debug', key: '4', hint: 'obstacles, flow and pressure' },
+  { mode: 'particles', key: '5', hint: 'particles on black' },
 ];
 
 interface GestureSpec {
@@ -230,6 +244,9 @@ const ICONS: Record<string, string> = {
     '<path d="M12 6V3M12 21v-3M6 12H3M21 12h-3M7.2 7.2 5.1 5.1M18.9 18.9l-2.1-2.1M7.2 16.8l-2.1 2.1M18.9 5.1l-2.1 2.1"/>',
   warp:
     '<path d="M20 12a8 8 0 1 1-2.7-6"/><path d="M20.2 3.6V7.8h-4.2"/><path d="M12 7.8v4.6l3 1.8"/>',
+  release:
+    '<circle cx="12" cy="12" r="7.5"/><circle cx="12" cy="12" r="3.2" stroke-dasharray="2 2"/>' +
+    '<path d="M12 1.5v1.8M12 20.7v1.8M1.5 12h1.8M20.7 12h1.8"/>',
 };
 
 const GESTURES: readonly GestureSpec[] = [
@@ -239,11 +256,12 @@ const GESTURES: readonly GestureSpec[] = [
   { spell: 'ignite', hand: 'point', effect: 'paint a hot trail', icon: ICONS.ignite },
   { spell: 'freeze', hand: 'victory', effect: 'chill and damp', icon: ICONS.freeze },
   { spell: 'shatter', hand: 'thumb up', effect: 'burst outward', icon: ICONS.shatter },
+  { spell: 'release', hand: 'open a held fist', effect: 'ring shockwave', icon: ICONS.release },
   { spell: 'warp', hand: 'two hands, rotate', effect: 'warp time', icon: ICONS.warp },
 ];
 
 const SHORTCUTS: readonly [string, string][] = [
-  ['1 – 4', 'aether / camera / debug / particles'],
+  ['1 – 5', 'aether / camera / blend / debug / particles'],
   ['C', 'camera feed behind the fluid'],
   ['O', 'overdrive: the full 1M particle pool'],
   ['H', 'hide or show this panel'],
@@ -400,6 +418,7 @@ export class Hud {
   private readonly particleInput: HTMLInputElement;
   private readonly particleValue: HTMLElement;
   private readonly presetBtns = new Map<string, HTMLButtonElement>();
+  private readonly combos: ComboBook;
 
   /** Frame-time history, newest last, as a fill-then-shift window. */
   private readonly history = new Float32Array(SPARK_SAMPLES);
@@ -470,6 +489,9 @@ export class Hud {
     // must not be something you have to scroll to — so collapsing hides both.
     this.body.hidden = true;
     this.percepEl.hidden = true;
+    // Outside the panel on purpose: sequence progress has to stay visible when
+    // the panel is collapsed, which is how most of a session is spent.
+    this.combos = new ComboBook(this.root);
     this.wireControls();
     this.wireKeys();
 
@@ -506,6 +528,13 @@ export class Hud {
     this.meters[2]?.sample(s.inferenceMs);
 
     if (this.hintStartMs === 0) this.hintStartMs = now;
+
+    // Every frame, ahead of the 10 Hz gate: a charge bar that steps at 10 Hz
+    // reads as lag in the recognition itself, and each write is diffed inside
+    // the component, so an unchanged sequence costs nothing.
+    if (s.comboBook) this.combos.setBook(s.comboBook);
+    this.combos.update(comboState(s.comboProgress));
+
     if (now - this.lastPaintMs < PAINT_MS) return;
     this.lastPaintMs = now;
 

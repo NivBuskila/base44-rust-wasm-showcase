@@ -27,6 +27,7 @@
 //! force may exceed `MAX_IMPULSE` grid units per second — an unclamped
 //! impulse is how a fluid solver turns into NaN soup.
 
+use crate::combo::{ComboEffect, ComboHit};
 use crate::config::Params;
 use crate::field::VecField;
 use crate::fluid::Fluid;
@@ -86,7 +87,18 @@ const REPEL_ACCEL: f32 = 1500.0;
 /// Attract is deliberately weaker than repel. An inward well concentrates
 /// everything it touches, so at equal strength it piles the whole field into a
 /// few cells and the projection has to resolve a pressure spike every frame.
-const ATTRACT_RATIO: f32 = 0.45;
+const ATTRACT_RATIO: f32 = 0.6;
+/// How fast a closed fist bleeds the speed off the particles it gathered, per
+/// second at the palm. High enough that they settle into a held clump within a
+/// fraction of a second, low enough that they still visibly stream inward.
+const GRIP_RATE: f32 = 25.0;
+/// Radius of the positional hold, as a multiple of the palm radius. Kept close
+/// to the palm so only what the fist actually swallowed travels with it.
+const GRIP_RADIUS_SCALE: f32 = 2.2;
+/// Rate, per second, at which a gripped particle's position closes on the palm.
+/// Fast enough that the clump tracks a moving fist, not instant, so the pull
+/// still reads as suction rather than teleporting.
+const GRIP_PULL: f32 = 26.0;
 const RADIAL_RADIUS_SCALE: f32 = 2.6;
 /// Radial acceleration applied to particles, in grid cells per second squared.
 const PARTICLE_ACCEL: f32 = 2200.0;
@@ -115,6 +127,58 @@ const SHATTER_DYE: f32 = 2.2;
 /// Fraction of the pool recycled into one burst, and its hard cap.
 const SHATTER_FRACTION: usize = 6;
 const SHATTER_MAX: usize = 12_000;
+
+/// Release: seconds of holding the fist that count as a full charge, the least
+/// charge worth firing, and the burst it drives.
+const RELEASE_CHARGE_TIME: f32 = 1.2;
+const RELEASE_MIN_CHARGE: f32 = 0.12;
+/// Ring radius as a multiple of the palm radius, and the shell speed at full
+/// charge (half of it at zero charge).
+const RELEASE_RING_SCALE: f32 = 1.3;
+const RELEASE_SPEED: f32 = 260.0;
+/// Velocity step kicked into the fluid on the ring; a shell, not a disc.
+const RELEASE_IMPULSE: f32 = 420.0;
+const RELEASE_REACH_SCALE: f32 = 4.0;
+const RELEASE_DYE: f32 = 1.6;
+const RELEASE_FRACTION: usize = 5;
+const RELEASE_MAX: usize = 16_000;
+/// Seconds the HUD keeps showing "release" after the ring fires.
+const RELEASE_SHOW: f32 = 0.45;
+
+/// Combo payloads. These are events, so like `Shatter` and `Release` their
+/// impulses are velocity *steps* and are deliberately not scaled by `dt`: a
+/// sequence the caster performed once must hit exactly as hard at 30 fps as at
+/// 144, or the reward for landing it depends on the machine.
+///
+/// Nova: a fast bright shell, tuned to always read even in a busy field.
+const NOVA_RING_SCALE: f32 = 1.6;
+const NOVA_SPEED: f32 = 330.0;
+const NOVA_IMPULSE: f32 = 520.0;
+const NOVA_DYE: f32 = 2.4;
+const NOVA_FRACTION: usize = 4;
+/// Tempest: a wide, long-lived rotation rather than a flash.
+const TEMPEST_RADIUS_SCALE: f32 = 7.0;
+const TEMPEST_SPEED: f32 = 420.0;
+const TEMPEST_DYE: f32 = 1.5;
+/// Supernova: the charged combo. Reaches far, kicks hard, and recycles a big
+/// slice of the pool into the shell so the screen visibly reorganises.
+const SUPERNOVA_RING_SCALE: f32 = 2.4;
+const SUPERNOVA_SPEED: f32 = 560.0;
+const SUPERNOVA_IMPULSE: f32 = 780.0;
+const SUPERNOVA_REACH_SCALE: f32 = 6.5;
+const SUPERNOVA_DYE: f32 = 3.4;
+const SUPERNOVA_FRACTION: usize = 2;
+/// Hard cap on particles any one combo may recycle.
+const COMBO_MAX: usize = 24_000;
+
+/// How much of a hand's own spell strength is withheld while it is mid-sequence.
+///
+/// Every combo is built out of gestures that are also spells on their own, so a
+/// caster winding up a sequence was firing full-strength Attract/Repel/Freeze
+/// effects into the same field the combo is about to reorganise, and the payoff
+/// read as more of the same. Fading the intermediate steps out turns them into a
+/// wind-up: the field quiets down as the sequence advances, then the combo lands.
+const COMBO_CHARGE_DAMP: f32 = 0.8;
 
 /// Seconds of rotation rate mapped into one unit of time scale.
 const TIME_GAIN: f32 = 0.32;
@@ -148,6 +212,12 @@ pub struct SpellState {
     /// Smoothed time scale, carried across frames so the two-hand warp eases
     /// in and out instead of stepping.
     time_scale: f32,
+    /// Latched spell seen last step per hand, for edge-triggered spells.
+    prev_spell: [Spell; 2],
+    /// How charged the release is, `[0, 1]`, built up while the fist is held.
+    charge: [f32; 2],
+    /// Seconds left of reporting `Release` after a ring fired.
+    release_show: [f32; 2],
 }
 
 impl Default for SpellState {
@@ -157,6 +227,9 @@ impl Default for SpellState {
             last_tip: [[0.0; 2]; 2],
             has_tip: [false; 2],
             time_scale: 1.0,
+            prev_spell: [Spell::Idle; 2],
+            charge: [0.0; 2],
+            release_show: [0.0; 2],
         }
     }
 }
@@ -181,6 +254,12 @@ pub fn apply(
     particles: &mut Particles,
     state: &mut SpellState,
     params: &Params,
+    // A gesture sequence that completed this step, recognised by
+    // `crate::combo`. Its effect is applied at the casting hand's palm.
+    combo: [Option<ComboHit>; 2],
+    // Per-hand sequence depth, 0..1, from `ComboTracker::charging`. Fades a
+    // hand's own spell out while it is winding a combo up.
+    charging: [f32; 2],
     dt: f32,
 ) -> SpellReport {
     let dt = clamp_dt(dt);
@@ -198,20 +277,30 @@ pub fn apply(
 
     drive_fields(flow, body_edge, fluid, params, dt, &mut report);
 
-    let force = params.hand_force.max(0.0);
+    let base_force = params.hand_force.max(0.0);
     let slots = report.spells.len();
     for (slot, hand) in tracker.hands().iter().enumerate().take(slots) {
         if !hand.present || !hand.palm[0].is_finite() || !hand.palm[1].is_finite() {
             report.spells[slot] = Spell::Idle;
             state.fired[slot] = false;
             state.has_tip[slot] = false;
+            state.prev_spell[slot] = Spell::Idle;
+            state.charge[slot] = 0.0;
+            state.release_show[slot] = 0.0;
             continue;
         }
+        // How far this hand is into a sequence, and the matching fade applied to
+        // its own spell effects while it winds that sequence up.
+        let winding = fin(charging[slot]).clamp(0.0, 1.0);
+        let wind_gain = 1.0 - COMBO_CHARGE_DAMP * winding;
+        let force = base_force * wind_gain;
         report.spells[slot] = hand.spell;
         // Releasing the gesture is what re-arms the one-shot.
         if hand.spell != Spell::Shatter {
             state.fired[slot] = false;
         }
+        let opened_fist = state.prev_spell[slot] == Spell::Attract && hand.spell != Spell::Attract;
+        state.prev_spell[slot] = hand.spell;
 
         let palm = to_grid(hand.palm, sx, sy);
         let tip = to_grid(hand.index_tip, sx, sy);
@@ -253,7 +342,8 @@ pub fn apply(
         }
 
         match hand.spell {
-            Spell::Idle => {}
+            // The last two are reported by this layer, never latched.
+            Spell::Idle | Spell::Release => {}
 
             Spell::Vortex => {
                 let ramp =
@@ -311,6 +401,14 @@ pub fn apply(
                     PARTICLE_ACCEL * outward * dt,
                     if outward > 0.0 { 0.3 } else { 0.55 },
                 );
+                // A fist has to *hold* what it pulled in, or the particles
+                // shoot through the palm and orbit back out.
+                if hand.spell == Spell::Attract {
+                    particles.damp(palm[0], palm[1], outer, GRIP_RATE, dt);
+                    // Positional hold: inside the palm the clump is carried with
+                    // the fist instead of being swept off by the flow.
+                    particles.grip(palm[0], palm[1], radius * GRIP_RADIUS_SCALE, GRIP_PULL, dt);
+                }
                 let dye = tint(hand.spell, RADIAL_DYE * force * dt);
                 fluid.add_dye(palm[0], palm[1], dye, radius);
             }
@@ -403,6 +501,35 @@ pub fn apply(
             }
         }
 
+        // Release: a fist that has been held charges a ring, and opening it
+        // lets the ring go. Edge-triggered on the latched spell, so it fires
+        // once per open no matter how the hand ends up.
+        if hand.spell == Spell::Attract {
+            state.charge[slot] = smoothstep(0.0, RELEASE_CHARGE_TIME, hand.spell_age);
+        }
+        if opened_fist {
+            // Mid-sequence the ring is a side effect of changing gesture, not a
+            // cast: fading it with the wind-up keeps the combo's own flash the
+            // only thing that reads as an event.
+            let charge = state.charge[slot] * wind_gain;
+            state.charge[slot] = 0.0;
+            if charge >= RELEASE_MIN_CHARGE {
+                fire_release(fluid, particles, params, palm, radius, charge, &mut report);
+                state.release_show[slot] = RELEASE_SHOW;
+            }
+        }
+        if state.release_show[slot] > 0.0 {
+            state.release_show[slot] -= dt;
+            report.spells[slot] = Spell::Release;
+        }
+
+        // A completed sequence fires on top of whatever the hand is currently
+        // doing: the last gesture of the combo is still a spell, and cutting it
+        // off would make a successful cast feel like a dropped frame.
+        if let Some(hit) = combo.get(slot).copied().flatten() {
+            fire_combo(hit.effect, fluid, particles, params, palm, radius, &mut report);
+        }
+
         state.last_tip[slot] = tip;
         state.has_tip[slot] = true;
     }
@@ -428,6 +555,193 @@ pub fn apply(
     }
 
     report
+}
+
+/// Lets a charged fist go: a shell of particles, a ring-shaped kick into the
+/// fluid and a ring of dye, all scaled by how long the fist was held.
+fn fire_release(
+    fluid: &mut Fluid,
+    particles: &mut Particles,
+    params: &Params,
+    palm: [f32; 2],
+    radius: f32,
+    charge: f32,
+    report: &mut SpellReport,
+) {
+    let (gw, gh) = (fluid.width(), fluid.height());
+    let charge = charge.clamp(0.0, 1.0);
+    let ring = radius * RELEASE_RING_SCALE;
+    let power = 0.5 + 0.5 * charge;
+    report.bursts += 1;
+    let count = ((particles.active() / RELEASE_FRACTION) as f32 * power) as usize;
+    particles.spawn_ring(
+        palm[0],
+        palm[1],
+        count.min(RELEASE_MAX),
+        ring,
+        RELEASE_SPEED * power,
+        1.0,
+        params.particle_life,
+    );
+    // An event, not a force: a velocity step, deliberately not scaled by dt.
+    let reach = radius * RELEASE_REACH_SCALE;
+    let shell = ring * 0.6;
+    let mut injected = 0.0;
+    let vel = fluid.velocity_mut();
+    for_disc(gw, gh, palm, reach, |x, y, dx, dy, r, _| {
+        // Peaked on the ring, zero at the centre and the reach.
+        let band = ((r - ring) / shell).powi(2);
+        let w = (-band).exp() * smoothstep(0.0, ring * 0.5, r);
+        let (nx, ny) = radial(dx, dy, r);
+        let du = clamp_impulse(nx * RELEASE_IMPULSE * power * w);
+        let dv = clamp_impulse(ny * RELEASE_IMPULSE * power * w);
+        vel.add(x, y, du, dv);
+        injected += du * du + dv * dv;
+    });
+    report.injected += injected;
+    let dye = tint(Spell::Release, RELEASE_DYE * power);
+    let n = 24;
+    for i in 0..n {
+        let theta = i as f32 / n as f32 * core::f32::consts::TAU;
+        fluid.add_dye(
+            palm[0] + theta.cos() * ring,
+            palm[1] + theta.sin() * ring,
+            dye,
+            radius * 0.45,
+        );
+    }
+}
+
+/// Applies a completed sequence's payload at `palm`.
+///
+/// Split by effect rather than parameterised into one blend, because these are
+/// meant to be *recognisably different* rewards: a caster who lands the hard
+/// sequence has to see something the easy one never produces.
+fn fire_combo(
+    effect: ComboEffect,
+    fluid: &mut Fluid,
+    particles: &mut Particles,
+    params: &Params,
+    palm: [f32; 2],
+    radius: f32,
+    report: &mut SpellReport,
+) {
+    let (gw, gh) = (fluid.width(), fluid.height());
+    report.bursts += 1;
+    match effect {
+        ComboEffect::Nova => {
+            let ring = radius * NOVA_RING_SCALE;
+            let count = (particles.active() / NOVA_FRACTION).min(COMBO_MAX);
+            particles.spawn_ring(
+                palm[0],
+                palm[1],
+                count,
+                ring,
+                NOVA_SPEED,
+                1.0,
+                params.particle_life,
+            );
+            radial_kick(fluid, gw, gh, palm, ring * 2.5, NOVA_IMPULSE, report);
+            ring_dye(fluid, palm, ring, radius * 0.5, tint(Spell::Shatter, NOVA_DYE));
+        }
+        ComboEffect::Tempest => {
+            // Pure rotation, no radial term: the storm has to keep spinning
+            // after the impulse lands, and an outward push would blow the
+            // structure apart before the swirl becomes visible.
+            let outer = radius * TEMPEST_RADIUS_SCALE;
+            let mut injected = 0.0;
+            let vel = fluid.velocity_mut();
+            for_disc(gw, gh, palm, outer, |x, y, dx, dy, r, w| {
+                let (nx, ny) = radial(dx, dy, r);
+                let du = clamp_impulse(-ny * TEMPEST_SPEED * w);
+                let dv = clamp_impulse(nx * TEMPEST_SPEED * w);
+                vel.add(x, y, du, dv);
+                injected += du * du + dv * dv;
+            });
+            report.injected += injected;
+            ring_dye(
+                fluid,
+                palm,
+                outer * 0.55,
+                outer * 0.3,
+                tint(Spell::Vortex, TEMPEST_DYE),
+            );
+        }
+        ComboEffect::Supernova => {
+            let ring = radius * SUPERNOVA_RING_SCALE;
+            let count = (particles.active() / SUPERNOVA_FRACTION).min(COMBO_MAX);
+            particles.spawn_ring(
+                palm[0],
+                palm[1],
+                count,
+                ring,
+                SUPERNOVA_SPEED,
+                1.0,
+                params.particle_life,
+            );
+            radial_kick(
+                fluid,
+                gw,
+                gh,
+                palm,
+                radius * SUPERNOVA_REACH_SCALE,
+                SUPERNOVA_IMPULSE,
+                report,
+            );
+            // Heat first, then dye: the flash is what sells the charge time.
+            particles.impulse(palm[0], palm[1], ring * 2.0, 0.0, 1.0);
+            ring_dye(
+                fluid,
+                palm,
+                ring,
+                radius * 0.8,
+                tint(Spell::Ignite, SUPERNOVA_DYE),
+            );
+            fluid.add_dye(
+                palm[0],
+                palm[1],
+                tint(Spell::Shatter, SUPERNOVA_DYE * 0.6),
+                radius,
+            );
+        }
+    }
+}
+
+/// An outward velocity step over a disc, falling off to zero at `reach`.
+fn radial_kick(
+    fluid: &mut Fluid,
+    gw: usize,
+    gh: usize,
+    center: [f32; 2],
+    reach: f32,
+    impulse: f32,
+    report: &mut SpellReport,
+) {
+    let mut injected = 0.0;
+    let vel = fluid.velocity_mut();
+    for_disc(gw, gh, center, reach, |x, y, dx, dy, r, w| {
+        let (nx, ny) = radial(dx, dy, r);
+        let du = clamp_impulse(nx * impulse * w);
+        let dv = clamp_impulse(ny * impulse * w);
+        vel.add(x, y, du, dv);
+        injected += du * du + dv * dv;
+    });
+    report.injected += injected;
+}
+
+/// Lays dye around a circle instead of on a disc, so the effect reads as a
+/// shell expanding outward rather than a blob fading out.
+fn ring_dye(fluid: &mut Fluid, center: [f32; 2], ring: f32, splat: f32, dye: [f32; 3]) {
+    let n = 28;
+    for i in 0..n {
+        let theta = i as f32 / n as f32 * core::f32::consts::TAU;
+        fluid.add_dye(
+            center[0] + theta.cos() * ring,
+            center[1] + theta.sin() * ring,
+            dye,
+            splat,
+        );
+    }
 }
 
 /// The two whole-field drives — optical flow and the body silhouette's boundary
@@ -617,7 +931,9 @@ fn is_zero(field: &VecField) -> bool {
 mod tests {
     use super::*;
     use crate::config::{FLOW_H, FLOW_W, FLUID_H, FLUID_W};
+    use crate::field::Grid;
     use crate::gesture::synth::{self, Hand};
+    use crate::particles::ParticleConfig;
     use crate::gesture::{GestureConfig, GestureTracker};
 
     /// Render step.
@@ -663,6 +979,16 @@ mod tests {
         }
 
         fn run(&mut self, tracker: &GestureTracker, dt: f32) -> SpellReport {
+            self.run_with(tracker, None, dt)
+        }
+
+        /// One step with a completed sequence handed in, as the engine does it.
+        fn run_with(
+            &mut self,
+            tracker: &GestureTracker,
+            combo: Option<ComboHit>,
+            dt: f32,
+        ) -> SpellReport {
             apply(
                 tracker,
                 &self.flow,
@@ -671,6 +997,14 @@ mod tests {
                 &mut self.particles,
                 &mut self.state,
                 &self.params,
+                {
+                    let mut per_hand = [None; 2];
+                    if let Some(h) = combo {
+                        per_hand[h.slot.min(1)] = Some(h);
+                    }
+                    per_hand
+                },
+                [0.0; 2],
                 dt,
             )
         }
@@ -694,6 +1028,18 @@ mod tests {
         let mut buf = synth::buffer();
         synth::write(&mut buf, 0, hand);
         for _ in 0..60 {
+            t.update_hands(&buf, HAND_DT);
+            t.update_two_hand(HAND_DT);
+        }
+        t
+    }
+
+    /// A still hand held just long enough to latch its spell.
+    fn latched(hand: &Hand) -> GestureTracker {
+        let mut t = GestureTracker::new(GestureConfig::default());
+        let mut buf = synth::buffer();
+        synth::write(&mut buf, 0, hand);
+        for _ in 0..10 {
             t.update_hands(&buf, HAND_DT);
             t.update_two_hand(HAND_DT);
         }
@@ -828,7 +1174,7 @@ mod tests {
         // hand_force saturates at 8 and dt at 0.25, which together ask for a
         // 3000 cells/s push — the clamp is the only thing between that and a
         // velocity field the projection cannot resolve.
-        let tracker = holding(&Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
+        let tracker = latched(&Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
         let mut rig = Rig::new();
         rig.params.hand_force = 8.0;
         rig.run(&tracker, 1e6);
@@ -972,7 +1318,7 @@ mod tests {
     #[test]
     fn repel_pushes_out_and_attract_pulls_in_more_gently() {
         let mut out = Rig::new();
-        let repel = holding(&Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
+        let repel = latched(&Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
         let palm = palm_of(&repel);
         // A particle just to the right of the palm, to check the particle path.
         out.particles
@@ -1005,6 +1351,35 @@ mod tests {
         // Both should be symmetric about the palm.
         let (lu, _) = out.velocity_at(palm[0] - 10.0, palm[1]);
         assert!((lu + ru).abs() < 0.2 * ru.abs(), "asymmetric push");
+    }
+
+    #[test]
+    fn every_combo_payload_moves_the_field_and_stays_finite() {
+        for effect in [
+            ComboEffect::Nova,
+            ComboEffect::Tempest,
+            ComboEffect::Supernova,
+        ] {
+            let mut rig = Rig::new();
+            let tracker = holding(&Hand::at(0.5, 0.5).gesture(synth::CLOSED_FIST));
+            let hit = ComboHit {
+                combo: 0,
+                effect,
+                slot: 0,
+            };
+            let report = rig.run_with(&tracker, Some(hit), DT);
+            assert_eq!(report.bursts, 1, "{effect:?} did not report its burst");
+            assert!(
+                report.injected > 0.0 && report.injected.is_finite(),
+                "{effect:?} injected {}",
+                report.injected
+            );
+            // A payload is an event; it must not leave the solver unstable.
+            for _ in 0..30 {
+                rig.run(&tracker, DT);
+            }
+            assert_eq!(rig.fluid.sanitize(), 0, "{effect:?} destabilised the fluid");
+        }
     }
 
     #[test]
@@ -1181,7 +1556,7 @@ mod tests {
         // Repel is a pure dt-scaled impulse. Probed outside the palm drag's
         // radius but inside the push's, where nothing else has touched the
         // field, the two paths must agree to floating-point noise.
-        let tracker = holding(&Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
+        let tracker = latched(&Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
         let palm = palm_of(&tracker);
         let mut coarse = Rig::new();
         coarse.run(&tracker, DT);
@@ -1290,9 +1665,121 @@ mod tests {
             &mut none,
             &mut state,
             &Params::default(),
+            [None; 2],
+            [0.0; 2],
             DT,
         );
         assert!(report.injected.is_finite());
         assert_eq!(tiny.sanitize(), 0);
+    }
+
+    #[test]
+    fn a_sweeping_open_palm_still_repels() {
+        let tracker = sweeping(&Hand::at(0.3, 0.5).gesture(synth::OPEN_PALM));
+        assert_eq!(tracker.hands()[0].spell, Spell::Repel);
+    }
+
+    #[test]
+    fn a_closed_fist_gathers_particles_instead_of_slinging_them_past() {
+        let tracker = latched(&Hand::at(0.5, 0.5).gesture(synth::CLOSED_FIST));
+        let hand = &tracker.hands()[0];
+        let (sx, sy) = ((FLUID_W - 1) as f32, (FLUID_H - 1) as f32);
+        let palm = to_grid(hand.palm, sx, sy);
+
+        let mut rig = Rig::new();
+        rig.particles.place(0, palm[0] + 10.0, palm[1], 0.0, 0.0, 30.0);
+        let obstacle = Grid::new(FLUID_W, FLUID_H);
+        let cfg = ParticleConfig::default();
+        for _ in 0..60 {
+            rig.run(&tracker, DT);
+            rig.particles
+                .step(rig.fluid.velocity(), &obstacle, DT, &rig.params, &cfg);
+        }
+        let (px, py) = rig.particles.position(0);
+        let dist = length(px - palm[0], py - palm[1]);
+        let (vx, vy) = rig.particles.velocity(0);
+        assert!(dist < 10.0, "particle was not gathered: {dist} cells out");
+        // Held, not orbiting: the grip has taken the speed off it.
+        assert!(length(vx, vy) < 60.0, "particle still slinging: {vx} {vy}");
+    }
+
+    #[test]
+    fn one_pointing_hand_is_still_an_ignite() {
+        let tracker = holding(&Hand::at(0.5, 0.5).gesture(synth::POINTING_UP));
+        let mut rig = Rig::new();
+        let report = rig.run(&tracker, DT);
+        assert_eq!(report.spells[0], Spell::Ignite);
+    }
+
+    #[test]
+    fn opening_a_held_fist_fires_a_ring_once() {
+        let mut t = GestureTracker::new(GestureConfig::default());
+        let mut buf = synth::buffer();
+        let mut rig = Rig::new();
+        synth::write(&mut buf, 0, &Hand::at(0.5, 0.5).gesture(synth::CLOSED_FIST));
+        for _ in 0..45 {
+            t.update_hands(&buf, HAND_DT);
+            t.update_two_hand(HAND_DT);
+            rig.run(&t, HAND_DT);
+        }
+        assert_eq!(t.hands()[0].spell, Spell::Attract);
+        let palm = palm_of(&t);
+
+        // Still the pool first so the only fast particles afterwards are the
+        // ring's own, not two seconds of attract pull.
+        rig.particles
+            .seed_uniform(FLUID_W, FLUID_H, rig.params.particle_life);
+        // Open the hand: the tracker takes `commit_frames` to relatch.
+        synth::write(&mut buf, 0, &Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
+        let mut bursts = 0;
+        let mut saw_release = false;
+        for _ in 0..12 {
+            t.update_hands(&buf, HAND_DT);
+            t.update_two_hand(HAND_DT);
+            let report = rig.run(&t, HAND_DT);
+            bursts += report.bursts;
+            saw_release |= report.spells[0] == Spell::Release;
+        }
+        assert_eq!(bursts, 1, "the ring must fire exactly once per open");
+        assert!(saw_release, "the release should be reported to the HUD");
+        // Particles were re-seeded on a ring and fly outward from the palm.
+        let mut outward = 0;
+        let mut total = 0;
+        for i in 0..rig.particles.active() {
+            let (px, py) = rig.particles.position(i);
+            let (vx, vy) = rig.particles.velocity(i);
+            let speed = length(vx, vy);
+            if speed < 50.0 {
+                continue;
+            }
+            total += 1;
+            if (px - palm[0]) * vx + (py - palm[1]) * vy > 0.0 {
+                outward += 1;
+            }
+        }
+        assert!(total > 100, "expected a burst of fast particles, got {total}");
+        assert!(outward * 10 > total * 9, "burst is not outward: {outward}/{total}");
+    }
+
+    #[test]
+    fn a_fist_barely_closed_does_not_fire_a_ring() {
+        let mut t = GestureTracker::new(GestureConfig::default());
+        let mut buf = synth::buffer();
+        let mut rig = Rig::new();
+        synth::write(&mut buf, 0, &Hand::at(0.5, 0.5).gesture(synth::CLOSED_FIST));
+        for _ in 0..4 {
+            t.update_hands(&buf, HAND_DT);
+            t.update_two_hand(HAND_DT);
+            rig.run(&t, HAND_DT);
+        }
+        assert_eq!(t.hands()[0].spell, Spell::Attract);
+        synth::write(&mut buf, 0, &Hand::at(0.5, 0.5).gesture(synth::OPEN_PALM));
+        let mut bursts = 0;
+        for _ in 0..12 {
+            t.update_hands(&buf, HAND_DT);
+            t.update_two_hand(HAND_DT);
+            bursts += rig.run(&t, HAND_DT).bursts;
+        }
+        assert_eq!(bursts, 0, "an uncharged fist must not fire");
     }
 }

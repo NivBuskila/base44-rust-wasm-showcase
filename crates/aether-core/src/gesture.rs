@@ -188,6 +188,9 @@ pub enum Spell {
     Freeze,
     /// Thumb up bursts particles outward.
     Shatter,
+    /// A held fist opened: an expanding ring shockwave. Reported by the spell
+    /// layer for the moment after the release; never latched by the tracker.
+    Release,
 }
 
 impl Spell {
@@ -200,6 +203,7 @@ impl Spell {
             Self::Ignite => "ignite",
             Self::Freeze => "freeze",
             Self::Shatter => "shatter",
+            Self::Release => "release",
         }
     }
 
@@ -213,6 +217,7 @@ impl Spell {
             Self::Ignite => 0.05,
             Self::Freeze => 0.55,
             Self::Shatter => 0.14,
+            Self::Release => 0.62,
         }
     }
 }

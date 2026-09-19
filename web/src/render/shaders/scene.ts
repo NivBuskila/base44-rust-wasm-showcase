@@ -144,7 +144,8 @@ vec3 treatedCamera(vec2 iuv) {
   if (u_camRaw >= 1.0) {
     // A regular camera: the feed's own colour, sRGB-decoded so the linear
     // chain and the transfer at the end hand it back unchanged.
-    return pow(texture(u_video, iuv).rgb, vec3(2.2));
+    // u_camTint dims it for the blend view; the camera view leaves it at 1.
+    return u_camTint * pow(texture(u_video, iuv).rgb, vec3(2.2));
   }
   vec2 o = u_videoTexel * 2.0;
   float c = luma(texture(u_video, iuv).rgb);
