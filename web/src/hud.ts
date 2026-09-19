@@ -29,7 +29,7 @@
 
 import { FLUID_H, FLUID_W, MAX_PARTICLES, STAT } from './constants';
 import type { EngineTier } from './engine-loader';
-import { ComboBook, comboState } from './hud-combos';
+import { ComboBook, comboState, duetState } from './hud-combos';
 import { PRESETS, type ParamPreset } from './hud-presets';
 import type { HudCallbacks, HudStats, PerceptionStatus, ViewMode } from './types';
 
@@ -533,7 +533,8 @@ export class Hud {
     // reads as lag in the recognition itself, and each write is diffed inside
     // the component, so an unchanged sequence costs nothing.
     if (s.comboBook) this.combos.setBook(s.comboBook);
-    this.combos.update(comboState(s.comboProgress));
+    if (s.duetBook) this.combos.setDuetBook(s.duetBook);
+    this.combos.update(comboState(s.comboProgress), duetState(s.duetProgress), s.gunAiming === true);
 
     if (now - this.lastPaintMs < PAINT_MS) return;
     this.lastPaintMs = now;

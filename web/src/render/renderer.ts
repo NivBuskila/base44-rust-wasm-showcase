@@ -29,6 +29,7 @@ import { FLUID_H, FLUID_W, MAX_PARTICLES, PARTICLE_STRIDE } from '../constants';
 import type { RenderFrame, ViewMode } from '../types';
 import { Program, RenderTarget, RendererError, createTexture, isSoftwareRasteriser, probeHdr } from './gl';
 import { OVERLAY_CAPACITY, OVERLAY_STRIDE, buildHandMesh } from './handmesh';
+import { GUNSIGHT_CAPACITY, buildGunSight } from './gunsight';
 import { NOISE_SIZE, buildNoiseTile } from './noise';
 import { BLOOM_DOWN_FRAG, BLOOM_UP_FRAG } from './shaders/bloom';
 import { FULLSCREEN_VERT, buildShader } from './shaders/common';
@@ -78,6 +79,9 @@ const SOFTWARE_PIXEL_BUDGET = 1_600_000;
 
 /** Floor on the internal scale; below this the softening is obvious. */
 const MIN_SCENE_SCALE = 0.4;
+
+/** Viewport width, in CSS pixels, that particle size is calibrated against. */
+const PARTICLE_SIZE_REF_WIDTH = 1200;
 
 /** Tent filter radius for the bloom fold-back, in source texels. */
 const BLOOM_TENT = 1.1;
@@ -259,6 +263,8 @@ export class Renderer {
   private frameIndex = 0;
   /** Scene/bloom resolution as a fraction of the canvas; 1 unless capped. */
   private sceneScale = 1;
+  /** Particle size relative to the viewport width; see `resize`. */
+  private viewScale = 1;
   /** Scene pixel ceiling, tightened when the context is a CPU rasteriser. */
   private pixelBudget = SCENE_PIXEL_BUDGET;
   /** `?rscale=` override, which wins over the budget. */
@@ -273,6 +279,7 @@ export class Renderer {
   private videoTime = -1;
 
   private readonly overlayScratch = new Float32Array(OVERLAY_CAPACITY * OVERLAY_STRIDE);
+  private readonly sightScratch = new Float32Array(GUNSIGHT_CAPACITY * OVERLAY_STRIDE);
   /** One-row scratch for `sampleLuminance`, grown to the canvas width. */
   private sampleRow = new Uint8Array(4);
 
@@ -484,6 +491,13 @@ export class Renderer {
       this.canvas.height = h;
     }
 
+    // A dot sized in CSS pixels is a dot three times larger *relative to the
+    // frame* on a 390-wide phone than on a desktop window, which is why the
+    // dust reads as coarse confetti there. Size follows the viewport instead,
+    // normalised to a typical desktop width, so the grain looks the same
+    // fraction of the picture on every screen.
+    this.viewScale = clamp(this.canvas.clientWidth / PARTICLE_SIZE_REF_WIDTH, 0.45, 1);
+
     const res = this.res;
     if (!res) return;
 
@@ -617,7 +631,7 @@ export class Renderer {
     this.drawParticles(res, frame, style, intensity);
     this.drawOverlay(res, frame, style);
     this.drawBloom(res, style);
-    this.drawComposite(res, style, intensity);
+    this.drawComposite(res, frame, style, intensity);
   }
 
   /** Raw obstacle/flow texture, straight to the screen with no grading. */
@@ -731,7 +745,7 @@ export class Renderer {
     // Point size follows the target, not the canvas: the scene can be drawn
     // below canvas resolution, and a size in canvas pixels would then make the
     // dust swell into blobs when the composite scales it back up.
-    const px = this.dpr * this.sceneScale;
+    const px = this.dpr * this.sceneScale * this.viewScale;
     p.f1('u_size', px * (3.1 + (1.35 - 3.1) * clamp(count / 200_000, 0, 1)));
     p.f1('u_intensity', intensity);
 
@@ -743,7 +757,9 @@ export class Renderer {
   }
 
   private drawOverlay(res: Resources, frame: RenderFrame, style: ModeStyle): void {
-    if (style.overlay <= 0 || !frame.hands) return;
+    if (style.overlay <= 0) return;
+    this.drawGunSight(res, frame, style);
+    if (!frame.hands) return;
     const mesh = buildHandMesh(frame.hands, this.overlayScratch);
     const vertices = mesh.lineVertices + mesh.pointVertices;
     if (vertices === 0) return;
@@ -772,6 +788,35 @@ export class Renderer {
       p.f1('u_size', 5 * this.dpr * this.sceneScale);
       gl.drawArrays(gl.POINTS, mesh.lineVertices, mesh.pointVertices);
     }
+    gl.disable(gl.BLEND);
+  }
+
+  /**
+   * The finger gun's aim line. Drawn with the overlay shader but in its own
+   * amber tint, matching the tracer the trigger actually fires.
+   */
+  private drawGunSight(res: Resources, frame: RenderFrame, style: ModeStyle): void {
+    if (!frame.gunAim) return;
+    const vertices = buildGunSight(frame.gunAim, this.sightScratch, frame.time);
+    if (vertices === 0) return;
+
+    const gl = this.gl;
+    gl.bindVertexArray(res.overlayVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, res.overlayBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, this.sightScratch.byteLength, gl.DYNAMIC_DRAW);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.sightScratch, 0, vertices * OVERLAY_STRIDE);
+
+    const p = res.overlayPass;
+    p.use();
+    p.f1('u_alpha', style.overlay * 0.85);
+    p.f3('u_tint', 1.0, 0.72, 0.28);
+    p.f1('u_round', 0);
+    p.f1('u_size', 1);
+
+    res.scene.bind();
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.drawArrays(gl.LINES, 0, vertices);
     gl.disable(gl.BLEND);
   }
 
@@ -809,7 +854,12 @@ export class Renderer {
     gl.disable(gl.BLEND);
   }
 
-  private drawComposite(res: Resources, style: ModeStyle, intensity: number): void {
+  private drawComposite(
+    res: Resources,
+    frame: RenderFrame,
+    style: ModeStyle,
+    intensity: number,
+  ): void {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -829,6 +879,16 @@ export class Renderer {
     p.f1('u_vignette', style.vignette);
     p.f1('u_grade', style.grade);
     p.f1('u_frame', this.frameIndex);
+    // The engine's origin is in the dye grid's convention (y down); this pass
+    // samples the scene target, which holds that image flipped, so the y has to
+    // be flipped with it or the rush would dolly in on the mirror of the palm.
+    const rush = frame.rush;
+    const power = rush && rush.length >= 4 && Number.isFinite(rush[3]) ? Math.max(0, rush[3]) : 0;
+    p.f2('u_rushAt', power > 0 ? rush![0] : 0.5, power > 0 ? 1 - rush![1] : 0.5);
+    p.f1('u_rushProgress', power > 0 ? rush![2] : 0);
+    p.f1('u_rushPower', power);
+    // 0 = energy arriving at the lens, 1 = a finger-gun shot fired at it.
+    p.f1('u_rushKind', power > 0 && rush!.length >= 5 ? rush![4] : 0);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
