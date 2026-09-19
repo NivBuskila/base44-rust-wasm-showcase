@@ -895,6 +895,9 @@ pub(crate) mod synth {
     pub const POINTING_UP: i32 = 3;
     pub const THUMB_UP: i32 = 5;
     pub const VICTORY: i32 = 6;
+    /// Synthetic only — MediaPipe has no such label. Thumb and index out,
+    /// the rest curled: the finger gun with the hammer up.
+    pub const FINGER_GUN: i32 = 100;
 
     /// Finger chains in MediaPipe order, palm joint first, tip last.
     const CHAINS: [[usize; 4]; 5] = [
@@ -993,6 +996,7 @@ pub(crate) mod synth {
             POINTING_UP => [false, true, false, false, false],
             VICTORY => [false, true, true, false, false],
             THUMB_UP => [true, false, false, false, false],
+            FINGER_GUN => [true, true, false, false, false],
             _ => [true, true, true, false, false],
         }
     }
