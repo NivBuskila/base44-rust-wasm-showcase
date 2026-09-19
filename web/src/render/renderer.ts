@@ -162,6 +162,25 @@ const STYLES: Record<ViewMode, ModeStyle> = {
     aberration: 0,
     vignette: 0,
   },
+  // Camera and aether together: the feed in its own colour, held down to a
+  // little under half brightness so the fluid stays the subject, with the
+  // full filmic grade, bloom and fringe of the aether view laid over it.
+  blend: {
+    bg: 0.3,
+    dye: 1.05,
+    camTint: [0.42, 0.42, 0.42],
+    camEdge: [0, 0, 0],
+    camToe: 0,
+    camRaw: 1,
+    grade: 1,
+    particles: 1.1,
+    overlay: 0.6,
+    bloom: 0.9,
+    threshold: 0.78,
+    exposure: 1.0,
+    aberration: 0.35,
+    vignette: 0.42,
+  },
   // Particles on black, with the bloom pushed: this is the mode where the
   // point cloud has to carry the whole image on its own.
   particles: {
@@ -640,7 +659,7 @@ export class Renderer {
     const camUsed =
       style.camTint[0] + style.camTint[1] + style.camTint[2] > 0 ||
       style.camEdge[0] + style.camEdge[1] + style.camEdge[2] > 0;
-    const wantCamera = camUsed && (frame.mode === 'camera' || frame.showCamera);
+    const wantCamera = camUsed && (frame.mode === 'camera' || frame.mode === 'blend' || frame.showCamera);
     const hasVideo = wantCamera && this.uploadVideo(res, frame.video ?? this.video);
 
     res.scene.bind();
