@@ -45,10 +45,10 @@ const MIN_SCALE: f32 = 0.02;
 /// itself per second (`FULL_GROWTH` is full power) and re-arms when the growth
 /// falls back under `REARM_GROWTH`. The rate is smoothed over `GROWTH_HALF_LIFE`
 /// seconds because MediaPipe's hand size jitters frame to frame.
-const THROW_GROWTH: f32 = 1.6;
-const FULL_GROWTH: f32 = 4.0;
-const REARM_GROWTH: f32 = 0.5;
-const GROWTH_HALF_LIFE: f32 = 0.04;
+const THROW_GROWTH: f32 = 0.9;
+const FULL_GROWTH: f32 = 2.6;
+const REARM_GROWTH: f32 = 0.35;
+const GROWTH_HALF_LIFE: f32 = 0.05;
 
 /// How far a bolt flies, in normalised units, at zero and at full power.
 const REACH: f32 = 0.9;
@@ -165,7 +165,10 @@ impl ThrowTracker {
             // Whichever reading is the stronger throw decides the kind: a push
             // at the lens always drifts a little on screen too, and that drift
             // must not turn it into a sideways bolt.
-            thrown[slot] = Some(if towards >= across {
+            // A real push at the lens always carries some sideways drift (the
+            // arm swings as it extends), so the push only has to be *comparable*
+            // to the drift to win, not stronger than it.
+            thrown[slot] = Some(if growth >= THROW_GROWTH && towards * 2.0 >= across {
                 Throw {
                     from: hand.palm,
                     dir: [0.0, 0.0],
