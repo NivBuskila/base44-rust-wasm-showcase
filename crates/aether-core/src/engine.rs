@@ -123,9 +123,12 @@ pub struct Engine {
 
     /// `1 - exp(-x)` sampled over `[0, TONEMAP_MAX]`, built once.
     tonemap_lut: Vec<f32>,
-    /// True when a mask arrived since the last step, or the obstacle field is
-    /// still fading out. Lets `step` skip re-uploading an unchanged obstacle,
-    /// which is a full grid resample plus a wall-mask rebuild.
+    /// All-zero obstacle grid: the body is a soft push, not a solid, so the
+    /// solver's obstacle field never holds anything but the domain border.
+    empty_obstacle: Grid,
+    /// True when the obstacle field still has to be cleared once (first step,
+    /// or after a reset). Clearing is a full resample plus a wall-mask rebuild,
+    /// so it does not run per frame.
     obstacle_dirty: bool,
 
     time: f32,
@@ -160,6 +163,7 @@ impl Engine {
             debug_rgba: vec![0; FLUID_CELLS * 4],
             idle_field: VecField::new(FLUID_W, FLUID_H),
             tonemap_lut: build_tonemap_lut(),
+            empty_obstacle: Grid::new(FLUID_W, FLUID_H),
             obstacle_dirty: true,
             time: 0.0,
             frame: 0,
@@ -296,13 +300,16 @@ impl Engine {
             self.drive_ambient(warped_dt);
         }
 
-        // Re-uploading the obstacle is a full grid resample plus a wall-mask
-        // rebuild. The mask arrives at 30 Hz against a 60 Hz render loop, so
-        // half these calls would hand the solver bytes it already has. During a
-        // fade the field does change every frame, hence the staleness test.
-        if self.obstacle_dirty || self.body.present() {
-            self.fluid.set_obstacle(self.body.obstacle());
-            self.obstacle_dirty = self.body.present();
+        // The body is deliberately NOT a solid: a silhouette obstacle dammed the
+        // dye against the subject's outline, so colour piled up on the face and
+        // shoulders and looked stuck to them. It now only pushes the fluid
+        // through `body_edge` below, so dye and particles pass straight through
+        // the body while motion still stirs the field. `obstacle` stays empty
+        // except for the domain border; a stale upload from a previous run is
+        // cleared once when the mask state changes.
+        if self.obstacle_dirty {
+            self.fluid.set_obstacle(&self.empty_obstacle);
+            self.obstacle_dirty = false;
         }
 
         let body_edge = if self.body.present() {
