@@ -383,6 +383,25 @@ impl Engine {
         }
         let shots = self.gun.update(&self.tracker);
         for shot in shots.into_iter().flatten() {
+            // A gun aimed at the lens has no screen bearing, so it is staged the
+            // same way a bolt pushed at the camera is: a rush plus a detonation
+            // at the fingertip rather than a tracer across the field.
+            if shot.dir == [0.0, 0.0] {
+                self.rush.trigger(shot.from, 0.9);
+                bolt::fire(
+                    &mut self.fluid,
+                    &mut self.particles,
+                    self.params.particle_life,
+                    bolt::Throw {
+                        from: shot.from,
+                        dir: [0.0, 0.0],
+                        power: 0.9,
+                    },
+                    (FLUID_W - 1) as f32,
+                    (FLUID_H - 1) as f32,
+                );
+                continue;
+            }
             bolt::shoot(
                 &mut self.fluid,
                 &mut self.particles,
