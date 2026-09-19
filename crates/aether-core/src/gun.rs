@@ -46,15 +46,27 @@ const AT_LENS_LONGER: f32 = 1.4;
 /// why aiming at the lens used to be nearly impossible to hit.
 const AT_LENS_DEPTH: f32 = 0.5;
 
-/// Thumb tip to index knuckle, in hand scales. Above `COCKED` the hammer is up
-/// and the gun is armed; below `PULLED` the thumb has dropped and it fires.
-/// The gap is the hysteresis that stops a wobbling thumb from double-tapping.
-/// `COCKED` is looser than a flat hand measures, because the thumb of a hand
-/// turned towards the lens sits closer to the index knuckle in the frame than it
-/// does in space — a stricter bar never arms the gun at all. `PULLED` stays
-/// above a fully curled thumb (~0.42 scales) so the drop is still unambiguous.
-const COCKED: f32 = 0.56;
-const PULLED: f32 = 0.47;
+/// The hammer is the thumb tip's distance from the index knuckle, in hand
+/// scales — but it is read *relatively*, against the widest spread this hand has
+/// shown while holding the pose, not against absolute numbers. Absolute bars
+/// could never work at every orientation at once: a hand turned towards the lens
+/// projects its raised thumb almost on top of the knuckle, so a bar that armed a
+/// side-on gun never armed a gun aimed at the camera, and a bar low enough for
+/// the latter fired on a side-on hand's resting thumb.
+///
+/// `ARMED` is how close to that peak counts as the hammer being up, `DROP` how
+/// far below it counts as the trigger being pulled; the gap between them is the
+/// hysteresis that stops a wobbling thumb from double-tapping. `MIN_PEAK` is the
+/// smallest spread still believable as a raised thumb, so a hand that never
+/// raised one cannot fire from noise alone.
+const ARMED: f32 = 0.88;
+const DROP: f32 = 0.72;
+const MIN_PEAK: f32 = 0.34;
+
+/// The peak decays this much per second while the pose is held, so a spread
+/// measured at one orientation cannot keep the gun un-fireable after the hand
+/// turns and projects smaller.
+const PEAK_DECAY: f32 = 0.35;
 
 /// Shortest knuckle-to-tip segment, in hand scales, still trusted for aim.
 const MIN_AIM: f32 = 0.35;
@@ -77,6 +89,8 @@ pub struct GunTracker {
     /// True once the gun pose has been seen with the thumb up; the thumb then
     /// dropping is the shot. Cleared by the shot, re-set by raising the thumb.
     cocked: [bool; HANDS],
+    /// Widest thumb spread seen while this hand held the pose, in hand scales.
+    peak: [f32; HANDS],
 }
 
 impl GunTracker {
@@ -112,17 +126,27 @@ impl GunTracker {
     }
 
     /// Returns whichever hands fired this step.
-    pub fn update(&mut self, tracker: &GestureTracker) -> [Option<Shot>; HANDS] {
+    pub fn update(&mut self, tracker: &GestureTracker, dt: f32) -> [Option<Shot>; HANDS] {
         let mut fired: [Option<Shot>; HANDS] = [None; HANDS];
+        let decay = 1.0 - (PEAK_DECAY * dt.max(0.0)).min(0.5);
         for (slot, hand) in tracker.hands().iter().enumerate().take(HANDS) {
             let Some(p) = hand.present.then(|| pose(hand)).flatten() else {
                 self.cocked[slot] = false;
+                self.peak[slot] = 0.0;
                 continue;
             };
-            if p.thumb >= COCKED {
+            let peak = (self.peak[slot] * decay).max(p.thumb);
+            self.peak[slot] = peak;
+            if peak < MIN_PEAK {
+                continue;
+            }
+            if p.thumb >= peak * ARMED {
                 self.cocked[slot] = true;
-            } else if p.thumb <= PULLED && self.cocked[slot] {
+            } else if p.thumb <= peak * DROP && self.cocked[slot] {
                 self.cocked[slot] = false;
+                // The pull only re-arms from a fresh raise, so the peak restarts
+                // from where the thumb is now.
+                self.peak[slot] = p.thumb;
                 fired[slot] = Some(Shot {
                     from: p.tip,
                     dir: p.dir,
@@ -244,7 +268,7 @@ mod tests {
                 let mut buf = synth::buffer();
                 synth::write(&mut buf, 0, &synth::Hand::at(0.5, 0.5).gesture(gesture));
                 self.gestures.update_hands(&buf, DT);
-                fired = fired.or(self.gun.update(&self.gestures)[0]);
+                fired = fired.or(self.gun.update(&self.gestures, DT)[0]);
             }
             fired
         }
