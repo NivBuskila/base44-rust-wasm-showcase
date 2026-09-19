@@ -266,6 +266,15 @@ impl DuetTracker {
         }
     }
 
+    /// True while a big bang is charged or waiting for the second fist.
+    ///
+    /// Both hands go fist -> open palm during the release, which is exactly the
+    /// `nova` combo on each hand: without this the pair fires two small novas a
+    /// frame before the supernova, and the charged payoff is lost inside them.
+    pub fn claims_hands(&self) -> bool {
+        self.charge > 0.0
+    }
+
     /// The duet being wound up right now, for the HUD.
     pub fn progress(&self) -> DuetProgress {
         let (active, charge) = if self.charge > 0.0 {
