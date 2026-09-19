@@ -28,8 +28,13 @@ export interface CameraOptions {
 }
 
 const DEFAULTS: CameraOptions = {
-  width: 1280,
-  height: 720,
+  // Nothing downstream wants a 720p frame: inference resizes to 480 wide and
+  // the flow plane is 128x72, so capturing bigger only makes every per-frame
+  // downscale (the 2D readback here and `createImageBitmap` in the perception
+  // client) pay for pixels that are thrown away. 540p is the smallest capture
+  // that still feeds inference at full width and reads sharp as a backdrop.
+  width: 960,
+  height: 540,
   frameRate: 60,
   facingMode: 'user',
 };
