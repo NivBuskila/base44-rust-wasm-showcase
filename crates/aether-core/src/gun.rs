@@ -25,6 +25,13 @@ const EXTENDED: f32 = 1.45;
 const CURLED: f32 = 1.6;
 const LONGER: f32 = 1.3;
 
+/// A finger aimed straight *at the lens* foreshortens until the tip sits almost
+/// on top of the wrist, so it can never clear `EXTENDED`. Anything above this
+/// floor that still out-reaches the curled fingers by `LONGER` is a gun — and a
+/// reach below `EXTENDED` is that gun pointing at the viewer, which fires with
+/// no screen direction (`dir == [0, 0]`) exactly like a bolt pushed at the lens.
+const AT_LENS: f32 = 0.75;
+
 /// Thumb tip to index knuckle, in hand scales. Above `COCKED` the hammer is up
 /// and the gun is armed; below `PULLED` the thumb has dropped and it fires.
 /// The gap is the hysteresis that stops a wobbling thumb from double-tapping.
@@ -115,10 +122,22 @@ fn pose(hand: &HandState) -> Option<Pose> {
         .iter()
         .map(|&i| reach(i))
         .fold(0.0f32, f32::max);
-    let extended = index >= EXTENDED && index >= longest_curled * LONGER;
+    let extended = index >= AT_LENS && index >= longest_curled * LONGER;
     let curled = longest_curled <= CURLED;
     if !extended || !curled {
         return None;
+    }
+    if index < EXTENDED {
+        // Pointed at the viewer: there is no screen bearing to shoot along.
+        let thumb = dist(lm(LM_THUMB_TIP), lm(LM_INDEX_MCP)) / scale;
+        if !thumb.is_finite() {
+            return None;
+        }
+        return Some(Pose {
+            tip: lm(LM_INDEX_TIP),
+            dir: [0.0, 0.0],
+            thumb,
+        });
     }
 
     let knuckle = lm(LM_INDEX_MCP);

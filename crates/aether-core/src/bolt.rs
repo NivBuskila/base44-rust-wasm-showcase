@@ -162,13 +162,11 @@ impl ThrowTracker {
                 continue;
             }
             self.armed[slot] = false;
-            // Whichever reading is the stronger throw decides the kind: a push
-            // at the lens always drifts a little on screen too, and that drift
-            // must not turn it into a sideways bolt.
-            // A real push at the lens always carries some sideways drift (the
-            // arm swings as it extends), so the push only has to be *comparable*
-            // to the drift to win, not stronger than it.
-            thrown[slot] = Some(if growth >= THROW_GROWTH && towards * 2.0 >= across {
+            // Whichever reading is the stronger throw decides the kind. A
+            // sideways flick also grows the hand a little (the arm extends as it
+            // swings), so the push must actually beat the drift to win —
+            // favouring it turned every throw into a push at the lens.
+            thrown[slot] = Some(if growth >= THROW_GROWTH && towards >= across {
                 Throw {
                     from: hand.palm,
                     dir: [0.0, 0.0],
