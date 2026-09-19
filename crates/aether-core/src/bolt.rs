@@ -1,139 +1,183 @@
-//! Energy shots: a bolt fired *at* the screen rather than cast by a gesture.
+//! Energy shots thrown *from the hand*: a fast flick of an open hand hurls a
+//! bolt of energy across the screen in the direction it was thrown.
 //!
-//! Every other effect in the engine comes out of perception, which means a
-//! caster with no camera (or no hands in frame) can only watch. A shot is the
-//! one manual input: the browser hands over a normalised aim point, and a
-//! streak of energy travels from just off the near edge of the frame into it and
-//! detonates.
+//! Unlike a [`crate::combo`] (one hand's shapes in order) or a [`crate::duet`]
+//! (the relationship between the hands), a throw is pure *motion*: the shape
+//! only decides whether the hand is allowed to throw at all. That makes it the
+//! one spell a caster discovers without being told — you flick, something flies.
 //!
-//! Shots are queued rather than applied on arrival: a pointer event can land at
-//! any moment, and every write to the fluid must happen inside a step, in grid
-//! space, with the frame's own `dt`.
+//! Speeds here are in **hand widths per second** (palm velocity over the hand
+//! scale), so a throw feels the same near and far from the camera.
+//!
+//! The effect is applied here rather than in [`crate::spells`] because a bolt is
+//! self-contained: it writes a streak and an impact and nothing else in the
+//! engine needs to know about it.
 
+use crate::config::HANDS;
 use crate::fluid::Fluid;
-use crate::math::hue_to_rgb;
+use crate::gesture::GestureTracker;
+use crate::math::{hue_to_rgb, smoothstep};
 use crate::particles::Particles;
 
-/// Most shots kept in the queue. A pointer can fire faster than the render
-/// loop consumes them; past this the extra ones are dropped rather than left to
-/// detonate a second later, which would feel like lag, not like a volley.
-const MAX_QUEUED: usize = 4;
+/// A hand must be moving at least this fast (hand widths per second) to throw,
+/// and `FULL_SPEED` is a full-power throw. It re-arms only once the hand has
+/// slowed past `REARM_SPEED`, so one flick is one bolt rather than a stream for
+/// as long as the hand keeps moving.
+const THROW_SPEED: f32 = 5.5;
+const FULL_SPEED: f32 = 16.0;
+const REARM_SPEED: f32 = 2.0;
 
-/// Where a bolt is born, normalised: the bottom centre of the frame, a little
-/// off-screen so the streak enters rather than appearing mid-air.
-const ORIGIN: [f32; 2] = [0.5, 1.06];
+/// The hand must be at least this open. A fist is excluded so squeezing for the
+/// big bang, or dragging an attract around, never throws.
+const MIN_OPENNESS: f32 = 0.45;
+
+/// Floor on the hand scale used to normalise speeds; a degenerate scale would
+/// read every twitch as a throw.
+const MIN_SCALE: f32 = 0.02;
+
+/// How far a bolt flies, in normalised units, at zero and at full power.
+const REACH: f32 = 0.9;
 
 /// Samples along the trail. Enough that the streak reads as a line at grid
-/// resolution without turning one click into a full-field pass.
+/// resolution without turning one throw into a full-field pass.
 const TRAIL_STEPS: usize = 26;
-/// Grid-cell radius of the trail's force/dye splat, and its speed and colour.
+/// Grid-cell radius of the trail's force/dye splat, its drive and its colour.
 const TRAIL_RADIUS: f32 = 3.0;
-const TRAIL_SPEED: f32 = 240.0;
-const TRAIL_DYE: f32 = 0.5;
+const TRAIL_SPEED: f32 = 260.0;
+const TRAIL_DYE: f32 = 0.55;
 /// Hue of the bolt: an electric cyan, distinct from every spell tint.
 const BOLT_HUE: f32 = 0.5;
 
-/// Impact: an outward puff of particles plus a dye flash.
+/// Impact at the far end: an outward puff of particles plus a dye flash.
 const IMPACT_RADIUS: f32 = 9.0;
-const IMPACT_SPEED: f32 = 300.0;
+const IMPACT_SPEED: f32 = 320.0;
 const IMPACT_DYE: f32 = 2.2;
 const IMPACT_FRACTION: usize = 12;
 const IMPACT_MAX: usize = 6_000;
 
-/// Queue of aim points waiting for the next step.
-#[derive(Clone, Debug, Default)]
-pub struct BoltQueue {
-    pending: [[f32; 2]; MAX_QUEUED],
-    len: usize,
+/// A bolt thrown this step.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Throw {
+    /// Palm the bolt leaves, normalised `[0, 1]`.
+    pub from: [f32; 2],
+    /// Unit direction it was thrown in.
+    pub dir: [f32; 2],
+    /// 0..1, from how hard the flick was.
+    pub power: f32,
 }
 
-impl BoltQueue {
+/// Cross-frame arming state, one flag per hand.
+#[derive(Clone, Debug)]
+pub struct ThrowTracker {
+    armed: [bool; HANDS],
+}
+
+impl Default for ThrowTracker {
+    fn default() -> Self {
+        Self {
+            armed: [true; HANDS],
+        }
+    }
+}
+
+impl ThrowTracker {
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Queues a shot at a normalised `[0, 1]` point. Out-of-range or
-    /// non-finite aim is ignored rather than clamped onto an edge.
-    pub fn push(&mut self, x: f32, y: f32) {
-        if !x.is_finite() || !y.is_finite() || self.len >= MAX_QUEUED {
-            return;
-        }
-        if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
-            return;
-        }
-        self.pending[self.len] = [x, y];
-        self.len += 1;
+    pub fn reset(&mut self) {
+        *self = Self::default();
     }
 
-    pub fn clear(&mut self) {
-        self.len = 0;
-    }
-
-    /// Fires and drains everything queued. Returns how many bolts landed.
-    pub fn flush(
-        &mut self,
-        fluid: &mut Fluid,
-        particles: &mut Particles,
-        particle_life: f32,
-        sx: f32,
-        sy: f32,
-    ) -> u32 {
-        let fired = self.len as u32;
-        for i in 0..self.len {
-            let aim = self.pending[i];
-            fire(fluid, particles, particle_life, aim, sx, sy);
+    /// Returns whichever hands threw this step. Both may throw at once.
+    pub fn update(&mut self, tracker: &GestureTracker) -> [Option<Throw>; HANDS] {
+        let mut thrown: [Option<Throw>; HANDS] = [None; HANDS];
+        for (slot, hand) in tracker.hands().iter().enumerate().take(HANDS) {
+            if !hand.present {
+                // A hand leaving the frame is not a throw, but the next one to
+                // appear must be able to throw straight away.
+                self.armed[slot] = true;
+                continue;
+            }
+            let scale = fin(hand.scale).max(MIN_SCALE);
+            let (vx, vy) = (fin(hand.velocity[0]), fin(hand.velocity[1]));
+            let speed = (vx * vx + vy * vy).sqrt() / scale;
+            if speed < REARM_SPEED {
+                self.armed[slot] = true;
+            }
+            if !self.armed[slot] || speed < THROW_SPEED || fin(hand.openness) < MIN_OPENNESS {
+                continue;
+            }
+            self.armed[slot] = false;
+            let unit = speed * scale;
+            thrown[slot] = Some(Throw {
+                from: hand.palm,
+                dir: [vx / unit, vy / unit],
+                power: smoothstep(THROW_SPEED, FULL_SPEED, speed),
+            });
         }
-        self.len = 0;
-        fired
+        thrown
     }
 }
 
-/// Draws one bolt's trail and its impact, all in grid space.
-fn fire(
+/// Draws one thrown bolt: a streak from the palm and an impact where it lands.
+pub fn fire(
     fluid: &mut Fluid,
     particles: &mut Particles,
     particle_life: f32,
-    aim: [f32; 2],
+    throw: Throw,
     sx: f32,
     sy: f32,
 ) {
-    let from = [ORIGIN[0] * sx, ORIGIN[1] * sy];
-    let to = [aim[0] * sx, aim[1] * sy];
-    let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
-    let len = (dx * dx + dy * dy).sqrt();
-    if !len.is_finite() || len < 1e-3 {
+    let power = fin(throw.power).clamp(0.0, 1.0);
+    let (nx, ny) = (fin(throw.dir[0]), fin(throw.dir[1]));
+    if nx == 0.0 && ny == 0.0 {
         return;
     }
-    let (nx, ny) = (dx / len, dy / len);
+    let reach = REACH * (0.55 + 0.45 * power);
+    let from = [
+        (fin(throw.from[0]) * sx).clamp(0.0, sx),
+        (fin(throw.from[1]) * sy).clamp(0.0, sy),
+    ];
+    let to = [
+        (from[0] + nx * reach * sx).clamp(0.0, sx),
+        (from[1] + ny * reach * sy).clamp(0.0, sy),
+    ];
     let rgb = hue_to_rgb(BOLT_HUE);
+    let drive = TRAIL_SPEED * (0.5 + 0.5 * power);
 
-    // The trail brightens and pushes harder towards the impact, so the eye
-    // follows it into the hit instead of reading a uniform stripe.
+    // The trail brightens towards the far end, so the eye follows the bolt away
+    // from the hand instead of reading a uniform stripe.
     for i in 0..TRAIL_STEPS {
         let t = (i as f32 + 1.0) / TRAIL_STEPS as f32;
-        let x = from[0] + dx * t;
-        let y = from[1] + dy * t;
+        let x = from[0] + (to[0] - from[0]) * t;
+        let y = from[1] + (to[1] - from[1]) * t;
         let w = t * t;
-        fluid.add_force(x, y, nx * TRAIL_SPEED * w, ny * TRAIL_SPEED * w, TRAIL_RADIUS);
-        let a = TRAIL_DYE * w;
+        fluid.add_force(x, y, nx * drive * w, ny * drive * w, TRAIL_RADIUS);
+        let a = TRAIL_DYE * w * (0.5 + 0.5 * power);
         fluid.add_dye(x, y, [rgb[0] * a, rgb[1] * a, rgb[2] * a], TRAIL_RADIUS);
     }
 
-    let count = (particles.active() / IMPACT_FRACTION).min(IMPACT_MAX);
-    particles.spawn_burst(to[0], to[1], count, IMPACT_SPEED, 1.0, particle_life);
+    let burst = IMPACT_SPEED * (0.5 + 0.5 * power);
+    let count = ((particles.active() / IMPACT_FRACTION) as f32 * (0.5 + 0.5 * power)) as usize;
+    particles.spawn_burst(
+        to[0],
+        to[1],
+        count.min(IMPACT_MAX),
+        burst,
+        1.0,
+        particle_life,
+    );
     particles.impulse(to[0], to[1], IMPACT_RADIUS * 1.5, 0.0, 1.0);
+    let flash = IMPACT_DYE * (0.5 + 0.5 * power);
     fluid.add_dye(
         to[0],
         to[1],
-        [
-            rgb[0] * IMPACT_DYE,
-            rgb[1] * IMPACT_DYE,
-            rgb[2] * IMPACT_DYE,
-        ],
+        [rgb[0] * flash, rgb[1] * flash, rgb[2] * flash],
         IMPACT_RADIUS,
     );
     // An event, not a force: a one-off outward push, deliberately un-scaled by
-    // dt so a shot hits as hard at 30 fps as at 144.
+    // dt so a throw hits as hard at 30 fps as at 144.
     let n = 20;
     for i in 0..n {
         let theta = i as f32 / n as f32 * core::f32::consts::TAU;
@@ -141,10 +185,19 @@ fn fire(
         fluid.add_force(
             to[0] + cx * IMPACT_RADIUS * 0.5,
             to[1] + cy * IMPACT_RADIUS * 0.5,
-            cx * IMPACT_SPEED,
-            cy * IMPACT_SPEED,
+            cx * burst,
+            cy * burst,
             IMPACT_RADIUS * 0.5,
         );
+    }
+}
+
+#[inline]
+fn fin(v: f32) -> f32 {
+    if v.is_finite() {
+        v
+    } else {
+        0.0
     }
 }
 
@@ -152,51 +205,143 @@ fn fire(
 mod tests {
     use super::*;
     use crate::config::{FLUID_H, FLUID_W};
+    use crate::gesture::{synth, GestureConfig};
 
-    fn rig() -> (Fluid, Particles) {
+    const DT: f32 = 1.0 / 60.0;
+    const SCALE: f32 = 0.1;
+
+    struct Rig {
+        gestures: GestureTracker,
+        throws: ThrowTracker,
+    }
+
+    impl Rig {
+        fn new() -> Self {
+            Self {
+                gestures: GestureTracker::new(GestureConfig::default()),
+                throws: ThrowTracker::new(),
+            }
+        }
+
+        /// One hand at `x`, stepped through the tracker and the recogniser.
+        fn frame(&mut self, gesture: i32, x: f32) -> [Option<Throw>; HANDS] {
+            let mut buf = synth::buffer();
+            let hand = synth::Hand::at(x, 0.5).gesture(gesture).scaled(SCALE);
+            synth::write(&mut buf, 0, &hand);
+            self.gestures.update_hands(&buf, DT);
+            self.gestures.update_two_hand(DT);
+            self.throws.update(&self.gestures)
+        }
+
+        /// Holds the hand still, so the gesture latches and the speed decays.
+        fn settle(&mut self, gesture: i32, x: f32) {
+            for _ in 0..40 {
+                self.frame(gesture, x);
+            }
+        }
+
+        /// One fast sweep from `from` to `to`, returning any throw.
+        fn flick(&mut self, gesture: i32, from: f32, to: f32, frames: usize) -> Option<Throw> {
+            let mut thrown = None;
+            for i in 0..frames {
+                let x = from + (to - from) * (i as f32 + 1.0) / frames as f32;
+                thrown = thrown.or(self.frame(gesture, x)[0]);
+            }
+            thrown
+        }
+    }
+
+    #[test]
+    fn a_flick_of_an_open_hand_throws_along_the_motion() {
+        let mut rig = Rig::new();
+        rig.settle(synth::OPEN_PALM, 0.25);
+        let throw = rig
+            .flick(synth::OPEN_PALM, 0.25, 0.75, 8)
+            .expect("a fast open-hand flick did not throw");
+        assert!(
+            throw.dir[0] > 0.8,
+            "bolt did not fly along the flick: {:?}",
+            throw.dir
+        );
+        assert!(throw.power > 0.0);
+    }
+
+    #[test]
+    fn a_slow_hand_and_a_fist_never_throw() {
+        let mut rig = Rig::new();
+        rig.settle(synth::OPEN_PALM, 0.4);
+        assert!(
+            rig.flick(synth::OPEN_PALM, 0.4, 0.46, 40).is_none(),
+            "a slow drift threw a bolt"
+        );
+        let mut fist = Rig::new();
+        fist.settle(synth::CLOSED_FIST, 0.25);
+        assert!(
+            fist.flick(synth::CLOSED_FIST, 0.25, 0.75, 8).is_none(),
+            "a fist threw a bolt"
+        );
+    }
+
+    #[test]
+    fn one_flick_throws_once_until_the_hand_slows_down() {
+        let mut rig = Rig::new();
+        rig.settle(synth::OPEN_PALM, 0.2);
+        assert!(rig.flick(synth::OPEN_PALM, 0.1, 0.5, 6).is_some());
+        // Still sweeping the same way: one flick is one bolt. (Reversing *is* a
+        // new throw — the hand has to stop to turn around.)
+        assert!(
+            rig.flick(synth::OPEN_PALM, 0.5, 0.9, 6).is_none(),
+            "a continuous sweep machine-gunned bolts"
+        );
+        rig.settle(synth::OPEN_PALM, 0.2);
+        assert!(
+            rig.flick(synth::OPEN_PALM, 0.2, 0.8, 8).is_some(),
+            "the throw never re-armed"
+        );
+    }
+
+    #[test]
+    fn a_thrown_bolt_lights_the_field_and_kicks_it() {
+        let mut fluid = Fluid::new(FLUID_W, FLUID_H);
         let mut particles = Particles::new(4096, 7);
         particles.set_active(4096);
         particles.seed_uniform(FLUID_W, FLUID_H, 2.0);
-        (Fluid::new(FLUID_W, FLUID_H), particles)
-    }
-
-    #[test]
-    fn a_shot_lights_the_field_and_kicks_it() {
-        let (mut fluid, mut particles) = rig();
-        let mut q = BoltQueue::new();
-        q.push(0.5, 0.3);
-        let fired = q.flush(
+        fire(
             &mut fluid,
             &mut particles,
             2.0,
+            Throw {
+                from: [0.3, 0.5],
+                dir: [1.0, 0.0],
+                power: 1.0,
+            },
             (FLUID_W - 1) as f32,
             (FLUID_H - 1) as f32,
         );
-        assert_eq!(fired, 1);
-        assert!(fluid.max_speed() > 0.0, "shot injected no velocity");
-        assert!(fluid.dye()[2].data.iter().any(|&v| v > 0.01), "shot left no dye");
+        assert!(fluid.max_speed() > 0.0, "the bolt injected no velocity");
+        assert!(
+            fluid.dye()[2].data.iter().any(|&v| v > 0.01),
+            "the bolt left no dye"
+        );
     }
 
     #[test]
-    fn garbage_and_offscreen_aim_is_ignored_and_the_queue_is_bounded() {
-        let mut q = BoltQueue::new();
-        q.push(f32::NAN, 0.5);
-        q.push(1.5, 0.5);
-        q.push(0.5, -0.2);
-        assert_eq!(q.len, 0);
-        for _ in 0..(MAX_QUEUED + 5) {
-            q.push(0.5, 0.5);
-        }
-        assert_eq!(q.len, MAX_QUEUED);
-    }
-
-    #[test]
-    fn flush_drains_the_queue() {
-        let (mut fluid, mut particles) = rig();
-        let mut q = BoltQueue::new();
-        q.push(0.4, 0.4);
-        let (sx, sy) = ((FLUID_W - 1) as f32, (FLUID_H - 1) as f32);
-        assert_eq!(q.flush(&mut fluid, &mut particles, 2.0, sx, sy), 1);
-        assert_eq!(q.flush(&mut fluid, &mut particles, 2.0, sx, sy), 0);
+    fn a_directionless_throw_is_ignored() {
+        let mut fluid = Fluid::new(FLUID_W, FLUID_H);
+        let mut particles = Particles::new(256, 3);
+        particles.set_active(256);
+        fire(
+            &mut fluid,
+            &mut particles,
+            2.0,
+            Throw {
+                from: [f32::NAN, 0.5],
+                dir: [f32::NAN, f32::NAN],
+                power: f32::NAN,
+            },
+            (FLUID_W - 1) as f32,
+            (FLUID_H - 1) as f32,
+        );
+        assert_eq!(fluid.max_speed(), 0.0);
     }
 }

@@ -222,12 +222,6 @@ impl AetherEngine {
         vec![idx(p.active), p.charge, idx(p.fired)]
     }
 
-    /// Fires an energy shot at a normalised `[0, 1]` point on the screen; it
-    /// detonates on the next `step`. Out-of-range aim is ignored.
-    pub fn shoot(&mut self, x: f32, y: f32) {
-        self.inner.shoot(x, y);
-    }
-
     // ---------------------------------------------------------------- config
 
     /// Sets a named tunable; returns false if the key is unknown.

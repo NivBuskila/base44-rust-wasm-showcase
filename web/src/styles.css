@@ -67,9 +67,6 @@ body {
   width: 100%;
   height: 100%;
   display: block;
-  /* Energy shots are dragged as well as tapped, so the browser must not claim
-     the gesture for scrolling or double-tap zoom. */
-  touch-action: none;
 }
 
 /* ------------------------------------------------------------------ the HUD */
