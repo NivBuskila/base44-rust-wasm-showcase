@@ -222,6 +222,13 @@ impl AetherEngine {
         vec![idx(p.active), p.charge, idx(p.fired)]
     }
 
+    /// Packed lens-rush staging for the renderer: `[x, y, progress, power]`,
+    /// with `power == 0` meaning nothing is in flight.
+    pub fn rush_state(&self) -> Vec<f32> {
+        let r = self.inner.rush_state();
+        vec![r.at[0], r.at[1], r.progress, r.power]
+    }
+
     // ---------------------------------------------------------------- config
 
     /// Sets a named tunable; returns false if the key is unknown.

@@ -629,7 +629,7 @@ export class Renderer {
     this.drawParticles(res, frame, style, intensity);
     this.drawOverlay(res, frame, style);
     this.drawBloom(res, style);
-    this.drawComposite(res, style, intensity);
+    this.drawComposite(res, frame, style, intensity);
   }
 
   /** Raw obstacle/flow texture, straight to the screen with no grading. */
@@ -821,7 +821,12 @@ export class Renderer {
     gl.disable(gl.BLEND);
   }
 
-  private drawComposite(res: Resources, style: ModeStyle, intensity: number): void {
+  private drawComposite(
+    res: Resources,
+    frame: RenderFrame,
+    style: ModeStyle,
+    intensity: number,
+  ): void {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -841,6 +846,14 @@ export class Renderer {
     p.f1('u_vignette', style.vignette);
     p.f1('u_grade', style.grade);
     p.f1('u_frame', this.frameIndex);
+    // The engine's origin is in the dye grid's convention (y down); this pass
+    // samples the scene target, which holds that image flipped, so the y has to
+    // be flipped with it or the rush would dolly in on the mirror of the palm.
+    const rush = frame.rush;
+    const power = rush && rush.length >= 4 && Number.isFinite(rush[3]) ? Math.max(0, rush[3]) : 0;
+    p.f2('u_rushAt', power > 0 ? rush![0] : 0.5, power > 0 ? 1 - rush![1] : 0.5);
+    p.f1('u_rushProgress', power > 0 ? rush![2] : 0);
+    p.f1('u_rushPower', power);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
