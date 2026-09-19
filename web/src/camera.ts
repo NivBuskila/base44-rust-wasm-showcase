@@ -28,13 +28,13 @@ export interface CameraOptions {
 }
 
 const DEFAULTS: CameraOptions = {
-  // Nothing downstream wants a 720p frame: inference resizes to 480 wide and
-  // the flow plane is 128x72, so capturing bigger only makes every per-frame
-  // downscale (the 2D readback here and `createImageBitmap` in the perception
-  // client) pay for pixels that are thrown away. 540p is the smallest capture
-  // that still feeds inference at full width and reads sharp as a backdrop.
-  width: 960,
-  height: 540,
+  // 720p is the known-good capture. Asking for 540p did cut the per-frame
+  // downscale cost sharply (cameraMs ~42 ms -> ~4.5 ms), but on a real device
+  // the feed stopped being visible, and a camera you cannot see is worse than
+  // a slower one: some cameras have no native 960x540 mode and the synthesised
+  // one is not usable. Change this only with a visible-feed check.
+  width: 1280,
+  height: 720,
   frameRate: 60,
   facingMode: 'user',
 };
