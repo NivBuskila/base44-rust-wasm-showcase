@@ -79,6 +79,9 @@ const SOFTWARE_PIXEL_BUDGET = 1_600_000;
 /** Floor on the internal scale; below this the softening is obvious. */
 const MIN_SCENE_SCALE = 0.4;
 
+/** Viewport width, in CSS pixels, that particle size is calibrated against. */
+const PARTICLE_SIZE_REF_WIDTH = 1200;
+
 /** Tent filter radius for the bloom fold-back, in source texels. */
 const BLOOM_TENT = 1.1;
 
@@ -259,6 +262,8 @@ export class Renderer {
   private frameIndex = 0;
   /** Scene/bloom resolution as a fraction of the canvas; 1 unless capped. */
   private sceneScale = 1;
+  /** Particle size relative to the viewport width; see `resize`. */
+  private viewScale = 1;
   /** Scene pixel ceiling, tightened when the context is a CPU rasteriser. */
   private pixelBudget = SCENE_PIXEL_BUDGET;
   /** `?rscale=` override, which wins over the budget. */
@@ -483,6 +488,13 @@ export class Renderer {
       this.canvas.width = w;
       this.canvas.height = h;
     }
+
+    // A dot sized in CSS pixels is a dot three times larger *relative to the
+    // frame* on a 390-wide phone than on a desktop window, which is why the
+    // dust reads as coarse confetti there. Size follows the viewport instead,
+    // normalised to a typical desktop width, so the grain looks the same
+    // fraction of the picture on every screen.
+    this.viewScale = clamp(this.canvas.clientWidth / PARTICLE_SIZE_REF_WIDTH, 0.45, 1);
 
     const res = this.res;
     if (!res) return;
@@ -731,7 +743,7 @@ export class Renderer {
     // Point size follows the target, not the canvas: the scene can be drawn
     // below canvas resolution, and a size in canvas pixels would then make the
     // dust swell into blobs when the composite scales it back up.
-    const px = this.dpr * this.sceneScale;
+    const px = this.dpr * this.sceneScale * this.viewScale;
     p.f1('u_size', px * (3.1 + (1.35 - 3.1) * clamp(count / 200_000, 0, 1)));
     p.f1('u_intensity', intensity);
 
