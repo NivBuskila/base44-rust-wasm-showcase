@@ -256,7 +256,10 @@ pub fn shoot(fluid: &mut Fluid, particles: &mut Particles, particle_life: f32, s
             f32::INFINITY
         }
     };
-    let t = edge(from[0], nx * sx, 1.0).min(edge(from[1], ny * sy, 1.0)).min(1.0);
+    // Both the position and the step are in cell units, so the bound is the
+    // grid extent. Passing 1.0 here made every tracer whose fingertip sat past
+    // the first cell solve a negative t and fly out the *back* of the aim.
+    let t = edge(from[0], nx * sx, sx).min(edge(from[1], ny * sy, sy)).min(1.0);
     let to = [
         (from[0] + nx * sx * t).clamp(0.0, sx),
         (from[1] + ny * sy * t).clamp(0.0, sy),
