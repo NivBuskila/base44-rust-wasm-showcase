@@ -35,6 +35,7 @@ use crate::mask::{BodyMask, MaskConfig};
 use crate::math::hue_to_rgb;
 use crate::particles::{ParticleConfig, Particles};
 use crate::bolt::{self, ThrowTracker};
+use crate::gun::GunTracker;
 use crate::combo::{ComboProgress, ComboTracker};
 use crate::duet::{DuetProgress, DuetTracker};
 use crate::spells::{self, SpellReport, SpellState};
@@ -114,6 +115,8 @@ pub struct Engine {
     duets: DuetTracker,
     /// Recognises a flick of an open hand as a thrown energy bolt.
     throws: ThrowTracker,
+    /// Recognises the finger gun and its trigger pull.
+    gun: GunTracker,
 
     // --- JS-writable input buffers ---
     luma: Vec<u8>,
@@ -161,6 +164,7 @@ impl Engine {
             combos: ComboTracker::new(),
             duets: DuetTracker::new(),
             throws: ThrowTracker::new(),
+            gun: GunTracker::new(),
             luma: vec![0; FLOW_CELLS],
             mask_in: vec![0.0; MASK_IN_CAPACITY],
             dye_rgba: vec![0; FLUID_CELLS * 4],
@@ -363,6 +367,17 @@ impl Engine {
                 &mut self.particles,
                 self.params.particle_life,
                 throw,
+                (FLUID_W - 1) as f32,
+                (FLUID_H - 1) as f32,
+            );
+        }
+        let shots = self.gun.update(&self.tracker);
+        for shot in shots.into_iter().flatten() {
+            bolt::shoot(
+                &mut self.fluid,
+                &mut self.particles,
+                self.params.particle_life,
+                shot,
                 (FLUID_W - 1) as f32,
                 (FLUID_H - 1) as f32,
             );
@@ -648,6 +663,7 @@ impl Engine {
         self.combos.reset();
         self.duets.reset();
         self.throws.reset();
+        self.gun.reset();
     }
 }
 

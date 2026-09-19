@@ -21,6 +21,7 @@
 use crate::config::HANDS;
 use crate::fluid::Fluid;
 use crate::gesture::GestureTracker;
+use crate::gun::Shot;
 use crate::math::{hue_to_rgb, smoothstep};
 use crate::particles::Particles;
 
@@ -61,6 +62,15 @@ const TRAIL_SPEED: f32 = 260.0;
 const TRAIL_DYE: f32 = 0.55;
 /// Hue of the bolt: an electric cyan, distinct from every spell tint.
 const BOLT_HUE: f32 = 0.5;
+
+/// A finger-gun shot: thinner, hotter and faster than a thrown bolt, and it
+/// always flies clean off the screen rather than landing at a reach.
+const SHOT_RADIUS: f32 = 1.6;
+const SHOT_SPEED: f32 = 420.0;
+const SHOT_DYE: f32 = 0.9;
+const SHOT_STEPS: usize = 40;
+/// A white-hot amber, so a gunshot never reads as a small throw.
+const SHOT_HUE: f32 = 0.09;
 
 /// Impact at the far end: an outward puff of particles plus a dye flash.
 const IMPACT_RADIUS: f32 = 9.0;
@@ -216,6 +226,56 @@ pub fn fire(
     }
 
     impact(fluid, particles, particle_life, to, power, 1.0);
+}
+
+/// Draws one finger-gun shot: a tight tracer from the fingertip to the edge of
+/// the field and a small hard impact where it leaves.
+pub fn shoot(fluid: &mut Fluid, particles: &mut Particles, particle_life: f32, shot: Shot, sx: f32, sy: f32) {
+    let (nx, ny) = (fin(shot.dir[0]), fin(shot.dir[1]));
+    if nx == 0.0 && ny == 0.0 {
+        return;
+    }
+    let from = [
+        (fin(shot.from[0]) * sx).clamp(0.0, sx),
+        (fin(shot.from[1]) * sy).clamp(0.0, sy),
+    ];
+    // Distance to the first field edge along the aim; the tracer stops there.
+    let edge = |p: f32, d: f32, max: f32| -> f32 {
+        if d > 0.0 {
+            (max - p) / d
+        } else if d < 0.0 {
+            -p / d
+        } else {
+            f32::INFINITY
+        }
+    };
+    let t = edge(from[0], nx * sx, 1.0).min(edge(from[1], ny * sy, 1.0)).min(1.0);
+    let to = [
+        (from[0] + nx * sx * t).clamp(0.0, sx),
+        (from[1] + ny * sy * t).clamp(0.0, sy),
+    ];
+    let rgb = hue_to_rgb(SHOT_HUE);
+    // Uniform along its length: a tracer is a line, not a comet.
+    for i in 0..SHOT_STEPS {
+        let k = (i as f32 + 0.5) / SHOT_STEPS as f32;
+        let x = from[0] + (to[0] - from[0]) * k;
+        let y = from[1] + (to[1] - from[1]) * k;
+        fluid.add_force(x, y, nx * SHOT_SPEED, ny * SHOT_SPEED, SHOT_RADIUS);
+        fluid.add_dye(
+            x,
+            y,
+            [rgb[0] * SHOT_DYE, rgb[1] * SHOT_DYE, rgb[2] * SHOT_DYE],
+            SHOT_RADIUS,
+        );
+    }
+    // Muzzle flash at the fingertip, hit at the edge.
+    fluid.add_dye(
+        from[0],
+        from[1],
+        [rgb[0] * IMPACT_DYE, rgb[1] * IMPACT_DYE, rgb[2] * IMPACT_DYE],
+        IMPACT_RADIUS * 0.5,
+    );
+    impact(fluid, particles, particle_life, to, 1.0, 0.6);
 }
 
 /// The detonation: an outward puff of particles, a dye flash and a ring of
@@ -442,6 +502,34 @@ mod tests {
             fluid.dye()[2].data.iter().any(|&v| v > 0.01),
             "the bolt left no dye"
         );
+    }
+
+    #[test]
+    fn a_gunshot_traces_to_the_edge_of_the_field() {
+        let mut fluid = Fluid::new(FLUID_W, FLUID_H);
+        let mut particles = Particles::new(4096, 7);
+        particles.set_active(4096);
+        particles.seed_uniform(FLUID_W, FLUID_H, 2.0);
+        let (sx, sy) = ((FLUID_W - 1) as f32, (FLUID_H - 1) as f32);
+        shoot(
+            &mut fluid,
+            &mut particles,
+            2.0,
+            Shot {
+                from: [0.5, 0.9],
+                dir: [0.0, -1.0],
+            },
+            sx,
+            sy,
+        );
+        assert!(fluid.max_speed() > 0.0, "the shot injected no velocity");
+        // Dye must reach the top of the field (row 0 is the boundary and stays
+        // clear), i.e. the tracer went all the way.
+        let red = &fluid.dye()[0];
+        let top: f32 = (0..FLUID_W)
+            .map(|x| red.data[FLUID_W + x])
+            .fold(0.0, f32::max);
+        assert!(top > 0.01, "the tracer stopped short of the edge");
     }
 
     #[test]
