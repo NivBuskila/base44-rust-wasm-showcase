@@ -40,8 +40,12 @@ const AT_LENS_LONGER: f32 = 1.7;
 /// Thumb tip to index knuckle, in hand scales. Above `COCKED` the hammer is up
 /// and the gun is armed; below `PULLED` the thumb has dropped and it fires.
 /// The gap is the hysteresis that stops a wobbling thumb from double-tapping.
-const COCKED: f32 = 0.62;
-const PULLED: f32 = 0.50;
+/// `COCKED` is looser than a flat hand measures, because the thumb of a hand
+/// turned towards the lens sits closer to the index knuckle in the frame than it
+/// does in space — a stricter bar never arms the gun at all. `PULLED` stays
+/// above a fully curled thumb (~0.42 scales) so the drop is still unambiguous.
+const COCKED: f32 = 0.56;
+const PULLED: f32 = 0.47;
 
 /// Shortest knuckle-to-tip segment, in hand scales, still trusted for aim.
 const MIN_AIM: f32 = 0.35;

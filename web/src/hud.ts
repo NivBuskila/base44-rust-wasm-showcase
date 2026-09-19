@@ -534,7 +534,7 @@ export class Hud {
     // the component, so an unchanged sequence costs nothing.
     if (s.comboBook) this.combos.setBook(s.comboBook);
     if (s.duetBook) this.combos.setDuetBook(s.duetBook);
-    this.combos.update(comboState(s.comboProgress), duetState(s.duetProgress));
+    this.combos.update(comboState(s.comboProgress), duetState(s.duetProgress), s.gunAiming === true);
 
     if (now - this.lastPaintMs < PAINT_MS) return;
     this.lastPaintMs = now;

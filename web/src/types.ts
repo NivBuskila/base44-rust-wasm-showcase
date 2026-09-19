@@ -102,6 +102,8 @@ export interface HudStats {
   duetBook?: string;
   /** Packed duet progress: active duet, charge, fired. */
   duetProgress?: Float32Array;
+  /** True while a hand holds the finger-gun pose, so the gun row lights up. */
+  gunAiming?: boolean;
   perception: PerceptionStatus;
 }
 
