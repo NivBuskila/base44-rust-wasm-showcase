@@ -18,18 +18,22 @@
 //! let points = engine.particle_buffer(); // x, y, heat, life per particle
 //! ```
 
+pub mod bolt;
 pub mod combo;
 pub mod config;
+pub mod duet;
 pub mod engine;
 pub mod field;
 pub mod fluid;
 pub mod flow;
 pub mod gesture;
+pub mod gun;
 pub mod mask;
 pub mod math;
 pub mod par;
 pub mod particles;
 pub mod rng;
+pub mod rush;
 pub mod spells;
 pub mod visual;
 
