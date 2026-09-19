@@ -204,6 +204,24 @@ impl AetherEngine {
         vec![idx(p.combo), p.matched as f32, p.charge, idx(p.fired)]
     }
 
+    /// The two-hand duet spellbook, as `name:step,step;...`. Steps are spell
+    /// names joined by `+` (both hands at once) or a motion word.
+    pub fn duet_book(&self) -> String {
+        aether_core::duet::DUETS
+            .iter()
+            .map(|d| format!("{}:{}", d.name, d.steps.join(",")))
+            .collect::<Vec<_>>()
+            .join(";")
+    }
+
+    /// Duet progress: `0` duet index being wound up (-1 when idle), `1` charge
+    /// 0..1, `2` duet that just fired (-1 when none).
+    pub fn duet_progress(&self) -> Vec<f32> {
+        let p = self.inner.duet_progress();
+        let idx = |v: usize| if v == usize::MAX { -1.0 } else { v as f32 };
+        vec![idx(p.active), p.charge, idx(p.fired)]
+    }
+
     // ---------------------------------------------------------------- config
 
     /// Sets a named tunable; returns false if the key is unknown.
