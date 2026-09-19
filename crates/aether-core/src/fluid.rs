@@ -174,15 +174,28 @@ const MAX_TRACE_STEPS: usize = 4;
 /// beside it within eight frames.
 const MIN_STENCIL_WEIGHT: f32 = 1e-3;
 
-/// Extra dye dissipation rate, per second, for fluid cells touching the body.
+/// Extra dye dissipation rate, per second, in the fluid cells around the body.
 ///
-/// The body is solid, so dye cannot pass through it — and without this the dye
-/// a gesture drives at the subject has nowhere to go and packs into the rim of
-/// cells along the silhouette, which on screen reads as colour *stuck to* the
-/// face and shoulders and staying there long after the gesture ended. Fading
-/// the contact rim keeps the collision (the flow still parts around the body)
-/// while the colour dies out where it lands instead of accumulating.
-const BODY_CONTACT_FADE: f32 = 3.2;
+/// The body is solid, so dye cannot pass through it — and the rim of cells
+/// pressed against the silhouette is also where the advection trace runs out of
+/// room and falls back to "stay put" ([`Fluid::trace_to_fluid`]), so dye that
+/// arrives there stops moving *and* keeps being fed. On screen that is a thick
+/// slab of colour welded to the face and shoulders. Fading it keeps the
+/// collision — the flow still parts around the body — while the colour burns
+/// off where it lands instead of piling up.
+///
+/// One full dye lifetime is `1 / dye_dissipation` ~ 0.4 s at the default; this
+/// is several times faster, so the contact band never outlives the gesture.
+const BODY_CONTACT_FADE: f32 = 9.0;
+
+/// Half-width, in cells, of the faded band around the silhouette.
+///
+/// A single-cell rim is not enough: the pile-up is as wide as the impulse
+/// driving it (`spells::MIN_RADIUS` is 4 cells), so fading only the cells that
+/// literally touch the body leaves a bright edge sitting one cell out. Three
+/// cells each way covers the stalled band and still leaves the rest of the
+/// frame untouched.
+const BODY_CONTACT_BAND: usize = 3;
 
 /// A velocity + dye field on a fixed grid.
 pub struct Fluid {
@@ -489,31 +502,53 @@ impl Fluid {
         )
     }
 
-    /// Fades dye in the fluid cells pressed against the body silhouette.
+    /// Fades dye in the band of fluid cells around the body silhouette.
+    ///
+    /// The band is the obstacle mask dilated by [`BODY_CONTACT_BAND`], computed
+    /// separably (a horizontal max pass into `scratch`, then a vertical max read
+    /// while the fade is applied) so the cost is `O(band)` per cell rather than
+    /// `O(band^2)`.
     ///
     /// Only runs while a body is in frame; with none the obstacle mask is empty
-    /// and the whole sweep would be a no-op over the grid.
+    /// and the whole sweep would be a no-op.
     fn fade_dye_at_body(&mut self, dt: f32) {
         if !self.has_obstacle {
             return;
         }
         let (w, h) = (self.w, self.h);
+        let band = BODY_CONTACT_BAND;
         let fade = decay(BODY_CONTACT_FADE, dt);
-        let obstacle = &self.obstacle.data;
+        if w <= 2 * band || h <= 2 * band {
+            return;
+        }
+
+        // scratch[i] = 1 when any cell within `band` on this row is solid.
         for y in 0..h {
             for x in 0..w {
+                let lo = x.saturating_sub(band);
+                let hi = (x + band).min(w - 1);
+                let row = y * w;
+                let hit = self.obstacle.data[row + lo..=row + hi]
+                    .iter()
+                    .any(|&o| o >= 0.5);
+                self.scratch.data[row + x] = if hit { 1.0 } else { 0.0 };
+            }
+        }
+
+        for y in 0..h {
+            let lo = y.saturating_sub(band);
+            let hi = (y + band).min(h - 1);
+            for x in 0..w {
                 let i = y * w + x;
-                if obstacle[i] >= 0.5 {
+                if self.obstacle.data[i] >= 0.5 {
                     continue;
                 }
-                let touching = (x > 0 && obstacle[i - 1] >= 0.5)
-                    || (x + 1 < w && obstacle[i + 1] >= 0.5)
-                    || (y > 0 && obstacle[i - w] >= 0.5)
-                    || (y + 1 < h && obstacle[i + w] >= 0.5);
-                if touching {
-                    for channel in &mut self.dye {
-                        channel.data[i] *= fade;
-                    }
+                let near = (lo..=hi).any(|k| self.scratch.data[k * w + x] >= 0.5);
+                if !near {
+                    continue;
+                }
+                for channel in &mut self.dye {
+                    channel.data[i] *= fade;
                 }
             }
         }
