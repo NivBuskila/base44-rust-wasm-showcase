@@ -102,6 +102,8 @@ interface Views {
 
 class App {
   private readonly engine: AetherEngine;
+  /** The engine's gesture-sequence book. Static for the session. */
+  private readonly comboBook: string;
   private readonly memory: WebAssembly.Memory;
   private readonly renderer: Renderer;
   private readonly hud: Hud;
@@ -181,6 +183,7 @@ class App {
     tier: EngineTier,
   ) {
     this.engine = engine;
+    this.comboBook = engine.combo_book();
     this.memory = memory;
     this.renderer = renderer;
     this.tier = tier;
@@ -350,6 +353,8 @@ class App {
       inferenceMs: this.inferenceMs,
       stats,
       spells: [this.engine.spell_name(0), this.engine.spell_name(1)],
+      comboBook: this.comboBook,
+      comboProgress: this.engine.combo_progress(),
       perception: this.perceptionStatus,
     });
     this.hudMs = performance.now() - hudStart;
