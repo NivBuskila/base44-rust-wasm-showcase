@@ -387,7 +387,9 @@ impl Engine {
             // same way a bolt pushed at the camera is: a rush plus a detonation
             // at the fingertip rather than a tracer across the field.
             if shot.dir == [0.0, 0.0] {
-                self.rush.trigger(shot.from, 0.9);
+                // A gunshot at the lens is staged as a gunshot, not as energy
+                // arriving: muzzle crack and recoil rather than the bolt's dolly.
+                self.rush.trigger_shot(shot.from, 0.9);
                 bolt::fire(
                     &mut self.fluid,
                     &mut self.particles,
