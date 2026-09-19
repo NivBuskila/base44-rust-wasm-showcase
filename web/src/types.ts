@@ -84,6 +84,11 @@ export interface RenderFrame {
    * flight, and the renderer then skips the whole effect.
    */
   rush: Float32Array | null;
+  /**
+   * Per-hand finger-gun aim from the engine: `[active, x, y, dx, dy]` per hand,
+   * for the laser sight. Null hides it.
+   */
+  gunAim: Float32Array | null;
 }
 
 /** Live numbers for the HUD. */

@@ -29,6 +29,7 @@ import { FLUID_H, FLUID_W, MAX_PARTICLES, PARTICLE_STRIDE } from '../constants';
 import type { RenderFrame, ViewMode } from '../types';
 import { Program, RenderTarget, RendererError, createTexture, isSoftwareRasteriser, probeHdr } from './gl';
 import { OVERLAY_CAPACITY, OVERLAY_STRIDE, buildHandMesh } from './handmesh';
+import { GUNSIGHT_CAPACITY, buildGunSight } from './gunsight';
 import { NOISE_SIZE, buildNoiseTile } from './noise';
 import { BLOOM_DOWN_FRAG, BLOOM_UP_FRAG } from './shaders/bloom';
 import { FULLSCREEN_VERT, buildShader } from './shaders/common';
@@ -278,6 +279,7 @@ export class Renderer {
   private videoTime = -1;
 
   private readonly overlayScratch = new Float32Array(OVERLAY_CAPACITY * OVERLAY_STRIDE);
+  private readonly sightScratch = new Float32Array(GUNSIGHT_CAPACITY * OVERLAY_STRIDE);
   /** One-row scratch for `sampleLuminance`, grown to the canvas width. */
   private sampleRow = new Uint8Array(4);
 
@@ -755,7 +757,9 @@ export class Renderer {
   }
 
   private drawOverlay(res: Resources, frame: RenderFrame, style: ModeStyle): void {
-    if (style.overlay <= 0 || !frame.hands) return;
+    if (style.overlay <= 0) return;
+    this.drawGunSight(res, frame, style);
+    if (!frame.hands) return;
     const mesh = buildHandMesh(frame.hands, this.overlayScratch);
     const vertices = mesh.lineVertices + mesh.pointVertices;
     if (vertices === 0) return;
@@ -784,6 +788,35 @@ export class Renderer {
       p.f1('u_size', 5 * this.dpr * this.sceneScale);
       gl.drawArrays(gl.POINTS, mesh.lineVertices, mesh.pointVertices);
     }
+    gl.disable(gl.BLEND);
+  }
+
+  /**
+   * The finger gun's aim line. Drawn with the overlay shader but in its own
+   * amber tint, matching the tracer the trigger actually fires.
+   */
+  private drawGunSight(res: Resources, frame: RenderFrame, style: ModeStyle): void {
+    if (!frame.gunAim) return;
+    const vertices = buildGunSight(frame.gunAim, this.sightScratch);
+    if (vertices === 0) return;
+
+    const gl = this.gl;
+    gl.bindVertexArray(res.overlayVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, res.overlayBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, this.sightScratch.byteLength, gl.DYNAMIC_DRAW);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.sightScratch, 0, vertices * OVERLAY_STRIDE);
+
+    const p = res.overlayPass;
+    p.use();
+    p.f1('u_alpha', style.overlay * 0.85);
+    p.f3('u_tint', 1.0, 0.72, 0.28);
+    p.f1('u_round', 0);
+    p.f1('u_size', 1);
+
+    res.scene.bind();
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE);
+    gl.drawArrays(gl.LINES, 0, vertices);
     gl.disable(gl.BLEND);
   }
 

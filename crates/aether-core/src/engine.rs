@@ -615,6 +615,24 @@ impl Engine {
         (0..crate::config::HANDS).any(|slot| self.gun.aiming(&self.tracker, slot))
     }
 
+    /// Aim rays of the hands holding the gun pose, for the laser sight the
+    /// renderer draws: per hand `[active, x, y, dx, dy]`, `active == 0` when
+    /// that hand is not aiming and `dir == [0, 0]` when it aims at the lens.
+    pub fn gun_aim(&self) -> [f32; 5 * HANDS] {
+        let mut out = [0.0; 5 * HANDS];
+        for slot in 0..HANDS {
+            if let Some(shot) = self.gun.aim(&self.tracker, slot) {
+                let o = slot * 5;
+                out[o] = 1.0;
+                out[o + 1] = shot.from[0];
+                out[o + 2] = shot.from[1];
+                out[o + 3] = shot.dir[0];
+                out[o + 4] = shot.dir[1];
+            }
+        }
+        out
+    }
+
     /// Which two-hand duet is being wound up, for the HUD's spellbook.
     #[inline]
     pub fn duet_progress(&self) -> DuetProgress {
