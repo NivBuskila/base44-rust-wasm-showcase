@@ -381,7 +381,7 @@ impl Engine {
                 (FLUID_H - 1) as f32,
             );
         }
-        let shots = self.gun.update(&self.tracker);
+        let shots = self.gun.update(&self.tracker, dt);
         for shot in shots.into_iter().flatten() {
             // A gun aimed at the lens has no screen bearing, so it is staged the
             // same way a bolt pushed at the camera is: a rush plus a detonation
