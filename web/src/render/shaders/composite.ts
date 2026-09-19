@@ -43,6 +43,7 @@ uniform float u_frame;
 uniform vec2 u_rushAt;
 uniform float u_rushProgress;
 uniform float u_rushPower;
+uniform float u_rushKind;
 ${LUMA}
 
 vec3 bloomAt(vec2 uv, float jitter) {
@@ -68,6 +69,11 @@ float rushEnvelope(float p) {
   return (1.0 - smoothstep(0.18, 1.0, p)) * smoothstep(0.0, 0.10, p);
 }
 
+/** A gunshot: instantaneous attack, then a hard fall. No approach at all. */
+float shotEnvelope(float p) {
+  return pow(1.0 - p, 3.0);
+}
+
 void main() {
   vec2 d = v_uv - 0.5;
   float r2 = dot(d, d);
@@ -77,7 +83,7 @@ void main() {
   vec3 rushLight = vec3(0.0);
   float rushAber = 0.0;
   vec3 sceneColor = vec3(-1.0);
-  if (u_rushPower > 0.0) {
+  if (u_rushPower > 0.0 && u_rushKind < 0.5) {
     float p = clamp(u_rushProgress, 0.0, 1.0);
     float amt = u_rushPower * rushEnvelope(p);
     vec2 rd = v_uv - u_rushAt;
@@ -111,6 +117,38 @@ void main() {
     // to it: a second copy of the image would only double the exposure.
     sceneColor = mix(DECODE(texture(u_scene, uv).rgb), smear, 0.75 * amt);
     rushAber = amt;
+  } else if (u_rushPower > 0.0) {
+    // --- gunshot at the lens: muzzle blast, recoil kick, powder-hot flash.
+    //
+    // Nothing here dollies in. A shot leaves the muzzle, so the frame is thrown
+    // *back* from it and settles: a brief push of the whole image away from the
+    // fingertip, decaying in a couple of bounces, which is what a recoiling
+    // camera does. The light is a tight muzzle flare with a few radial spikes
+    // rather than an expanding shell, and it is gone almost immediately.
+    float p = clamp(u_rushProgress, 0.0, 1.0);
+    float amt = u_rushPower * shotEnvelope(p);
+    vec2 rd = v_uv - u_rushAt;
+    float dist = length(rd);
+
+    // Recoil: the image is shoved away from the muzzle and rings out, the
+    // bounce riding the same decay so it never leaves the frame displaced.
+    float ring = cos(p * 46.0) * exp(-p * 9.0);
+    uv = v_uv + normalize(rd + 1e-5) * (0.05 * amt * ring);
+
+    // Muzzle flare: a hot core, a thin ragged corona, and star spikes. Amber at
+    // the edge, white at the centre, the colour of burning powder.
+    float flare = exp(-dist * dist / 0.0016) * 2.6;
+    float ang = atan(rd.y, rd.x);
+    float spikes = pow(max(0.0, cos(ang * 6.0)), 10.0) * exp(-dist * 18.0) * 1.1;
+    float crack = exp(-pow((dist - 0.10) / 0.035, 2.0)) * 0.7;
+    vec3 tint = mix(vec3(1.0, 0.62, 0.18), vec3(1.0), 0.7 * exp(-dist * 30.0));
+    rushLight = tint * (flare + spikes + crack) * u_rushPower * shotEnvelope(p);
+
+    // Smoke shadow: the blast darkens what sits just around the muzzle, so the
+    // flash reads as a discharge in front of the scene, not a glow inside it.
+    vec3 base = DECODE(texture(u_scene, uv).rgb);
+    sceneColor = base * (1.0 - 0.45 * amt * exp(-pow((dist - 0.07) / 0.06, 2.0)));
+    rushAber = amt * 0.6;
   }
 
   // Two independent white-noise taps, offset per frame so the pattern does not

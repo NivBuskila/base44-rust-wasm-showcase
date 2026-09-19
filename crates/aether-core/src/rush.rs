@@ -25,6 +25,50 @@ use crate::fluid::Fluid;
 use crate::math::{hue_to_rgb, smoothstep};
 use crate::particles::Particles;
 
+/// Which staging is running. A bolt or palm pushed at the lens is energy
+/// *arriving* — a slow swelling approach. A finger-gun shot is a discharge
+/// *leaving*: it has to read as a gunshot, so it is a single hard crack at the
+/// muzzle, over in a fraction of the time, with the frame kicking back from the
+/// recoil instead of dollying in. Same module because both stage a 2D field as
+/// depth; different numbers and a different composite branch because they are
+/// nothing alike to look at.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RushKind {
+    /// Energy arriving at the lens: dolly in, cyan shell.
+    #[default]
+    Push,
+    /// A shot fired at the lens: muzzle blast, recoil, amber-white flash.
+    Shot,
+}
+
+impl RushKind {
+    /// How the renderer reads the kind out of the packed state.
+    pub fn as_f32(self) -> f32 {
+        match self {
+            Self::Push => 0.0,
+            Self::Shot => 1.0,
+        }
+    }
+
+    fn duration(self) -> f32 {
+        match self {
+            Self::Push => DURATION,
+            Self::Shot => SHOT_DURATION,
+        }
+    }
+}
+
+/// A gunshot is a crack, not an approach: short enough that the eye reads it as
+/// an event rather than a movement, and its blast stays near the muzzle instead
+/// of sweeping the whole frame.
+const SHOT_DURATION: f32 = 0.24;
+const SHOT_SHELL_TO: f32 = 0.42;
+/// Muzzle blast: a harder, tighter shove than the rush shell, and the hot amber
+/// of burning powder rather than the bolt's cyan.
+const SHOT_PUSH: f32 = 520.0;
+const SHOT_DRIVE: f32 = 320.0;
+const SHOT_HUE: f32 = 0.09;
+
 /// Seconds from the push to the frame settling back down. Long enough to read
 /// as an approach rather than a flash, short enough not to hold the view.
 const DURATION: f32 = 0.62;
@@ -55,6 +99,8 @@ pub struct RushState {
     pub progress: f32,
     /// How hard the push was, 0..1, and 0 exactly when no rush is running.
     pub power: f32,
+    /// Which staging this is.
+    pub kind: RushKind,
 }
 
 impl RushState {
@@ -62,6 +108,7 @@ impl RushState {
         at: [0.5, 0.5],
         progress: 0.0,
         power: 0.0,
+        kind: RushKind::Push,
     };
 }
 
@@ -70,6 +117,7 @@ impl RushState {
 pub struct Rush {
     at: [f32; 2],
     power: f32,
+    kind: RushKind,
     /// Seconds since the push; `None` when nothing is running.
     age: Option<f32>,
 }
@@ -83,8 +131,18 @@ impl Rush {
         *self = Self::default();
     }
 
-    /// Starts a rush from `at` (normalised) at `power` 0..1.
+    /// Starts an energy rush from `at` (normalised) at `power` 0..1.
     pub fn trigger(&mut self, at: [f32; 2], power: f32) {
+        self.start(at, power, RushKind::Push);
+    }
+
+    /// Starts a gunshot at the lens, fired from `at`.
+    pub fn trigger_shot(&mut self, at: [f32; 2], power: f32) {
+        self.start(at, power, RushKind::Shot);
+    }
+
+    fn start(&mut self, at: [f32; 2], power: f32, kind: RushKind) {
+        self.kind = kind;
         let power = if power.is_finite() { power.clamp(0.0, 1.0) } else { 0.0 };
         self.at = [fin(at[0]).clamp(0.0, 1.0), fin(at[1]).clamp(0.0, 1.0)];
         // A weak push is still a push: the floor keeps the staging visible
@@ -97,8 +155,9 @@ impl Rush {
         match self.age {
             Some(age) => RushState {
                 at: self.at,
-                progress: (age / DURATION).clamp(0.0, 1.0),
+                progress: (age / self.kind.duration()).clamp(0.0, 1.0),
                 power: self.power,
+                kind: self.kind,
             },
             None => RushState::IDLE,
         }
@@ -116,32 +175,40 @@ impl Rush {
             1.0 / 60.0
         };
         let age = age + dt;
-        if age >= DURATION {
+        let duration = self.kind.duration();
+        if age >= duration {
             self.age = None;
             return;
         }
         self.age = Some(age);
 
-        let p = age / DURATION;
+        let shot = self.kind == RushKind::Shot;
+        let p = age / duration;
         // The shell accelerates: an object approaching the lens covers more of
         // the frame per unit time the closer it gets, so a linear radius would
         // read as a slow ripple. The squared ramp is that acceleration.
-        let radius = SHELL_FROM + (SHELL_TO - SHELL_FROM) * p * p;
+        let shell_to = if shot { SHOT_SHELL_TO } else { SHELL_TO };
+        let radius = SHELL_FROM + (shell_to - SHELL_FROM) * p * p;
         // ...and it fades as it leaves, so the field is calm by the end.
         let strength = self.power * (1.0 - smoothstep(0.55, 1.0, p));
         if strength <= 0.0 {
             return;
         }
 
+        let (push, drive, hue) = if shot {
+            (SHOT_PUSH, SHOT_DRIVE, SHOT_HUE)
+        } else {
+            (SHELL_PUSH, SHELL_DRIVE, RUSH_HUE)
+        };
         let cx = fin(self.at[0]) * sx;
         let cy = fin(self.at[1]) * sy;
         let grid_r = (radius * sx).max(1.0);
-        let rgb = hue_to_rgb(RUSH_HUE);
+        let rgb = hue_to_rgb(hue);
 
         // Particles: an outward push at the shell and a gentler inward one just
         // behind it, so what sweeps past is a *shell* rather than one shove that
         // empties the middle of the frame.
-        let kick = SHELL_PUSH * strength * dt * 60.0;
+        let kick = push * strength * dt * 60.0;
         particles.impulse(cx, cy, grid_r, kick, strength);
         particles.impulse(cx, cy, (grid_r * 0.62).max(1.0), -kick * 0.45, 0.0);
 
@@ -156,8 +223,8 @@ impl Rush {
             fluid.add_force(
                 x,
                 y,
-                ux * SHELL_DRIVE * strength,
-                uy * SHELL_DRIVE * strength,
+                ux * drive * strength,
+                uy * drive * strength,
                 (grid_r * 0.3).clamp(2.0, 10.0),
             );
             fluid.add_dye(
