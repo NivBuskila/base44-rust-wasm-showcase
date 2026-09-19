@@ -55,12 +55,18 @@ void main() {
   // the power curve keeps the long tail dim; a linear ramp makes the whole
   // pool read as uniform grey haze.
   float fade = smoothstep(0.0, 0.16, life) * (0.22 + 0.78 * pow(life, 0.65));
-  gl_PointSize = max(1.0, u_size * (0.72 + 0.65 * heat) * (0.58 + 0.42 * life));
+  float want = u_size * (0.72 + 0.65 * heat) * (0.58 + 0.42 * life);
+  gl_PointSize = max(1.0, want);
+  // A point cannot be drawn smaller than one pixel, so on a dense small frame
+  // the floor silently hands every mote extra area and the dust turns into
+  // bright confetti. Dim it by the area it did not earn instead.
+  float floorFade = clamp(want, 0.0, 1.0);
+  floorFade *= floorFade;
   // The cold end stays dust-faint on purpose. 120k cold particles cover an
   // eighth of a 720p frame, and at even a quarter of the hot brightness they
   // stop reading as individual motes and become a flat blue veil that nothing
   // else can be seen against. Heat is what earns brightness here.
-  float bright = u_gain * fade * (0.11 + 1.8 * heat) * (0.85 + 0.55 * u_intensity);
+  float bright = floorFade * u_gain * fade * (0.11 + 1.8 * heat) * (0.85 + 0.55 * u_intensity);
   v_col = vec4(heatRamp(heat) * bright, heat * heat);
 }`;
 
