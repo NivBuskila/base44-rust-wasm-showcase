@@ -207,8 +207,9 @@ interface ModeSpec {
 const MODES: readonly ModeSpec[] = [
   { mode: 'aether', key: '1', hint: 'dye, particles and bloom' },
   { mode: 'camera', key: '2', hint: 'the camera feed alone' },
-  { mode: 'debug', key: '3', hint: 'obstacles, flow and pressure' },
-  { mode: 'particles', key: '4', hint: 'particles on black' },
+  { mode: 'blend', key: '3', hint: 'the camera feed under the full aether look' },
+  { mode: 'debug', key: '4', hint: 'obstacles, flow and pressure' },
+  { mode: 'particles', key: '5', hint: 'particles on black' },
 ];
 
 interface GestureSpec {
@@ -260,7 +261,7 @@ const GESTURES: readonly GestureSpec[] = [
 ];
 
 const SHORTCUTS: readonly [string, string][] = [
-  ['1 – 4', 'aether / camera / debug / particles'],
+  ['1 – 5', 'aether / camera / blend / debug / particles'],
   ['C', 'camera feed behind the fluid'],
   ['O', 'overdrive: the full 1M particle pool'],
   ['H', 'hide or show this panel'],

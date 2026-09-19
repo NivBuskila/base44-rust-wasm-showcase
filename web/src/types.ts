@@ -52,7 +52,7 @@ export interface PerceptionSource {
 }
 
 /** What the user is looking at. */
-export type ViewMode = 'aether' | 'camera' | 'debug' | 'particles';
+export type ViewMode = 'aether' | 'camera' | 'blend' | 'debug' | 'particles';
 
 /** Everything the renderer needs for one frame. */
 export interface RenderFrame {
