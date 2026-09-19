@@ -34,6 +34,7 @@ use crate::gesture::{GestureConfig, GestureTracker, Spell};
 use crate::mask::{BodyMask, MaskConfig};
 use crate::math::hue_to_rgb;
 use crate::particles::{ParticleConfig, Particles};
+use crate::bolt::BoltQueue;
 use crate::combo::{ComboProgress, ComboTracker};
 use crate::duet::{DuetProgress, DuetTracker};
 use crate::spells::{self, SpellReport, SpellState};
@@ -111,6 +112,8 @@ pub struct Engine {
     spell_state: SpellState,
     combos: ComboTracker,
     duets: DuetTracker,
+    /// Manual energy shots queued by the UI, applied on the next step.
+    bolts: BoltQueue,
 
     // --- JS-writable input buffers ---
     luma: Vec<u8>,
@@ -157,6 +160,7 @@ impl Engine {
             spell_state: SpellState::new(),
             combos: ComboTracker::new(),
             duets: DuetTracker::new(),
+            bolts: BoltQueue::new(),
             luma: vec![0; FLOW_CELLS],
             mask_in: vec![0.0; MASK_IN_CAPACITY],
             dye_rgba: vec![0; FLUID_CELLS * 4],
@@ -321,9 +325,16 @@ impl Engine {
         // Sequences are recognised before the spell layer runs, so a combo
         // that completes this frame lands in the same step as the gesture that
         // completed it.
-        let hits = self.combos.update(&self.tracker, warped_dt);
-        let charging = [self.combos.charging(0), self.combos.charging(1)];
+        // Duets are recognised first: a charged big bang owns both hands, and
+        // its fist -> palm release is also the `nova` combo on each hand. Left
+        // alone the pair fires two small novas a frame before the supernova and
+        // the charged payoff is lost inside them, so those hits are dropped.
         let duet = self.duets.update(&self.tracker, warped_dt);
+        let mut hits = self.combos.update(&self.tracker, warped_dt);
+        if duet.fire.is_some() || self.duets.claims_hands() {
+            hits = [None, None];
+        }
+        let charging = [self.combos.charging(0), self.combos.charging(1)];
         let report = {
             let tracker = &self.tracker;
             let flow = self.flow.flow();
@@ -342,6 +353,15 @@ impl Engine {
             )
         };
         self.report = report;
+
+        // Shots are input, not perception: they land every step, camera or not.
+        self.bolts.flush(
+            &mut self.fluid,
+            &mut self.particles,
+            self.params.particle_life,
+            (FLUID_W - 1) as f32,
+            (FLUID_H - 1) as f32,
+        );
 
         self.fluid.step(warped_dt, &self.params);
 
@@ -529,6 +549,13 @@ impl Engine {
         self.combos.progress()
     }
 
+    /// Queues an energy shot at a normalised `[0, 1]` point on the screen.
+    /// It detonates on the next [`Engine::step`].
+    #[inline]
+    pub fn shoot(&mut self, x: f32, y: f32) {
+        self.bolts.push(x, y);
+    }
+
     /// Which two-hand duet is being wound up, for the HUD's spellbook.
     #[inline]
     pub fn duet_progress(&self) -> DuetProgress {
@@ -622,6 +649,7 @@ impl Engine {
         };
         self.combos.reset();
         self.duets.reset();
+        self.bolts.clear();
     }
 }
 
