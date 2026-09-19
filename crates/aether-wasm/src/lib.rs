@@ -227,6 +227,12 @@ impl AetherEngine {
         self.inner.gun_aiming()
     }
 
+    /// Per-hand gun aim for the renderer's laser sight:
+    /// `[active, x, y, dx, dy]` per hand.
+    pub fn gun_aim(&self) -> Vec<f32> {
+        self.inner.gun_aim().to_vec()
+    }
+
     /// Packed lens-rush staging for the renderer: `[x, y, progress, power]`,
     /// with `power == 0` meaning nothing is in flight.
     pub fn rush_state(&self) -> Vec<f32> {

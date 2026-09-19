@@ -493,6 +493,7 @@ class App {
       mode: this.mode,
       showCamera: this.showCamera && this.cameraAvailable,
       rush: this.engine.rush_state(),
+      gunAim: stats[STAT.HANDS_PRESENT] > 0 ? this.engine.gun_aim() : null,
     };
   }
 

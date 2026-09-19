@@ -87,6 +87,21 @@ impl GunTracker {
             .is_some_and(|hand| hand.present && pose(hand).is_some())
     }
 
+    /// The aim ray of a hand holding the gun pose, for the sight the renderer
+    /// draws. `dir == [0, 0]` means the gun points at the lens, which has no
+    /// screen bearing to draw along.
+    pub fn aim(&self, tracker: &GestureTracker, slot: usize) -> Option<Shot> {
+        let hand = tracker.hands().get(slot)?;
+        if !hand.present {
+            return None;
+        }
+        let p = pose(hand)?;
+        Some(Shot {
+            from: p.tip,
+            dir: p.dir,
+        })
+    }
+
     /// Returns whichever hands fired this step.
     pub fn update(&mut self, tracker: &GestureTracker) -> [Option<Shot>; HANDS] {
         let mut fired: [Option<Shot>; HANDS] = [None; HANDS];
