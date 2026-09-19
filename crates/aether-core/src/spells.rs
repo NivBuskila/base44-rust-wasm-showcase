@@ -256,7 +256,7 @@ pub fn apply(
     params: &Params,
     // A gesture sequence that completed this step, recognised by
     // `crate::combo`. Its effect is applied at the casting hand's palm.
-    combo: Option<ComboHit>,
+    combo: [Option<ComboHit>; 2],
     // Per-hand sequence depth, 0..1, from `ComboTracker::charging`. Fades a
     // hand's own spell out while it is winding a combo up.
     charging: [f32; 2],
@@ -526,7 +526,7 @@ pub fn apply(
         // A completed sequence fires on top of whatever the hand is currently
         // doing: the last gesture of the combo is still a spell, and cutting it
         // off would make a successful cast feel like a dropped frame.
-        if let Some(hit) = combo.filter(|h| h.slot == slot) {
+        if let Some(hit) = combo.get(slot).copied().flatten() {
             fire_combo(hit.effect, fluid, particles, params, palm, radius, &mut report);
         }
 
@@ -997,7 +997,13 @@ mod tests {
                 &mut self.particles,
                 &mut self.state,
                 &self.params,
-                combo,
+                {
+                    let mut per_hand = [None; 2];
+                    if let Some(h) = combo {
+                        per_hand[h.slot.min(1)] = Some(h);
+                    }
+                    per_hand
+                },
                 [0.0; 2],
                 dt,
             )
@@ -1659,7 +1665,7 @@ mod tests {
             &mut none,
             &mut state,
             &Params::default(),
-            None,
+            [None; 2],
             [0.0; 2],
             DT,
         );

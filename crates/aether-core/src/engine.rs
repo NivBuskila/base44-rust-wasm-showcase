@@ -318,7 +318,7 @@ impl Engine {
         // Sequences are recognised before the spell layer runs, so a combo
         // that completes this frame lands in the same step as the gesture that
         // completed it.
-        let hit = self.combos.update(&self.tracker, warped_dt);
+        let hits = self.combos.update(&self.tracker, warped_dt);
         let charging = [self.combos.charging(0), self.combos.charging(1)];
         let report = {
             let tracker = &self.tracker;
@@ -331,7 +331,7 @@ impl Engine {
                 &mut self.particles,
                 &mut self.spell_state,
                 &self.params,
-                hit,
+                hits,
                 charging,
                 warped_dt,
             )
