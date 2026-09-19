@@ -92,6 +92,10 @@ export interface HudStats {
   comboBook?: string;
   /** Packed sequence progress: combo, steps matched, charge, fired. */
   comboProgress?: Float32Array;
+  /** Two-hand duet spellbook from the engine, `name:step,step;...`. */
+  duetBook?: string;
+  /** Packed duet progress: active duet, charge, fired. */
+  duetProgress?: Float32Array;
   perception: PerceptionStatus;
 }
 

@@ -35,6 +35,7 @@ use crate::mask::{BodyMask, MaskConfig};
 use crate::math::hue_to_rgb;
 use crate::particles::{ParticleConfig, Particles};
 use crate::combo::{ComboProgress, ComboTracker};
+use crate::duet::{DuetProgress, DuetTracker};
 use crate::spells::{self, SpellReport, SpellState};
 
 /// Largest segmentation mask the input buffer accepts, per axis. MediaPipe's
@@ -109,6 +110,7 @@ pub struct Engine {
     tracker: GestureTracker,
     spell_state: SpellState,
     combos: ComboTracker,
+    duets: DuetTracker,
 
     // --- JS-writable input buffers ---
     luma: Vec<u8>,
@@ -154,6 +156,7 @@ impl Engine {
             tracker: GestureTracker::new(GestureConfig::default()),
             spell_state: SpellState::new(),
             combos: ComboTracker::new(),
+            duets: DuetTracker::new(),
             luma: vec![0; FLOW_CELLS],
             mask_in: vec![0.0; MASK_IN_CAPACITY],
             dye_rgba: vec![0; FLUID_CELLS * 4],
@@ -320,6 +323,7 @@ impl Engine {
         // completed it.
         let hits = self.combos.update(&self.tracker, warped_dt);
         let charging = [self.combos.charging(0), self.combos.charging(1)];
+        let duet = self.duets.update(&self.tracker, warped_dt);
         let report = {
             let tracker = &self.tracker;
             let flow = self.flow.flow();
@@ -333,6 +337,7 @@ impl Engine {
                 &self.params,
                 hits,
                 charging,
+                duet,
                 warped_dt,
             )
         };
@@ -524,6 +529,12 @@ impl Engine {
         self.combos.progress()
     }
 
+    /// Which two-hand duet is being wound up, for the HUD's spellbook.
+    #[inline]
+    pub fn duet_progress(&self) -> DuetProgress {
+        self.duets.progress()
+    }
+
     #[inline]
     pub fn tracker(&self) -> &GestureTracker {
         &self.tracker
@@ -610,6 +621,7 @@ impl Engine {
             ..Default::default()
         };
         self.combos.reset();
+        self.duets.reset();
     }
 }
 
