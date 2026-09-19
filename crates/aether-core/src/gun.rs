@@ -30,7 +30,12 @@ const LONGER: f32 = 1.3;
 /// floor that still out-reaches the curled fingers by `LONGER` is a gun — and a
 /// reach below `EXTENDED` is that gun pointing at the viewer, which fires with
 /// no screen direction (`dir == [0, 0]`) exactly like a bolt pushed at the lens.
-const AT_LENS: f32 = 0.75;
+const AT_LENS: f32 = 1.0;
+
+/// A foreshortened finger is a much weaker signal than an extended one — a
+/// half-curled hand measures the same — so aiming at the viewer additionally
+/// demands this much clearance over the curled fingers, well past `LONGER`.
+const AT_LENS_LONGER: f32 = 1.7;
 
 /// Thumb tip to index knuckle, in hand scales. Above `COCKED` the hammer is up
 /// and the gun is armed; below `PULLED` the thumb has dropped and it fires.
@@ -129,6 +134,9 @@ fn pose(hand: &HandState) -> Option<Pose> {
     }
     if index < EXTENDED {
         // Pointed at the viewer: there is no screen bearing to shoot along.
+        if index < longest_curled * AT_LENS_LONGER {
+            return None;
+        }
         let thumb = dist(lm(LM_THUMB_TIP), lm(LM_INDEX_MCP)) / scale;
         if !thumb.is_finite() {
             return None;
