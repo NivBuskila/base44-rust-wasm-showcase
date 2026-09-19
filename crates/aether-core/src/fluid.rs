@@ -186,7 +186,7 @@ const MIN_STENCIL_WEIGHT: f32 = 1e-3;
 ///
 /// One full dye lifetime is `1 / dye_dissipation` ~ 0.4 s at the default; this
 /// is several times faster, so the contact band never outlives the gesture.
-const BODY_CONTACT_FADE: f32 = 9.0;
+const BODY_CONTACT_FADE: f32 = 22.0;
 
 /// Half-width, in cells, of the faded band around the silhouette.
 ///
@@ -195,7 +195,7 @@ const BODY_CONTACT_FADE: f32 = 9.0;
 /// literally touch the body leaves a bright edge sitting one cell out. Three
 /// cells each way covers the stalled band and still leaves the rest of the
 /// frame untouched.
-const BODY_CONTACT_BAND: usize = 3;
+const BODY_CONTACT_BAND: usize = 5;
 
 /// A velocity + dye field on a fixed grid.
 pub struct Fluid {
@@ -541,6 +541,11 @@ impl Fluid {
             for x in 0..w {
                 let i = y * w + x;
                 if self.obstacle.data[i] >= 0.5 {
+                    // Dye that ended up inside the silhouette can never advect
+                    // out again, so it is cleared outright instead of faded.
+                    for channel in &mut self.dye {
+                        channel.data[i] = 0.0;
+                    }
                     continue;
                 }
                 let near = (lo..=hi).any(|k| self.scratch.data[k * w + x] >= 0.5);
