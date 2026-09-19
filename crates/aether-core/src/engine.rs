@@ -608,6 +608,13 @@ impl Engine {
         self.combos.progress()
     }
 
+    /// Whether either hand is holding the finger-gun pose, so the HUD can say
+    /// the aim was recognised before the trigger is pulled: without it a pose
+    /// the recogniser rejected looks exactly like a trigger that did nothing.
+    pub fn gun_aiming(&self) -> bool {
+        (0..crate::config::HANDS).any(|slot| self.gun.aiming(&self.tracker, slot))
+    }
+
     /// Which two-hand duet is being wound up, for the HUD's spellbook.
     #[inline]
     pub fn duet_progress(&self) -> DuetProgress {

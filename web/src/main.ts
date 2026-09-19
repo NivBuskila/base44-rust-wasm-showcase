@@ -360,6 +360,7 @@ class App {
       comboProgress: this.engine.combo_progress(),
       duetBook: this.duetBook,
       duetProgress: this.engine.duet_progress(),
+      gunAiming: this.engine.gun_aiming(),
       perception: this.perceptionStatus,
     });
     this.hudMs = performance.now() - hudStart;
