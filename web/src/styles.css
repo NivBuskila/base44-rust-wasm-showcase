@@ -925,17 +925,70 @@ input[type='range']::-moz-range-thumb {
   animation: tut-fade 520ms ease both;
 }
 
-/* Each step arrives as its own cut: the stage fades and pushes forward. */
-.tut.is-step .tut-body {
-  animation: tut-cut 620ms cubic-bezier(0.2, 0.9, 0.2, 1.05) both;
+/* Each step arrives as its own cut, staged: numeral, hand, then the words. */
+.tut.is-step .tut-num {
+  animation: tut-num-in 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.tut.is-step .tut-art {
+  animation: tut-cut 720ms cubic-bezier(0.16, 1, 0.3, 1) 90ms both;
+}
+
+.tut.is-step .tut-text > * {
+  animation: tut-cut 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.tut.is-step .tut-text > b {
+  animation-delay: 180ms;
+}
+
+.tut.is-step .tut-text > .tut-effect {
+  animation-delay: 270ms;
+}
+
+.tut.is-step .tut-text > .tut-how {
+  animation-delay: 360ms;
 }
 
 @keyframes tut-cut {
   from {
     opacity: 0;
-    transform: translateY(14px) scale(0.965);
-    filter: blur(6px);
+    transform: translateY(16px);
+    filter: blur(8px);
   }
+}
+
+@keyframes tut-num-in {
+  from {
+    opacity: 0;
+    transform: translate(-0.12em, 0.16em) scale(1.25);
+    filter: blur(14px);
+  }
+}
+
+/* The step number, set oversized behind the lesson: cinematic chapter marker. */
+.tut-num {
+  position: absolute;
+  left: -0.06em;
+  top: -0.3em;
+  font-size: clamp(120px, 26vh, 240px);
+  font-weight: 300;
+  line-height: 0.8;
+  letter-spacing: -0.04em;
+  color: transparent;
+  -webkit-text-stroke: 1px rgba(53, 214, 255, 0.16);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.tut.is-done .tut-num,
+.tut.is-pass .tut-num {
+  -webkit-text-stroke-color: rgba(53, 214, 255, 0.4);
+}
+
+.tut-body > *:not(.tut-num) {
+  position: relative;
+  z-index: 1;
 }
 
 .tut-head {
@@ -981,6 +1034,7 @@ input[type='range']::-moz-range-thumb {
 }
 
 .tut-body {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -1157,8 +1211,9 @@ input[type='range']::-moz-range-thumb {
 
 .tut-text b {
   font-size: clamp(26px, 4.4vh, 40px);
-  font-weight: 400;
-  letter-spacing: 0.1em;
+  font-weight: 300;
+  letter-spacing: 0.14em;
+  text-transform: lowercase;
   line-height: 1;
   color: var(--ink);
   text-shadow: 0 0 26px rgba(53, 214, 255, 0.35);
