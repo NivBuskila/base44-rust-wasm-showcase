@@ -113,6 +113,9 @@ pub struct Engine {
     spell_state: SpellState,
     combos: ComboTracker,
     duets: DuetTracker,
+    /// Practice mode: combos and duets are still tracked but never cast, so the
+    /// tutorial can walk one pose after another without chaining them.
+    practice: bool,
     /// Recognises a flick of an open hand as a thrown energy bolt.
     throws: ThrowTracker,
     /// Stages a bolt thrown at the lens as an approach towards the viewer.
@@ -163,6 +166,7 @@ impl Engine {
             spell_state: SpellState::new(),
             combos: ComboTracker::new(),
             duets: DuetTracker::new(),
+            practice: false,
             throws: ThrowTracker::new(),
             rush: Rush::new(),
             luma: vec![0; FLOW_CELLS],
@@ -333,10 +337,18 @@ impl Engine {
         // its fist -> palm release is also the `nova` combo on each hand. Left
         // alone the pair fires two small novas a frame before the supernova and
         // the charged payoff is lost inside them, so those hits are dropped.
-        let duet = self.duets.update(&self.tracker, warped_dt);
+        let mut duet = self.duets.update(&self.tracker, warped_dt);
         let mut hits = self.combos.update(&self.tracker, warped_dt);
         if duet.fire.is_some() || self.duets.claims_hands() {
             hits = [None, None];
+        }
+        // Practice mode: single gestures still cast, sequences and duets do not.
+        // The tutorial teaches one pose after another, and any two poses in a
+        // row are a candidate sequence — so without this the lesson fires
+        // combos the caster never asked for.
+        if self.practice {
+            hits = [None, None];
+            duet.fire = None;
         }
         let charging = [self.combos.charging(0), self.combos.charging(1)];
         let report = {
@@ -571,6 +583,16 @@ impl Engine {
     #[inline]
     pub fn combo_progress(&self) -> ComboProgress {
         self.combos.progress()
+    }
+
+    /// Turns practice mode on or off. Entering it clears whatever sequence was
+    /// half-cast, so the tutorial never starts with a primed lane.
+    pub fn set_practice(&mut self, on: bool) {
+        if on && !self.practice {
+            self.combos.reset();
+            self.duets.reset();
+        }
+        self.practice = on;
     }
 
     /// Which two-hand duet is being wound up, for the HUD's spellbook.

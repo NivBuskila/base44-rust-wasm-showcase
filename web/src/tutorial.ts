@@ -1,25 +1,29 @@
 /**
  * Interactive gesture tutorial.
  *
- * Walks through the single-hand spells one at a time and advances only when
- * the engine itself reports the spell latched — the card teaches what the
- * recogniser accepts, not what a drawing suggests. Each step is passed by
- * holding the spell for {@link HOLD_MS}; `release` is a one-frame event in
- * `spells.rs`, so it passes on sight.
+ * Walks through the single-hand spells one at a time and advances only when the
+ * engine itself reports the spell latched — the card teaches what the recogniser
+ * accepts, not what a drawing suggests. Each step is passed by holding the spell
+ * for {@link HOLD_MS}; `release` is a one-frame event in `spells.rs`, so it
+ * passes on sight.
  *
- * Between two steps the hand must go back to rest (no spell on either hand for
- * {@link CLEAR_MS}) before the next step starts charging, and the order is
- * chosen so no two consecutive steps are the opening of a combo in
- * `combo.rs` — otherwise learning "fist" then "open palm" casts nova by
- * accident and the lesson reads as a bug.
+ * It is a *mode*, not a tooltip: opening it dims the stage, brings up a large
+ * drawn hand for the pose (`hand-art.ts`), and puts the engine into practice
+ * mode through {@link TutorialCallbacks.onMode} so that going from one taught
+ * pose straight into the next cannot cast a combo. Nothing is asked of the
+ * caster between steps — no resting, no lowering the hand.
  *
  * Starts on its own the first time a hand is seen in a session that has never
- * finished it (remembered in `localStorage`), and can be reopened from the
- * panel or `T` at any time. Everything here is presentation: the spell names
- * come straight from `AetherEngine.spell_name`.
+ * finished it (remembered in `localStorage`), and can be reopened from the panel
+ * or `T` at any time. Everything here is presentation: the spell names come
+ * straight from `AetherEngine.spell_name`.
  */
 
-import { GESTURES, type GestureSpec } from './hud-spec';
+import { handArt } from './hand-art';
+import type { GestureSpec } from './hud-spec';
+import { HOW_TO, STEPS } from './tutorial-steps';
+
+export { STEPS };
 
 /** How long a spell must stay latched before the step is passed. */
 export const HOLD_MS = 700;
@@ -29,35 +33,13 @@ const PASS_MS = 650;
 const DONE_MS = 6000;
 const STORAGE_KEY = 'aether.tutorial.done';
 
-/** How long the hand must rest between two steps before the next one arms. */
-export const CLEAR_MS = 450;
-
-/**
- * Teaching order. Warp is two-handed and read from the time scale, not a spell
- * name, so it is left to the reference sheet. The rest are ordered so that no
- * step follows another in a way that opens a combo (`attract,repel` = nova,
- * `repel,vortex` = tempest, `attract,freeze,...` = supernova).
- */
-const ORDER: readonly string[] = [
-  'attract',
-  'vortex',
-  'ignite',
-  'shatter',
-  'freeze',
-  'repel',
-  'release',
-];
-
-export const STEPS: readonly GestureSpec[] = ORDER.map(
-  (spell) => GESTURES.find((g) => g.spell === spell)!,
-);
-
-function svg(paths: string): string {
-  return (
-    '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" fill="none" ' +
-    'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" ' +
-    `stroke-linejoin="round">${paths}</svg>`
-  );
+/** What the tutorial needs from its host while it is open. */
+export interface TutorialCallbacks {
+  /**
+   * Called on every open and close. The app puts the engine into practice mode
+   * (`set_practice`) so single poses still cast but sequences and duets do not.
+   */
+  onMode(active: boolean): void;
 }
 
 function remembered(): boolean {
@@ -84,9 +66,6 @@ export class TutorialProgress {
   index = 0;
   /** `performance.now()` when the current spell was first seen; null when not held. */
   private heldSince: number | null = null;
-  /** Set after a step passes: the hand has to rest before the next one arms. */
-  private restSince: number | null = null;
-  private waitingForRest = false;
 
   constructor(private readonly steps: readonly GestureSpec[] = STEPS) {}
 
@@ -98,28 +77,10 @@ export class TutorialProgress {
     return this.index >= this.steps.length;
   }
 
-  /** True while the card is asking for the hand to go back to rest. */
-  get resting(): boolean {
-    return this.waitingForRest;
-  }
-
   /** Charge 0..1; `1` means the step just passed and `index` has advanced. */
   feed(spells: readonly string[], now: number): number {
     const step = this.step;
     if (!step) return 1;
-    if (this.waitingForRest) {
-      // Any spell still latched keeps the gate shut: a hand going straight from
-      // one taught shape into the next is exactly what casts a combo.
-      const quiet = !spells.some((s) => s && s !== 'idle');
-      if (!quiet) {
-        this.restSince = null;
-        return 0;
-      }
-      if (this.restSince === null) this.restSince = now;
-      if (now - this.restSince < CLEAR_MS) return 0;
-      this.waitingForRest = false;
-      this.restSince = null;
-    }
     const latched = spells.includes(step.spell);
     if (!latched) {
       this.heldSince = null;
@@ -133,24 +94,24 @@ export class TutorialProgress {
 
   skip(): void {
     this.heldSince = null;
-    this.restSince = null;
-    this.waitingForRest = false;
     this.index++;
   }
 
   private pass(): number {
     this.skip();
-    this.waitingForRest = true;
     return 1;
   }
 }
 
 export class GestureTutorial {
   private readonly el: HTMLElement;
+  private readonly scrim: HTMLElement;
   private readonly count: HTMLElement;
-  private readonly icon: HTMLElement;
+  private readonly dots: HTMLElement;
+  private readonly art: HTMLElement;
   private readonly hand: HTMLElement;
   private readonly effect: HTMLElement;
+  private readonly how: HTMLElement;
   private readonly fill: HTMLElement;
   private readonly note: HTMLElement;
   private readonly next: HTMLButtonElement;
@@ -163,7 +124,18 @@ export class GestureTutorial {
   private lastPct = '';
   private autoStarted = remembered();
 
-  constructor(parent: HTMLElement) {
+  constructor(
+    parent: HTMLElement,
+    private readonly cb: TutorialCallbacks = { onMode: () => {} },
+  ) {
+    // The scrim is what turns the card into a mode: the stage stays visible and
+    // live behind it (the caster has to see what the pose does) but everything
+    // else recedes.
+    this.scrim = document.createElement('div');
+    this.scrim.className = 'tut-scrim';
+    this.scrim.hidden = true;
+    parent.appendChild(this.scrim);
+
     this.el = document.createElement('aside');
     this.el.className = 'tut';
     this.el.hidden = true;
@@ -174,24 +146,31 @@ export class GestureTutorial {
         <span class="tut-count" data-tut-count></span>
         <button type="button" class="tut-btn" data-tut="skip">skip all</button>
       </header>
+      <div class="tut-dots" data-tut-dots></div>
       <div class="tut-body">
-        <span class="tut-icon" data-tut-icon></span>
+        <span class="tut-art" data-tut-art></span>
         <div class="tut-text">
           <b data-tut-hand></b>
-          <span data-tut-effect></span>
+          <span class="tut-effect" data-tut-effect></span>
+          <span class="tut-how" data-tut-how></span>
         </div>
-        <button type="button" class="tut-btn" data-tut="next">next ›</button>
       </div>
       <div class="tut-track"><i class="tut-fill" data-tut-fill></i></div>
-      <span class="tut-note" data-tut-note></span>`;
+      <footer class="tut-foot">
+        <span class="tut-note" data-tut-note></span>
+        <button type="button" class="tut-btn" data-tut="next">next ›</button>
+      </footer>`;
     parent.appendChild(this.el);
     this.count = this.el.querySelector('[data-tut-count]')!;
-    this.icon = this.el.querySelector('[data-tut-icon]')!;
+    this.dots = this.el.querySelector('[data-tut-dots]')!;
+    this.art = this.el.querySelector('[data-tut-art]')!;
     this.hand = this.el.querySelector('[data-tut-hand]')!;
     this.effect = this.el.querySelector('[data-tut-effect]')!;
+    this.how = this.el.querySelector('[data-tut-how]')!;
     this.fill = this.el.querySelector('[data-tut-fill]')!;
     this.note = this.el.querySelector('[data-tut-note]')!;
     this.next = this.el.querySelector('[data-tut="next"]')!;
+    this.dots.innerHTML = STEPS.map(() => '<i></i>').join('');
 
     this.el.querySelector('[data-tut="skip"]')!.addEventListener('click', () => this.stop());
     this.next.addEventListener('click', () => {
@@ -215,17 +194,21 @@ export class GestureTutorial {
     this.doneAt = 0;
     this.on = true;
     this.autoStarted = true;
+    this.scrim.hidden = false;
     this.el.hidden = false;
     this.el.classList.remove('is-in');
     void this.el.offsetWidth;
     this.el.classList.add('is-in');
     this.paintStep();
+    this.cb.onMode(true);
   }
 
   /** Closes the card. Finishing or dismissing both count as "seen". */
   stop(): void {
+    if (this.on) this.cb.onMode(false);
     this.on = false;
     this.el.hidden = true;
+    this.scrim.hidden = true;
     remember();
   }
 
@@ -252,11 +235,14 @@ export class GestureTutorial {
       this.passUntil = 0;
       this.paintStep();
     }
+    // "Seen" is worth showing on its own: a hand in frame with no pose latched
+    // is the moment the caster wonders whether the camera is working at all.
+    this.el.classList.toggle('is-seen', hands > 0);
     const charge = this.progress.feed(spells, now);
-    if (this.progress.resting) this.setNote('let your hand rest, then the next pose arms');
     if (charge >= 1) {
       this.el.classList.add('is-pass');
       this.setPct('100%');
+      this.markDots(this.progress.index);
       if (this.progress.done) this.paintDone(now + PASS_MS);
       else this.passUntil = now + PASS_MS;
       return;
@@ -269,14 +255,12 @@ export class GestureTutorial {
     if (!step) return;
     this.el.classList.remove('is-pass', 'is-done');
     this.count.textContent = `${this.progress.index + 1} / ${STEPS.length}`;
-    this.icon.innerHTML = svg(step.icon);
+    this.markDots(this.progress.index);
+    this.art.innerHTML = handArt(step.spell);
     this.hand.textContent = step.hand;
     this.effect.textContent = `${step.spell} · ${step.effect}`;
-    this.setNote(
-      step.spell === 'release'
-        ? 'make a fist, hold it a moment, then open it'
-        : 'relax your hand, then show this pose on its own and hold it',
-    );
+    this.how.textContent = HOW_TO[step.spell] ?? '';
+    this.setNote('hold the pose until the bar fills');
     this.next.textContent = 'next ›';
     this.setPct('0%');
   }
@@ -285,11 +269,23 @@ export class GestureTutorial {
     this.doneAt = at;
     this.el.classList.add('is-done');
     this.count.textContent = `${STEPS.length} / ${STEPS.length}`;
+    this.markDots(STEPS.length);
+    this.art.innerHTML = handArt('release');
     this.hand.textContent = 'you know the spells';
-    this.effect.textContent = 'chain them into combos — the book is in the panel';
-    this.note.textContent = 'press ? for two-hand duets and thrown bolts';
+    this.effect.textContent = 'combos are live again — chain the poses together';
+    this.how.textContent = 'the spellbook in the panel shows every sequence';
+    this.setNote('press ? for two-hand duets and thrown bolts');
     this.next.textContent = 'done';
     this.setPct('100%');
+  }
+
+  /** Steps before `upto` are done, `upto` is current, the rest are ahead. */
+  private markDots(upto: number): void {
+    const dots = this.dots.children;
+    for (let i = 0; i < dots.length; i++) {
+      const cls = i < upto ? 'is-done' : i === upto ? 'is-now' : '';
+      if (dots[i].className !== cls) dots[i].className = cls;
+    }
   }
 
   private setNote(text: string): void {

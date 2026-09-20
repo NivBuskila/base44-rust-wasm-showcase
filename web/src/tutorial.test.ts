@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { CLEAR_MS, HOLD_MS, STEPS, TutorialProgress } from './tutorial';
+import { handArt } from './hand-art';
+import { HOLD_MS, STEPS, TutorialProgress } from './tutorial';
+import { HOW_TO } from './tutorial-steps';
 
 describe('TutorialProgress', () => {
   it('covers every single-hand spell and leaves warp to the reference', () => {
@@ -26,20 +28,11 @@ describe('TutorialProgress', () => {
     }
   });
 
-  it('waits for the hand to rest before arming the next step', () => {
-    const p = new TutorialProgress();
-    p.feed(['attract', 'idle'], 0);
-    expect(p.feed(['attract', 'idle'], HOLD_MS)).toBe(1);
-    expect(p.resting).toBe(true);
-    // Straight into the next pose: ignored while the gate is shut.
-    expect(p.feed(['vortex', 'idle'], HOLD_MS + 10)).toBe(0);
-    expect(p.feed(['vortex', 'idle'], HOLD_MS + 10 + CLEAR_MS + HOLD_MS)).toBe(0);
-    // Resting clears the gate, and only then does the step charge.
-    p.feed(['idle', 'idle'], 5000);
-    expect(p.feed(['idle', 'idle'], 5000 + CLEAR_MS)).toBe(0);
-    expect(p.resting).toBe(false);
-    p.feed(['vortex', 'idle'], 6000);
-    expect(p.feed(['vortex', 'idle'], 6000 + HOLD_MS)).toBe(1);
+  it('has a how-to line and a drawing for every step', () => {
+    for (const step of STEPS) {
+      expect(HOW_TO[step.spell], step.spell).toBeTruthy();
+      expect(handArt(step.spell), step.spell).toContain('<svg');
+    }
   });
 
   it('charges while the spell is held and passes at HOLD_MS', () => {
