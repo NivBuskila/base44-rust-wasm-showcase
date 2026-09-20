@@ -1012,10 +1012,23 @@ input[type='range']::-moz-range-thumb {
   transform-origin: 50% 65%;
 }
 
-/* The hand is one flat silhouette: a single group opacity, so the overlapping
-   capsules and palm never show a seam where they meet. */
-.ha-body {
-  opacity: 0.92;
+/* The sketch: a dashed contour that slowly travels, so the hand reads as drawn
+   by hand rather than stamped out as an icon. */
+.ha-ink {
+  stroke-dasharray: 5 6;
+  animation: ha-draw 12s linear infinite;
+}
+
+.ha-crease {
+  stroke-width: 2.2;
+  stroke-dasharray: 3 6;
+  opacity: 0.45;
+}
+
+@keyframes ha-draw {
+  to {
+    stroke-dashoffset: -110;
+  }
 }
 
 .tut-art svg {
@@ -1096,7 +1109,8 @@ input[type='range']::-moz-range-thumb {
   .ha-pop,
   .ha-burst,
   .ha-spark,
-  .ha-arrow {
+  .ha-arrow,
+  .ha-ink {
     animation: none;
   }
 }
