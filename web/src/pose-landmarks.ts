@@ -35,8 +35,12 @@ interface Finger {
   dir: number;
   /** Bend added at each joint, base → tip. */
   curl: readonly [number, number, number];
-  /** Length multiplier; a curled finger reads shorter from the front. */
-  scale?: number;
+  /**
+   * Per-segment length multiplier. Seen from the front a folded phalanx points
+   * at the camera, so it must be drawn *short*, not swung out sideways —
+   * without this a fist grew hooks off the side of the hand.
+   */
+  seg?: readonly [number, number, number];
 }
 
 /** A pose is five fingers, thumb first. */
@@ -44,24 +48,32 @@ type Pose = readonly [Finger, Finger, Finger, Finger, Finger];
 
 /** Extended: nearly straight, with the natural slight bend. */
 const up = (dir: number): Finger => ({ dir, curl: [5, 6, 8] });
-/** Curled into the palm: tip tucked back under the knuckle. */
-const folded = (dir: number): Finger => ({ dir, curl: [-85, -80, -30], scale: 0.8 });
+/**
+ * Curled into the palm: the knuckle rides up, then the finger folds straight
+ * back down so the tip sits just under its own knuckle — a compact stub, the
+ * way a fist reads from the front.
+ */
+const folded = (dir: number): Finger => ({
+  dir,
+  curl: [170, 15, 10],
+  seg: [0.85, 0.3, 0.5],
+});
 /** Thumb tucked along the side of a curled hand. */
-const THUMB_TUCKED: Finger = { dir: 30, curl: [20, 18, 10], scale: 0.9 };
+const THUMB_TUCKED: Finger = { dir: 34, curl: [16, 14, 8], seg: [0.9, 0.9, 0.9] };
 
 const POSES: Record<string, Pose> = {
   // fist, thumb laid across the folded fingers
   attract: [
-    { dir: 48, curl: [12, 10, 6], scale: 0.95 },
+    { dir: 48, curl: [12, 10, 6], seg: [0.95, 0.95, 0.95] },
     folded(-4),
     folded(2),
-    folded(10),
-    folded(16),
+    folded(8),
+    folded(14),
   ],
   // pinch: the index curls right back onto the thumb tip
   vortex: [
-    { dir: -16, curl: [-6, -6, -4] },
-    { dir: -20, curl: [-72, -78, -68] },
+    { dir: -16, curl: [-6, -8, -6] },
+    { dir: -24, curl: [-78, -86, -80], seg: [1, 0.95, 0.95] },
     up(2),
     up(14),
     up(26),
@@ -84,13 +96,14 @@ function chain(
   finger: Finger,
   lengths: readonly number[],
 ): number[][] {
-  const scale = finger.scale ?? 1;
+  const seg = finger.seg ?? [1, 1, 1];
   const pts: number[][] = [[base[0], base[1]]];
   let angle = finger.dir;
   lengths.forEach((len, i) => {
     const a = (angle * Math.PI) / 180;
     const [x, y] = pts[pts.length - 1];
-    pts.push([x + Math.sin(a) * len * scale, y - Math.cos(a) * len * scale]);
+    const l = len * seg[i];
+    pts.push([x + Math.sin(a) * l, y - Math.cos(a) * l]);
     angle += finger.curl[i];
   });
   return pts;
