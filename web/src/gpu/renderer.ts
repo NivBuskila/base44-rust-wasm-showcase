@@ -50,6 +50,7 @@ import type {
   SceneRenderer,
 } from "../types";
 import type { GpuContext } from "./device";
+import { recordGpuError } from "./error-log";
 import { BLOOM_DOWN_WGSL, BLOOM_UP_WGSL } from "./shaders/bloom";
 import { BLIT_WGSL, COMPOSITE_WGSL } from "./shaders/composite";
 import { OVERLAY_LINES_WGSL, OVERLAY_POINTS_WGSL } from "./shaders/overlay";
@@ -259,6 +260,14 @@ export class GpuRenderer implements SceneRenderer {
       format: this.format,
       alphaMode: "opaque",
     });
+
+    // A dropped command buffer is silent otherwise: the frame just never
+    // arrives, which looks like flicker rather than an error.
+    this.device.onuncapturederror = (event) => {
+      const message = (event as GPUUncapturedErrorEvent).error.message;
+      recordGpuError(message);
+      console.error("[aether] WebGPU error", message);
+    };
 
     const d = this.device;
     this.scene = new Target(d, HDR_FORMAT, "scene");
