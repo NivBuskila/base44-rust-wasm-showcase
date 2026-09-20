@@ -112,5 +112,10 @@ export interface HudCallbacks {
   onOverdrive(on: boolean): void;
   onViewMode(mode: ViewMode): void;
   onToggleCamera(on: boolean): void;
+  /**
+   * Tutorial mode: single gestures still cast, but sequences and duets are held
+   * back so learning one pose after another cannot chain into a combo.
+   */
+  onPractice(on: boolean): void;
   onReset(): void;
 }

@@ -222,6 +222,12 @@ impl AetherEngine {
         vec![idx(p.active), p.charge, idx(p.fired)]
     }
 
+    /// Practice mode for the tutorial: single gestures still cast, sequences
+    /// and duets are held back.
+    pub fn set_practice(&mut self, on: bool) {
+        self.inner.set_practice(on);
+    }
+
     /// Packed lens-rush staging for the renderer: `[x, y, progress, power]`,
     /// with `power == 0` meaning nothing is in flight.
     pub fn rush_state(&self) -> Vec<f32> {

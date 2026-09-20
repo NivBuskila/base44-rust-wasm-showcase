@@ -211,6 +211,7 @@ class App {
       onToggleCamera: (on) => {
         this.showCamera = on;
       },
+      onPractice: (on) => this.engine.set_practice(on),
       onReset: () => {
         this.engine.reset();
         this.views = this.makeViews();

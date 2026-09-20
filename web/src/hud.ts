@@ -204,7 +204,9 @@ export class Hud {
     // the panel is collapsed, which is how most of a session is spent.
     this.combos = new ComboBook(this.root);
     // Also outside the panel: the card sits over the stage where the hand is.
-    this.tutorial = new GestureTutorial(this.root);
+    this.tutorial = new GestureTutorial(this.root, {
+      onMode: (on) => this.cb.onPractice(on),
+    });
     this.wireControls();
     this.wireKeys();
 
