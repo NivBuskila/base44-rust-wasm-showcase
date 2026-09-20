@@ -30,9 +30,17 @@ import { PerformanceGovernor } from './performance-governor';
 import { QaRecorder, clearQaSession, readQaSession, type QaSession } from './qa-recorder';
 import { MediaPipePerception } from './perception';
 import { WorkerPerception } from './perception-worker-client';
-import { Renderer } from './render/renderer';
-import { PARTICLE_STRIDE, STAT, assertLayout } from './constants';
-import type { PerceptionSource, PerceptionStatus, RenderFrame, ViewMode } from './types';
+import { createRenderer } from './gpu';
+import { PARTICLE_OP_STRIDE, PARTICLE_STRIDE, STAT, assertLayout, assertOpLayout } from './constants';
+import { FLUID_H, FLUID_W } from './constants';
+import type {
+  GpuSimFrame,
+  PerceptionSource,
+  PerceptionStatus,
+  RenderFrame,
+  SceneRenderer,
+  ViewMode,
+} from './types';
 
 /** Engine seed; fixed so a session is reproducible given the same input. */
 const SEED = 0xa37e5eed;
@@ -107,7 +115,7 @@ class App {
   /** The engine's two-hand duet book. Static for the session. */
   private readonly duetBook: string;
   private readonly memory: WebAssembly.Memory;
-  private readonly renderer: Renderer;
+  private readonly renderer: SceneRenderer;
   private readonly hud: Hud;
   /** Which engine build is running and on how many threads. */
   readonly tier: EngineTier;
@@ -181,7 +189,7 @@ class App {
   constructor(
     engine: AetherEngine,
     memory: WebAssembly.Memory,
-    renderer: Renderer,
+    renderer: SceneRenderer,
     tier: EngineTier,
   ) {
     this.engine = engine;
@@ -190,6 +198,12 @@ class App {
     this.memory = memory;
     this.renderer = renderer;
     this.tier = tier;
+    // The WebGPU backend simulates the pool itself: the engine stops advancing
+    // its particles and starts logging what the spells did to them instead.
+    if (renderer.backend === 'webgpu') {
+      assertOpLayout(engine.particle_op_layout());
+      engine.set_gpu_particles(true);
+    }
     this.views = this.makeViews();
     this.hud = new Hud(document.getElementById('hud')!, {
       onParam: (key, value) => {
@@ -347,6 +361,12 @@ class App {
     this.renderer.render(this.buildFrame(stats));
     this.renderMs = performance.now() - renderStart;
 
+    // The GPU owns the pool, so its own count is the only true one. It lags a
+    // frame behind the readback, which the HUD's stats row can live with.
+    if (this.engine.gpu_particles()) {
+      this.engine.set_particles_alive(this.renderer.particlesAlive?.() ?? 0);
+    }
+
     this.governor.update(this.fps);
     this.overdrive.update(stats, this.fps, this.stepMs);
     const hudStart = performance.now();
@@ -494,6 +514,36 @@ class App {
       mode: this.mode,
       showCamera: this.showCamera && this.cameraAvailable,
       rush: this.engine.rush_state(),
+      sim: this.engine.gpu_particles() ? this.gpuSim() : null,
+    };
+  }
+
+  /**
+   * Fluid, obstacle and op log for the GPU pool, as views over WASM memory.
+   *
+   * Rebuilt every frame on purpose: the pointers move whenever the engine
+   * reallocates, and a retained view would silently read freed memory.
+   */
+  private gpuSim(): GpuSimFrame {
+    const buffer = this.views.buffer;
+    const cells = FLUID_W * FLUID_H;
+    const info = this.engine.obstacle_info();
+    const obstacleCells = Math.max(1, Math.floor(info[0])) * Math.max(1, Math.floor(info[1]));
+    return {
+      velU: new Float32Array(buffer, this.engine.velocity_u_ptr(), cells),
+      velV: new Float32Array(buffer, this.engine.velocity_v_ptr(), cells),
+      gridW: FLUID_W,
+      gridH: FLUID_H,
+      obstacle: new Float32Array(buffer, this.engine.obstacle_ptr(), obstacleCells),
+      obstacleInfo: info,
+      ops: new Float32Array(
+        buffer,
+        this.engine.particle_ops_ptr(),
+        this.engine.particle_ops_len() * PARTICLE_OP_STRIDE,
+      ),
+      opCount: this.engine.particle_ops_len(),
+      params: this.engine.particle_step_params(),
+      active: this.engine.particle_count(),
     };
   }
 
@@ -619,6 +669,8 @@ class App {
       inferenceCostMs: this.inferenceCostMs,
       /** Adaptive quality rung; 0 is full quality. */
       qualityTier: this.governor.level,
+      /** Which graphics API drew the last frame, and who owns the pool. */
+      renderBackend: this.renderer.backend,
     };
   }
 
@@ -733,7 +785,7 @@ async function boot(): Promise<void> {
     if (!(canvas instanceof HTMLCanvasElement)) throw new Error('#stage canvas missing');
 
     setStatus('starting the renderer…');
-    const renderer = new Renderer(canvas);
+    const { renderer } = await createRenderer(canvas);
 
     const app = new App(engine, loaded.memory, renderer, loaded.tier);
     window.__aether = {
