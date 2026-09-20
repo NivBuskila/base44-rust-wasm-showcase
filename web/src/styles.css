@@ -1083,7 +1083,7 @@ input[type='range']::-moz-range-thumb {
 
 @keyframes ha-arrow {
   50% {
-    transform: translateX(4px);
+    transform: translateX(0.5px);
   }
 }
 
