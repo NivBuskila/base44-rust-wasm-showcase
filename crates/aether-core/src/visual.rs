@@ -195,7 +195,10 @@ mod tests {
         };
         let dim = stripes(0.2);
         let bright = stripes(0.6);
-        assert!(bright.brightness > dim.brightness * 2.0, "exposure did not change");
+        assert!(
+            bright.brightness > dim.brightness * 2.0,
+            "exposure did not change"
+        );
         assert!(
             (bright.contrast - dim.contrast).abs() / dim.contrast < 0.05,
             "contrast tracked brightness: {} vs {}",
@@ -227,8 +230,16 @@ mod tests {
             "frame is nearly empty: {:.1}% coverage",
             m.coverage * 100.0
         );
-        assert!(m.contrast > 0.25, "dye has no filament structure: {:.3}", m.contrast);
-        assert!(m.swirl > 5.0, "no rotational structure left: {:.3}", m.swirl);
+        assert!(
+            m.contrast > 0.25,
+            "dye has no filament structure: {:.3}",
+            m.contrast
+        );
+        assert!(
+            m.swirl > 5.0,
+            "no rotational structure left: {:.3}",
+            m.swirl
+        );
         // `last_divergence` is an absolute residual in the same units as the
         // velocity, so it scales with how hard the field is being driven — the
         // meaningful check is the residual *relative* to the flow it is left in

@@ -25,20 +25,12 @@ use crate::fluid::Fluid;
 use crate::math::{hue_to_rgb, smoothstep};
 use crate::particles::Particles;
 
-/// Which staging is running. A bolt or palm pushed at the lens is energy
-/// *arriving* — a slow swelling approach. A finger-gun shot is a discharge
-/// *leaving*: it has to read as a gunshot, so it is a single hard crack at the
-/// muzzle, over in a fraction of the time, with the frame kicking back from the
-/// recoil instead of dollying in. Same module because both stage a 2D field as
-/// depth; different numbers and a different composite branch because they are
-/// nothing alike to look at.
+/// Which staging is running: energy arriving at the lens.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum RushKind {
     /// Energy arriving at the lens: dolly in, cyan shell.
     #[default]
     Push,
-    /// A shot fired at the lens: muzzle blast, recoil, amber-white flash.
-    Shot,
 }
 
 impl RushKind {
@@ -46,28 +38,15 @@ impl RushKind {
     pub fn as_f32(self) -> f32 {
         match self {
             Self::Push => 0.0,
-            Self::Shot => 1.0,
         }
     }
 
     fn duration(self) -> f32 {
         match self {
             Self::Push => DURATION,
-            Self::Shot => SHOT_DURATION,
         }
     }
 }
-
-/// A gunshot is a crack, not an approach: short enough that the eye reads it as
-/// an event rather than a movement, and its blast stays near the muzzle instead
-/// of sweeping the whole frame.
-const SHOT_DURATION: f32 = 0.24;
-const SHOT_SHELL_TO: f32 = 0.42;
-/// Muzzle blast: a harder, tighter shove than the rush shell, and the hot amber
-/// of burning powder rather than the bolt's cyan.
-const SHOT_PUSH: f32 = 520.0;
-const SHOT_DRIVE: f32 = 320.0;
-const SHOT_HUE: f32 = 0.09;
 
 /// Seconds from the push to the frame settling back down. Long enough to read
 /// as an approach rather than a flash, short enough not to hold the view.
@@ -136,14 +115,13 @@ impl Rush {
         self.start(at, power, RushKind::Push);
     }
 
-    /// Starts a gunshot at the lens, fired from `at`.
-    pub fn trigger_shot(&mut self, at: [f32; 2], power: f32) {
-        self.start(at, power, RushKind::Shot);
-    }
-
     fn start(&mut self, at: [f32; 2], power: f32, kind: RushKind) {
         self.kind = kind;
-        let power = if power.is_finite() { power.clamp(0.0, 1.0) } else { 0.0 };
+        let power = if power.is_finite() {
+            power.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         self.at = [fin(at[0]).clamp(0.0, 1.0), fin(at[1]).clamp(0.0, 1.0)];
         // A weak push is still a push: the floor keeps the staging visible
         // rather than letting a barely-triggered rush do nothing at all.
@@ -167,7 +145,14 @@ impl Rush {
     ///
     /// `sx`/`sy` are the grid extents the normalised origin maps onto, the same
     /// convention [`crate::bolt::fire`] takes.
-    pub fn step(&mut self, fluid: &mut Fluid, particles: &mut Particles, dt: f32, sx: f32, sy: f32) {
+    pub fn step(
+        &mut self,
+        fluid: &mut Fluid,
+        particles: &mut Particles,
+        dt: f32,
+        sx: f32,
+        sy: f32,
+    ) {
         let Some(age) = self.age else { return };
         let dt = if dt.is_finite() && dt > 0.0 {
             dt.min(0.05)
@@ -182,24 +167,18 @@ impl Rush {
         }
         self.age = Some(age);
 
-        let shot = self.kind == RushKind::Shot;
         let p = age / duration;
         // The shell accelerates: an object approaching the lens covers more of
         // the frame per unit time the closer it gets, so a linear radius would
         // read as a slow ripple. The squared ramp is that acceleration.
-        let shell_to = if shot { SHOT_SHELL_TO } else { SHELL_TO };
-        let radius = SHELL_FROM + (shell_to - SHELL_FROM) * p * p;
+        let radius = SHELL_FROM + (SHELL_TO - SHELL_FROM) * p * p;
         // ...and it fades as it leaves, so the field is calm by the end.
         let strength = self.power * (1.0 - smoothstep(0.55, 1.0, p));
         if strength <= 0.0 {
             return;
         }
 
-        let (push, drive, hue) = if shot {
-            (SHOT_PUSH, SHOT_DRIVE, SHOT_HUE)
-        } else {
-            (SHELL_PUSH, SHELL_DRIVE, RUSH_HUE)
-        };
+        let (push, drive, hue) = (SHELL_PUSH, SHELL_DRIVE, RUSH_HUE);
         let cx = fin(self.at[0]) * sx;
         let cy = fin(self.at[1]) * sy;
         let grid_r = (radius * sx).max(1.0);
@@ -263,7 +242,13 @@ mod tests {
 
     fn run(rush: &mut Rush, fluid: &mut Fluid, particles: &mut Particles, frames: usize) {
         for _ in 0..frames {
-            rush.step(fluid, particles, DT, (FLUID_W - 1) as f32, (FLUID_H - 1) as f32);
+            rush.step(
+                fluid,
+                particles,
+                DT,
+                (FLUID_W - 1) as f32,
+                (FLUID_H - 1) as f32,
+            );
         }
     }
 

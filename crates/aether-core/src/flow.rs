@@ -494,9 +494,15 @@ fn jacobi(w: &mut Work, alpha2: f32, iters: usize) {
                 // Clamped neighbours = Neumann boundary: the flow is free to
                 // slide along the frame edge instead of being pinned to zero.
                 let ubar = 0.25
-                    * (w.u.data[row + xm] + w.u.data[row + xp] + w.u.data[up + x] + w.u.data[down + x]);
+                    * (w.u.data[row + xm]
+                        + w.u.data[row + xp]
+                        + w.u.data[up + x]
+                        + w.u.data[down + x]);
                 let vbar = 0.25
-                    * (w.v.data[row + xm] + w.v.data[row + xp] + w.v.data[up + x] + w.v.data[down + x]);
+                    * (w.v.data[row + xm]
+                        + w.v.data[row + xp]
+                        + w.v.data[up + x]
+                        + w.v.data[down + x]);
                 let ix = w.ix.data[i];
                 let iy = w.iy.data[i];
                 // `alpha2 >= MIN_ALPHA2`, so a gradient-free (flat) region
@@ -749,7 +755,10 @@ mod tests {
         let mut f = OpticalFlow::new(W, H, FlowConfig::default());
         assert!(!f.has_history());
         f.update(&t.still(W, H), DT);
-        assert!(f.has_history(), "second frame should have something to diff");
+        assert!(
+            f.has_history(),
+            "second frame should have something to diff"
+        );
         assert_eq!(f.flow().max_speed(), 0.0);
         assert_eq!(f.motion_energy(), 0.0);
     }
@@ -881,7 +890,10 @@ mod tests {
                 above += 1;
             }
         }
-        assert!(below > 0 && above > 0, "only {below}/{above} cells; vacuous");
+        assert!(
+            below > 0 && above > 0,
+            "only {below}/{above} cells; vacuous"
+        );
     }
 
     #[test]
