@@ -20,6 +20,7 @@
  */
 
 import { handArt } from './hand-art';
+import { HandMirror } from './hand-mirror';
 import type { GestureSpec } from './hud-spec';
 import { HOW_TO, STEPS } from './tutorial-steps';
 
@@ -111,6 +112,7 @@ export class GestureTutorial {
   private readonly art: HTMLElement;
   private readonly num: HTMLElement;
   private readonly hand: HTMLElement;
+  private readonly mirror: HandMirror;
   private readonly effect: HTMLElement;
   private readonly how: HTMLElement;
   private readonly fill: HTMLElement;
@@ -173,6 +175,8 @@ export class GestureTutorial {
     this.dots = this.el.querySelector('[data-tut-dots]')!;
     this.art = this.el.querySelector('[data-tut-art]')!;
     this.num = this.el.querySelector('[data-tut-num]')!;
+    // The caster's own skeleton, over the taught glyph: the lesson is a comparison.
+    this.mirror = new HandMirror(this.el.querySelector('.tut-art')!);
     this.hand = this.el.querySelector('[data-tut-hand]')!;
     this.effect = this.el.querySelector('[data-tut-effect]')!;
     this.how = this.el.querySelector('[data-tut-how]')!;
@@ -230,11 +234,12 @@ export class GestureTutorial {
    * Once per frame. `hands` is the engine's `HANDS_PRESENT` stat, used only to
    * start the tutorial the first time someone actually shows a hand.
    */
-  update(spells: readonly string[], hands: number, now: number): void {
+  update(spells: readonly string[], hands: number, now: number, landmarks: Float32Array | null = null): void {
     if (!this.on) {
       if (!this.autoStarted && hands > 0) this.start();
       return;
     }
+    this.mirror.update(landmarks);
     if (this.progress.done) {
       if (this.doneAt > 0 && now - this.doneAt > DONE_MS) this.stop();
       return;

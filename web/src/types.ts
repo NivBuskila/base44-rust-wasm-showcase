@@ -102,6 +102,8 @@ export interface HudStats {
   duetBook?: string;
   /** Packed duet progress: active duet, charge, fired. */
   duetProgress?: Float32Array;
+  /** Packed hand buffer, for the tutorial's live pose mirror; null when no hand. */
+  hands?: Float32Array | null;
   perception: PerceptionStatus;
 }
 
