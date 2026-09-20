@@ -127,7 +127,11 @@ impl ThrowTracker {
     /// Returns whichever hands threw this step. Both may throw at once.
     pub fn update(&mut self, tracker: &GestureTracker, dt: f32) -> [Option<Throw>; HANDS] {
         let mut thrown: [Option<Throw>; HANDS] = [None; HANDS];
-        let dt = if dt.is_finite() && dt > 0.0 { dt } else { 1.0 / 60.0 };
+        let dt = if dt.is_finite() && dt > 0.0 {
+            dt
+        } else {
+            1.0 / 60.0
+        };
         for (slot, hand) in tracker.hands().iter().enumerate().take(HANDS) {
             if !hand.present {
                 // A hand leaving the frame is not a throw, but the next one to
@@ -237,7 +241,14 @@ pub fn fire(
 
 /// Draws one finger-gun shot: a tight tracer from the fingertip to the edge of
 /// the field and a small hard impact where it leaves.
-pub fn shoot(fluid: &mut Fluid, particles: &mut Particles, particle_life: f32, shot: Shot, sx: f32, sy: f32) {
+pub fn shoot(
+    fluid: &mut Fluid,
+    particles: &mut Particles,
+    particle_life: f32,
+    shot: Shot,
+    sx: f32,
+    sy: f32,
+) {
     let (nx, ny) = (fin(shot.dir[0]), fin(shot.dir[1]));
     if nx == 0.0 && ny == 0.0 {
         return;
@@ -259,7 +270,9 @@ pub fn shoot(fluid: &mut Fluid, particles: &mut Particles, particle_life: f32, s
     // Both the position and the step are in cell units, so the bound is the
     // grid extent. Passing 1.0 here made every tracer whose fingertip sat past
     // the first cell solve a negative t and fly out the *back* of the aim.
-    let t = edge(from[0], nx * sx, sx).min(edge(from[1], ny * sy, sy)).min(1.0);
+    let t = edge(from[0], nx * sx, sx)
+        .min(edge(from[1], ny * sy, sy))
+        .min(1.0);
     let to = [
         (from[0] + nx * sx * t).clamp(0.0, sx),
         (from[1] + ny * sy * t).clamp(0.0, sy),
@@ -282,7 +295,11 @@ pub fn shoot(fluid: &mut Fluid, particles: &mut Particles, particle_life: f32, s
     fluid.add_dye(
         from[0],
         from[1],
-        [rgb[0] * IMPACT_DYE, rgb[1] * IMPACT_DYE, rgb[2] * IMPACT_DYE],
+        [
+            rgb[0] * IMPACT_DYE,
+            rgb[1] * IMPACT_DYE,
+            rgb[2] * IMPACT_DYE,
+        ],
         IMPACT_RADIUS * 0.5,
     );
     impact(fluid, particles, particle_life, to, 1.0, 0.6);
@@ -301,8 +318,16 @@ fn impact(
     let rgb = hue_to_rgb(BOLT_HUE);
     let radius = IMPACT_RADIUS * size;
     let burst = IMPACT_SPEED * (0.5 + 0.5 * power) * size;
-    let count = ((particles.active() / IMPACT_FRACTION) as f32 * (0.5 + 0.5 * power) * size) as usize;
-    particles.spawn_burst(at[0], at[1], count.min(IMPACT_MAX), burst, 1.0, particle_life);
+    let count =
+        ((particles.active() / IMPACT_FRACTION) as f32 * (0.5 + 0.5 * power) * size) as usize;
+    particles.spawn_burst(
+        at[0],
+        at[1],
+        count.min(IMPACT_MAX),
+        burst,
+        1.0,
+        particle_life,
+    );
     particles.impulse(at[0], at[1], radius * 1.5, 0.0, 1.0);
     let flash = IMPACT_DYE * (0.5 + 0.5 * power);
     fluid.add_dye(

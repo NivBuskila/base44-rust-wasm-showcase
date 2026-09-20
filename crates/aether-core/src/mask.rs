@@ -929,13 +929,7 @@ mod tests {
         // Just under the limit is a legitimate close-up body.
         let mut big = body(sharp());
         let rows = fy(0.8);
-        big.update_f32(
-            &rect_mask(0, W, 0, rows),
-            W,
-            H,
-            false,
-            DT30,
-        );
+        big.update_f32(&rect_mask(0, W, 0, rows), W, H, false, DT30);
         assert!(big.present());
         let expected = rows as f32 / H as f32;
         assert!(

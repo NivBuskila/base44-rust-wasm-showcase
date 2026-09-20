@@ -67,7 +67,10 @@ fn step_cost_breakdown() {
     let mut bare = Engine::new(1);
     bare.set_particle_count(0);
     bare.set_param("flow_force", 0.0);
-    record("fluid only (no particles, no flow)", time_steps(&mut bare, ITERS));
+    record(
+        "fluid only (no particles, no flow)",
+        time_steps(&mut bare, ITERS),
+    );
 
     let mut with_particles = Engine::new(2);
     with_particles.set_particle_count(120_000);
@@ -90,7 +93,10 @@ fn step_cost_breakdown() {
         e.set_particle_count(120_000);
         e.set_param("flow_force", 0.45);
         e.set_param("pressure_iters", iters as f32);
-        record(&format!("+ pressure_iters = {iters}"), time_steps(&mut e, ITERS));
+        record(
+            &format!("+ pressure_iters = {iters}"),
+            time_steps(&mut e, ITERS),
+        );
     }
 
     // Optical flow runs on the camera clock, not the render clock, so its cost
@@ -112,7 +118,10 @@ fn step_cost_breakdown() {
         start.elapsed().as_secs_f64() * 1000.0 / 60.0,
     );
 
-    println!("\n  engine step cost, {}, {FLUID_W}x{FLUID_H} grid", build_kind());
+    println!(
+        "\n  engine step cost, {}, {FLUID_W}x{FLUID_H} grid",
+        build_kind()
+    );
     println!("  {}", "-".repeat(label_width + 14));
     for (name, ms) in &rows {
         println!("  {name:<label_width$}  {ms:>7.3} ms");
@@ -124,7 +133,11 @@ fn step_cost_breakdown() {
     // is ~30x slower than the release build these numbers are about, and CI
     // machines vary by an order of magnitude, so anything tighter is a flaky
     // test rather than a performance guard.
-    let budget = if cfg!(debug_assertions) { 4000.0 } else { 200.0 };
+    let budget = if cfg!(debug_assertions) {
+        4000.0
+    } else {
+        200.0
+    };
     let worst = rows.iter().map(|(_, ms)| *ms).fold(0.0f64, f64::max);
     assert!(
         worst < budget,

@@ -386,8 +386,7 @@ fn lifetimes_are_staggered_after_seeding_and_after_respawn() {
     let spread = |p: &Particles| {
         let lives: Vec<f32> = (0..p.active()).map(|i| p.life_of(i)).collect();
         let mean = lives.iter().sum::<f32>() / lives.len() as f32;
-        let var =
-            lives.iter().map(|l| (l - mean) * (l - mean)).sum::<f32>() / lives.len() as f32;
+        let var = lives.iter().map(|l| (l - mean) * (l - mean)).sum::<f32>() / lives.len() as f32;
         (mean, var.sqrt())
     };
 
@@ -694,7 +693,10 @@ fn a_fast_flow_makes_particles_glow() {
         warm < hot - 0.4,
         "heat does not discriminate speed: {warm} vs {hot}"
     );
-    assert!(warm > 0.0, "a moving particle should have some heat: {warm}");
+    assert!(
+        warm > 0.0,
+        "a moving particle should have some heat: {warm}"
+    );
 }
 
 #[test]
@@ -999,8 +1001,7 @@ fn garbage_fields_and_parameters_keep_every_invariant() {
                     "round {round} step {s} particle {i}: ({x}, {y}) ({vx}, {vy})"
                 );
                 assert!(
-                    (0.0..=(w - 1) as f32).contains(&x)
-                        && (0.0..=(h - 1) as f32).contains(&y),
+                    (0.0..=(w - 1) as f32).contains(&x) && (0.0..=(h - 1) as f32).contains(&y),
                     "round {round} step {s} particle {i} escaped to ({x}, {y})"
                 );
                 let heat = p.heat_of(i);

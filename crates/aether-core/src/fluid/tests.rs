@@ -440,9 +440,8 @@ fn reference_pressure(p: &[f32], div: &[f32], solid: &[f32], w: usize, h: usize)
             }
             let pc = p[y * w + x];
             let at = |x: usize, y: usize| if is_solid(x, y) { pc } else { p[y * w + x] };
-            let sweep = (at(x - 1, y) + at(x + 1, y) + at(x, y - 1) + at(x, y + 1)
-                - div[y * w + x])
-                / 4.0;
+            let sweep =
+                (at(x - 1, y) + at(x + 1, y) + at(x, y - 1) + at(x, y + 1) - div[y * w + x]) / 4.0;
             out[y * w + x] = (1.0 - PRESSURE_OMEGA) * pc + PRESSURE_OMEGA * sweep;
         }
     }
@@ -463,8 +462,7 @@ fn reference_diffuse(
             if solid[j * w + i] >= 0.5 {
                 continue;
             }
-            let sum =
-                x[j * w + i - 1] + x[j * w + i + 1] + x[(j - 1) * w + i] + x[(j + 1) * w + i];
+            let sum = x[j * w + i - 1] + x[j * w + i + 1] + x[(j - 1) * w + i] + x[(j + 1) * w + i];
             out[j * w + i] = (rhs[j * w + i] + a * sum) / (1.0 + 4.0 * a);
         }
     }

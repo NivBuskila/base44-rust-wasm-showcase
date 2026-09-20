@@ -124,7 +124,13 @@ pub(super) fn fire_combo(
                 params.particle_life,
             );
             radial_kick(fluid, gw, gh, palm, ring * 2.5, NOVA_IMPULSE, report);
-            ring_dye(fluid, palm, ring, radius * 0.5, tint(Spell::Shatter, NOVA_DYE));
+            ring_dye(
+                fluid,
+                palm,
+                ring,
+                radius * 0.5,
+                tint(Spell::Shatter, NOVA_DYE),
+            );
         }
         ComboEffect::Tempest => {
             // Pure rotation, no radial term: the storm has to keep spinning
