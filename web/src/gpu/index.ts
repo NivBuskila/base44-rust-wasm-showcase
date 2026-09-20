@@ -27,13 +27,22 @@ export async function createRenderer(canvas: HTMLCanvasElement): Promise<Selecte
       console.info(`[aether] WebGPU backend on ${gate.reason}`);
       return { renderer, reason: gate.reason };
     } catch (err) {
-      // A canvas that already handed out a WebGL2 context cannot be
-      // reconfigured, so this has to come first — and if it throws anyway, the
-      // fallback below is on a canvas that never got a working context.
+      // A canvas only ever hands out one kind of context: once `getContext
+      // ('webgpu')` ran, `getContext('webgl2')` on the same element returns
+      // null. Swap in a fresh element for the fallback.
       console.warn('[aether] WebGPU setup failed; falling back to WebGL2', err);
+      canvas = replaceCanvas(canvas);
     }
   } else {
     console.info(`[aether] WebGL2 backend: ${gate.reason}`);
   }
   return { renderer: new Renderer(canvas), reason: gate.reason };
+}
+
+/** A same-id, same-class clone in the old canvas's place, with no context yet. */
+function replaceCanvas(old: HTMLCanvasElement): HTMLCanvasElement {
+  const fresh = document.createElement('canvas');
+  for (const attr of Array.from(old.attributes)) fresh.setAttribute(attr.name, attr.value);
+  old.replaceWith(fresh);
+  return fresh;
 }

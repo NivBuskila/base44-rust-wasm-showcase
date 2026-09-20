@@ -562,7 +562,9 @@ export class GpuRenderer implements SceneRenderer {
     while (levels < BLOOM_LEVELS) {
       const nw = Math.max(1, lw >> 1);
       const nh = Math.max(1, lh >> 1);
-      if (nw < 8 || nh < 8) break;
+      // Level 0 always exists — the composite samples it — even when the
+      // canvas has not been laid out yet and is only a few pixels wide.
+      if (levels > 0 && (nw < 8 || nh < 8)) break;
       dirty = this.bloom[levels].resize(nw, nh) || dirty;
       lw = nw;
       lh = nh;
