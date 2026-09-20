@@ -344,7 +344,7 @@ impl VecField {
     /// gesturing, until advection outruns the grid and every colour smears into
     /// one flat wash.
     pub fn clamp_speed(&mut self, limit: f32) {
-        if !(limit > 0.0) {
+        if limit.is_nan() || limit <= 0.0 {
             return;
         }
         let max_sq = limit * limit;

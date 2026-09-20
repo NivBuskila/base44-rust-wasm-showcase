@@ -4,7 +4,6 @@
 use super::*;
 
 impl Fluid {
-
     pub(super) fn project(&mut self, iters: usize) {
         self.compute_divergence();
         let (w, h) = (self.w, self.h);
@@ -51,6 +50,8 @@ impl Fluid {
         }
     }
 
+    // `x` also builds the flat index `i`; an iterator over `row` would hide that.
+    #[allow(clippy::needless_range_loop)]
     pub(super) fn compute_divergence(&mut self) {
         let (w, h) = (self.w, self.h);
         let mut div = core::mem::take(&mut self.divergence.data);

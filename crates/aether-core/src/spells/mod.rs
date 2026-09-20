@@ -507,14 +507,32 @@ pub fn apply(
         // doing: the last gesture of the combo is still a spell, and cutting it
         // off would make a successful cast feel like a dropped frame.
         if let Some(hit) = combo.get(slot).copied().flatten() {
-            fire_combo(hit.effect, fluid, particles, params, palm, radius, &mut report);
+            fire_combo(
+                hit.effect,
+                fluid,
+                particles,
+                params,
+                palm,
+                radius,
+                &mut report,
+            );
         }
 
         state.last_tip[slot] = tip;
         state.has_tip[slot] = true;
     }
 
-    apply_duet(tracker, fluid, particles, params, duet, sx, sy, dt, &mut report);
+    apply_duet(
+        tracker,
+        fluid,
+        particles,
+        params,
+        duet,
+        sx,
+        sy,
+        dt,
+        &mut report,
+    );
 
     // Rotating both hands warps time. Smoothed, because this multiplies every
     // other subsystem's dt and a one-frame spike is visible everywhere at once.

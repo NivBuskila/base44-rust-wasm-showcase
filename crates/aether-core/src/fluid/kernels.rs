@@ -10,8 +10,6 @@ use core::arch::wasm32::{
     v128_bitselect,
 };
 
-
-
 /// Clamps a timestep into the range the explicit stages stay stable over.
 ///
 /// A backgrounded tab hands back a `dt` of several seconds. Semi-Lagrangian
@@ -80,7 +78,13 @@ impl<'a> StencilRows<'a> {
     /// Windows around row `y`. Requires `1 <= y <= h - 2` and slices of at
     /// least `w * h`.
     #[inline]
-    pub(super) fn new(field: &'a [f32], solid: &'a [f32], rhs: &'a [f32], w: usize, y: usize) -> Self {
+    pub(super) fn new(
+        field: &'a [f32],
+        solid: &'a [f32],
+        rhs: &'a [f32],
+        w: usize,
+        y: usize,
+    ) -> Self {
         let row = y * w;
         Self {
             up: &field[row - w..row],
@@ -138,7 +142,14 @@ impl<'a> StencilRows<'a> {
 /// Writes *every* cell of `out`, walls included, because the caller ping-pongs
 /// the two buffers and stale values would otherwise survive forever.
 #[inline]
-pub(super) fn jacobi_pressure(p: &[f32], out: &mut [f32], div: &[f32], solid: &[f32], w: usize, h: usize) {
+pub(super) fn jacobi_pressure(
+    p: &[f32],
+    out: &mut [f32],
+    div: &[f32],
+    solid: &[f32],
+    w: usize,
+    h: usize,
+) {
     #[cfg(all(target_arch = "wasm32", feature = "simd"))]
     jacobi_pressure_simd(p, out, div, solid, w, h);
     #[cfg(not(all(target_arch = "wasm32", feature = "simd")))]

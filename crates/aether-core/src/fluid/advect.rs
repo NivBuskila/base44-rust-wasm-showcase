@@ -5,7 +5,6 @@
 use super::*;
 
 impl Fluid {
-
     pub(super) fn advect(&mut self, dt: f32) {
         self.build_traces(dt);
         let (w, h) = (self.w, self.h);
@@ -220,7 +219,6 @@ impl Fluid {
             || (fx * fy > MIN_STENCIL_WEIGHT && o[c + self.w + 1] >= 0.5)
     }
 }
-
 
 /// A resolved bilinear fetch: the index of the stencil's top-left corner plus
 /// the two blend fractions.

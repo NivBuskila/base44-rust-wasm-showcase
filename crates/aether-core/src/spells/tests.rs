@@ -2,8 +2,8 @@ use super::*;
 use crate::config::{FLOW_H, FLOW_W, FLUID_H, FLUID_W};
 use crate::field::Grid;
 use crate::gesture::synth::{self, Hand};
-use crate::particles::ParticleConfig;
 use crate::gesture::{GestureConfig, GestureTracker};
+use crate::particles::ParticleConfig;
 
 /// Render step.
 const DT: f32 = 1.0 / 60.0;
@@ -523,9 +523,8 @@ fn an_ignite_stroke_respects_the_impulse_ceiling() {
         rig.params.hand_force = 8.0;
         let a = holding(&Hand::at(0.3, 0.5).gesture(synth::POINTING_UP));
         rig.run(&a, MAX_DT);
-        let b = holding(
-            &Hand::at(0.3 + cells / (FLUID_W - 1) as f32, 0.5).gesture(synth::POINTING_UP),
-        );
+        let b =
+            holding(&Hand::at(0.3 + cells / (FLUID_W - 1) as f32, 0.5).gesture(synth::POINTING_UP));
         rig.run(&b, MAX_DT);
         let vel = rig.fluid.velocity();
         worst = worst.max(vel.u.max_abs()).max(vel.v.max_abs());
@@ -758,7 +757,8 @@ fn a_closed_fist_gathers_particles_instead_of_slinging_them_past() {
     let palm = to_grid(hand.palm, sx, sy);
 
     let mut rig = Rig::new();
-    rig.particles.place(0, palm[0] + 10.0, palm[1], 0.0, 0.0, 30.0);
+    rig.particles
+        .place(0, palm[0] + 10.0, palm[1], 0.0, 0.0, 30.0);
     let obstacle = Grid::new(FLUID_W, FLUID_H);
     let cfg = ParticleConfig::default();
     for _ in 0..60 {
@@ -828,8 +828,14 @@ fn opening_a_held_fist_fires_a_ring_once() {
             outward += 1;
         }
     }
-    assert!(total > 100, "expected a burst of fast particles, got {total}");
-    assert!(outward * 10 > total * 9, "burst is not outward: {outward}/{total}");
+    assert!(
+        total > 100,
+        "expected a burst of fast particles, got {total}"
+    );
+    assert!(
+        outward * 10 > total * 9,
+        "burst is not outward: {outward}/{total}"
+    );
 }
 
 #[test]
