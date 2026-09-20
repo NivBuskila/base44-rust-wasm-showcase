@@ -1,10 +1,10 @@
 /**
  * Drawn hands for the tutorial: one glyph per taught pose.
  *
- * The hands themselves are a real icon family (`hand-icons.ts`, Phosphor) rather
- * than geometry generated here — two attempts at drawing hands from finger
- * declarations produced shapes nobody reads as a hand, and an icon set gets the
- * proportions right and keeps every pose in the same visual language. This module
+ * The hands themselves are a real icon family (`hand-icons.ts`, Fluent Emoji high
+ * contrast) rather than geometry generated here — two attempts at drawing hands
+ * from finger declarations produced shapes nobody reads as a hand, and a real
+ * hand drawing shows *which fingers are folded*, which is the whole lesson. This module
  * is only the mapping (which glyph teaches which spell) and the composition: a
  * single pose, or two frames with an arrow when the lesson is a *movement*.
  *
@@ -33,16 +33,13 @@ function svg(body: string, extraClass = ''): string {
  */
 function motion(from: string, to: string): string {
   return (
-    `<g transform="translate(-6 38) scale(0.46)">${glyph(from)}</g>` +
-    '<g class="ha-arrow" fill="none" stroke="currentColor" stroke-width="14" ' +
+    `<g transform="translate(-0.8 4.8) scale(0.46)">${glyph(from)}</g>` +
+    '<g class="ha-arrow" fill="none" stroke="currentColor" stroke-width="1.75" ' +
     'stroke-linecap="round" stroke-linejoin="round" opacity="0.8">' +
-    '<path d="M116 128h22"/><path d="M130 116l12 12-12 12"/></g>' +
-    `<g transform="translate(146 38) scale(0.46)">${glyph(to)}</g>`
+    '<path d="M14.5 16h2.8"/><path d="M16.3 14.5l1.5 1.5-1.5 1.5"/></g>' +
+    `<g transform="translate(18.2 4.8) scale(0.46)">${glyph(to)}</g>`
   );
 }
-
-/** A small mark the pose is *about*, drawn beside the hand. */
-const SPARK = '<circle class="ha-spark" cx="60" cy="56" r="13" opacity="0.9"/>';
 
 /**
  * One drawing per tutorial step, keyed by spell name. The keys match `GESTURES`
@@ -52,7 +49,7 @@ const SPARK = '<circle class="ha-spark" cx="60" cy="56" r="13" opacity="0.9"/>';
 const ART: Record<string, string> = {
   attract: svg(glyph('fist'), 'ha-pull'),
   repel: svg(glyph('palm'), 'ha-push'),
-  vortex: svg(glyph('grab') + SPARK, 'ha-spin'),
+  vortex: svg(glyph('pinch'), 'ha-spin'),
   ignite: svg(glyph('point'), 'ha-trail'),
   freeze: svg(glyph('peace')),
   shatter: svg(glyph('thumb'), 'ha-pop'),
