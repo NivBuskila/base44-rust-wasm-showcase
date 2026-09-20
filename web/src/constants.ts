@@ -20,6 +20,22 @@ export const MAX_PARTICLES = 1_000_000;
 /** Floats per particle in the render buffer: x, y, heat, life. */
 export const PARTICLE_STRIDE = 4;
 
+/**
+ * Particle op log, `aether_core::particles::offload`. Floats per record and
+ * records per frame; `assertOpLayout` checks them at boot when the GPU pool is
+ * in use.
+ */
+export const PARTICLE_OP_STRIDE = 12;
+export const MAX_PARTICLE_OPS = 64;
+/** Op kinds, slot 0 of each record. */
+export const PARTICLE_OP = {
+  BURST: 1,
+  RING: 2,
+  IMPULSE: 3,
+  DAMP: 4,
+  GRIP: 5,
+} as const;
+
 /** MediaPipe hand landmark count. */
 export const HAND_LANDMARKS = 21;
 /** MediaPipe pose landmark count. */
@@ -108,6 +124,16 @@ export function gestureId(categoryName: string): number {
  * Fails loudly when the TS constants drift from the Rust ones.
  * `layout` is `[fluidW, fluidH, flowW, flowH, maxParticles, particleStride]`.
  */
+export function assertOpLayout(layout: Uint32Array | number[]): void {
+  if (layout[0] !== PARTICLE_OP_STRIDE || layout[1] !== MAX_PARTICLE_OPS) {
+    throw new Error(
+      `constants.ts is out of sync with aether-core: particle op layout is ` +
+        `[${PARTICLE_OP_STRIDE}, ${MAX_PARTICLE_OPS}] in TS but [${layout[0]}, ${layout[1]}] ` +
+        `in the engine. Update web/src/constants.ts to match particles/offload.rs.`,
+    );
+  }
+}
+
 export function assertLayout(layout: Uint32Array | number[]): void {
   const expected = [FLUID_W, FLUID_H, FLOW_W, FLOW_H, MAX_PARTICLES, PARTICLE_STRIDE];
   const names = ['FLUID_W', 'FLUID_H', 'FLOW_W', 'FLOW_H', 'MAX_PARTICLES', 'PARTICLE_STRIDE'];

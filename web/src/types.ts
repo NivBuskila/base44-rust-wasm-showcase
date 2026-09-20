@@ -54,11 +54,64 @@ export interface PerceptionSource {
 /** What the user is looking at. */
 export type ViewMode = 'aether' | 'camera' | 'blend' | 'debug' | 'particles';
 
+/** Which graphics API is drawing the frame. */
+export type RenderBackend = 'webgl2' | 'webgpu';
+
+/**
+ * The renderer contract `main.ts` drives. Two implementations: the WebGL2
+ * compositor in `render/`, which draws the particle buffer the Rust engine
+ * streams out, and the WebGPU one in `gpu/`, which also *simulates* the
+ * particles in a compute pass and draws them from its own storage buffer.
+ */
+export interface SceneRenderer {
+  readonly backend: RenderBackend;
+  render(frame: RenderFrame): void;
+  setVideo(video: HTMLVideoElement | null): void;
+  /** Adaptive internal resolution multiplier, `[MIN_SCENE_SCALE, 1]`. */
+  setQualityScale(scale: number): void;
+  /** Mean luminance of the last frame in `[0, 1]`; may lag a frame on async backends. */
+  sampleLuminance(): number;
+  /**
+   * Particles the backend measured alive last frame. Only the WebGPU backend
+   * owns the pool, so only it answers; the count lags a frame because the
+   * readback is asynchronous.
+   */
+  particlesAlive?(): number;
+  dispose(): void;
+}
+
+/**
+ * What the WebGPU backend needs to step the pool itself: the fluid the engine
+ * just solved, the obstacle the particles collide with, and the op log of
+ * everything the spells did this frame. All are zero-copy views over WASM
+ * memory, so they are read during `render` and never retained.
+ */
+export interface GpuSimFrame {
+  /** Fluid velocity planes, each `gridW * gridH` floats, grid cells per second. */
+  velU: Float32Array;
+  velV: Float32Array;
+  gridW: number;
+  gridH: number;
+  /** Obstacle field and its `[w, h, maxAbs]` description. */
+  obstacle: Float32Array;
+  obstacleInfo: Float32Array;
+  /** `PARTICLE_OP_STRIDE` floats per record, `opCount` records. */
+  ops: Float32Array;
+  opCount: number;
+  /** `[simDt, life, drag, spawnRate, damping, curlInfluence, gravity]`. */
+  params: Float32Array;
+  /** Particles the engine wants simulated. */
+  active: number;
+}
+
 /** Everything the renderer needs for one frame. */
 export interface RenderFrame {
   /** RGBA8 dye texture, `FLUID_W * FLUID_H * 4` bytes. */
   dye: Uint8Array;
-  /** Interleaved `x, y, heat, life`, positions normalised to `[0, 1]`. */
+  /**
+   * Interleaved `x, y, heat, life`, positions normalised to `[0, 1]`. Read by
+   * the WebGL2 backend only; the WebGPU backend owns its particles.
+   */
   particles: Float32Array;
   particleCount: number;
   /** RGBA8 obstacle/flow texture; only read in `debug` view. */
@@ -84,6 +137,11 @@ export interface RenderFrame {
    * flight, and the renderer then skips the whole effect.
    */
   rush: Float32Array | null;
+  /**
+   * Fluid, obstacle and op log for a backend that simulates the particles
+   * itself. Null on the WebGL2 path, which reads `particles` instead.
+   */
+  sim?: GpuSimFrame | null;
 }
 
 /** Live numbers for the HUD. */

@@ -140,13 +140,19 @@ pub struct Particles {
     alive: usize,
     /// Fractional respawn budget carried between frames, in particles.
     respawn_credit: f32,
+    /// When set, the pool is simulated on the GPU: every mutation is recorded
+    /// in `ops` for the browser to replay, and `step` does nothing here.
+    offloaded: bool,
+    ops: OpLog,
 }
 
 mod lane;
+pub mod offload;
 #[cfg(test)]
 mod tests;
 
 use lane::*;
+pub use offload::{OpLog, MAX_OPS, OP_STRIDE};
 
 impl Particles {
     pub fn new(capacity: usize, seed: u64) -> Self {
@@ -165,7 +171,57 @@ impl Particles {
             cursor: 0,
             alive: 0,
             respawn_credit: 0.0,
+            offloaded: false,
+            ops: OpLog::new(),
         }
+    }
+
+    /// Hands the simulation to the GPU (or takes it back).
+    ///
+    /// While offloaded, `spawn_*`, `impulse`, `damp` and `grip` append to the op
+    /// log instead of touching the streams, `step` and `build_render_buffer`
+    /// are no-ops, and `alive` is whatever the browser last reported through
+    /// [`Particles::set_alive_hint`]. The streams keep their last CPU state so
+    /// switching back mid-session resumes from a sane pool.
+    pub fn set_offloaded(&mut self, on: bool) {
+        self.offloaded = on;
+        self.ops.clear();
+    }
+
+    #[inline]
+    pub fn offloaded(&self) -> bool {
+        self.offloaded
+    }
+
+    /// The op log for this frame; the caller clears it once drained.
+    #[inline]
+    pub fn ops(&self) -> &OpLog {
+        &self.ops
+    }
+
+    #[inline]
+    pub fn clear_ops(&mut self) {
+        self.ops.clear();
+    }
+
+    /// The GPU's own live count, fed back so the HUD stays truthful.
+    pub fn set_alive_hint(&mut self, alive: usize) {
+        if self.offloaded {
+            self.alive = alive.min(self.active);
+        }
+    }
+
+    /// Reserves `count` round-robin slots and returns the first, exactly as the
+    /// CPU spawners would have taken them. Recorded so the compute shader
+    /// overwrites the same particles the CPU would have.
+    fn reserve_slots(&mut self, count: usize) -> usize {
+        let start = if self.active == 0 {
+            0
+        } else {
+            self.cursor % self.active
+        };
+        self.cursor = self.cursor.wrapping_add(count);
+        start
     }
 
     #[inline]
@@ -217,8 +273,18 @@ impl Particles {
         let speed = finite_or(speed, 0.0).clamp(-MAX_OWN_SPEED, MAX_OWN_SPEED);
         let heat = finite_or(heat, 0.0).clamp(0.0, 1.0);
         let base = finite_or(life, 1.0).max(0.05);
+        let count = count.min(self.active);
 
-        for _ in 0..count.min(self.active) {
+        if self.offloaded {
+            let slot = self.reserve_slots(count) as f32;
+            self.ops.push(
+                offload::OP_BURST,
+                &[x, y, count as f32, speed, heat, base, slot],
+            );
+            return;
+        }
+
+        for _ in 0..count {
             let i = self.cursor % self.active;
             self.cursor = self.cursor.wrapping_add(1);
             let (dx, dy) = self.rng.in_disc();
@@ -255,8 +321,18 @@ impl Particles {
         let heat = finite_or(heat, 0.0).clamp(0.0, 1.0);
         let base = finite_or(life, 1.0).max(0.05);
         let ring = ring.max(0.0);
+        let count = count.min(self.active);
 
-        for _ in 0..count.min(self.active) {
+        if self.offloaded {
+            let slot = self.reserve_slots(count) as f32;
+            self.ops.push(
+                offload::OP_RING,
+                &[x, y, count as f32, ring, speed, heat, base, slot],
+            );
+            return;
+        }
+
+        for _ in 0..count {
             let i = self.cursor % self.active;
             self.cursor = self.cursor.wrapping_add(1);
             let theta = self.rng.next_f32() * core::f32::consts::TAU;
@@ -287,6 +363,11 @@ impl Particles {
         params: &Params,
         cfg: &ParticleConfig,
     ) {
+        // On the GPU the browser advances the pool; the log it replays was
+        // filled by the spells that ran before this call.
+        if self.offloaded {
+            return;
+        }
         let (gw, gh) = (vel.w(), vel.h());
         let cells = gw.saturating_mul(gh);
         // Defensive: `VecField::new` cannot produce a grid this small, but the
@@ -395,6 +476,10 @@ impl Particles {
     /// `[0, 1]` against the grid the simulation runs on and `life` normalised
     /// against that particle's own lifetime.
     pub fn build_render_buffer(&mut self, grid_w: usize, grid_h: usize) {
+        // The GPU pool draws straight from its own storage buffer.
+        if self.offloaded {
+            return;
+        }
         let sx = 1.0 / (grid_w - 1) as f32;
         let sy = 1.0 / (grid_h - 1) as f32;
         let n = self.active;
@@ -489,6 +574,11 @@ impl Particles {
         }
         let strength = finite_or(strength, 0.0).clamp(-MAX_OWN_SPEED, MAX_OWN_SPEED);
         let heat = finite_or(heat, 0.0).clamp(0.0, 1.0);
+        if self.offloaded {
+            self.ops
+                .push(offload::OP_IMPULSE, &[cx, cy, radius, strength, heat]);
+            return;
+        }
         let r2 = radius * radius;
 
         for i in 0..self.active {
@@ -533,6 +623,10 @@ impl Particles {
         }
         let dt = finite_or(dt, 0.0).clamp(0.0, MAX_STEP);
         let k = 1.0 - decay(finite_or(rate, 0.0).max(0.0), dt);
+        if self.offloaded {
+            self.ops.push(offload::OP_DAMP, &[cx, cy, radius, k]);
+            return;
+        }
         let r2 = radius * radius;
 
         for i in 0..self.active {
@@ -569,6 +663,10 @@ impl Particles {
         }
         let dt = finite_or(dt, 0.0).clamp(0.0, MAX_STEP);
         let k = 1.0 - decay(finite_or(rate, 0.0).max(0.0), dt);
+        if self.offloaded {
+            self.ops.push(offload::OP_GRIP, &[cx, cy, radius, k]);
+            return;
+        }
         let r2 = radius * radius;
 
         for i in 0..self.active {
