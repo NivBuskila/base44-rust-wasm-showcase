@@ -95,12 +95,10 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
   let rushDir = (in.uv - rushAt) * (0.045 * rushAber);
   let off = d * r2 * aberration * 0.055 + rushDir;
-  var scene: vec3<f32>;
-  if (sceneColor.r >= 0.0) {
-    scene = sceneColor;
-  } else {
-    scene = textureSample(u_scene, s_clamp, uv).rgb;
-  }
+  // Sampled unconditionally: WGSL's uniformity analysis cannot see that the
+  // rush branch above was uniform, and refuses a sample behind this test.
+  let plain = textureSample(u_scene, s_clamp, uv).rgb;
+  let scene = select(plain, sceneColor, sceneColor.r >= 0.0);
   let c = scene + vec3<f32>(bloomAt(uv + off).r, bloomAt(uv).g, bloomAt(uv - off).b) + rushLight;
 
   var mapped: vec3<f32>;
