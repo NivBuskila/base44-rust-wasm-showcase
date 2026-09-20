@@ -21,7 +21,6 @@
 
 import { handArt } from './hand-art';
 import type { GestureSpec } from './hud-spec';
-import { TutorialEcho } from './tutorial-echo';
 import { HOW_TO, STEPS } from './tutorial-steps';
 
 export { STEPS };
@@ -107,7 +106,6 @@ export class TutorialProgress {
 export class GestureTutorial {
   private readonly el: HTMLElement;
   private readonly scrim: HTMLElement;
-  private readonly echo: TutorialEcho;
   private readonly count: HTMLElement;
   private readonly dots: HTMLElement;
   private readonly art: HTMLElement;
@@ -138,10 +136,6 @@ export class GestureTutorial {
     this.scrim.className = 'tut-scrim';
     this.scrim.hidden = true;
     parent.appendChild(this.scrim);
-
-    // The live echo sits over the stage, behind the card: the charge is visible
-    // in the scene itself, not only on the meter.
-    this.echo = new TutorialEcho(parent);
 
     this.el = document.createElement('aside');
     this.el.className = 'tut';
@@ -210,7 +204,6 @@ export class GestureTutorial {
     this.on = true;
     this.autoStarted = true;
     this.scrim.hidden = false;
-    this.echo.show(true);
     this.el.hidden = false;
     this.el.classList.remove('is-in');
     void this.el.offsetWidth;
@@ -225,7 +218,6 @@ export class GestureTutorial {
     this.on = false;
     this.el.hidden = true;
     this.scrim.hidden = true;
-    this.echo.show(false);
     remember();
   }
 
@@ -259,7 +251,6 @@ export class GestureTutorial {
     if (charge >= 1) {
       this.el.classList.add('is-pass');
       this.setCharge(1);
-      this.echo.burst();
       this.markDots(this.progress.index);
       if (this.progress.done) this.paintDone(now + PASS_MS);
       else this.passUntil = now + PASS_MS;
@@ -328,6 +319,5 @@ export class GestureTutorial {
     this.lastCharge = v;
     this.fill.style.setProperty('--v', `${v * 100}%`);
     this.el.style.setProperty('--vn', `${v}`);
-    this.echo.setCharge(v);
   }
 }
