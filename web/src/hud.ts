@@ -243,7 +243,7 @@ export class Hud {
     if (s.duetBook) this.combos.setDuetBook(s.duetBook);
     this.combos.update(comboState(s.comboProgress), duetState(s.duetProgress));
     // Every frame too: its hold bar is the feedback that the pose is being read.
-    this.tutorial.update(s.spells ?? [], finite(s.stats?.[STAT.HANDS_PRESENT]), now);
+    this.tutorial.update(s.spells ?? [], finite(s.stats?.[STAT.HANDS_PRESENT]), now, s.hands ?? null);
 
     if (now - this.lastPaintMs < PAINT_MS) return;
     this.lastPaintMs = now;

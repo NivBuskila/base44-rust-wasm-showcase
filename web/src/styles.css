@@ -1103,6 +1103,41 @@ input[type='range']::-moz-range-thumb {
   }
 }
 
+/* The live pose mirror: the caster's own skeleton over the taught glyph. */
+.tut-mirror {
+  position: absolute;
+  inset: 16%;
+  overflow: visible;
+  opacity: 0;
+  fill: none;
+  transition: opacity 260ms ease;
+  pointer-events: none;
+}
+
+.tut-mirror.is-live {
+  opacity: 1;
+}
+
+.tut-mirror-line {
+  stroke: #fff;
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.55));
+}
+
+.tut-mirror-wrist {
+  fill: var(--accent);
+  filter: drop-shadow(0 0 6px var(--accent));
+}
+
+/* Pose matched: the skeleton itself lights up in the accent. */
+.tut.is-pass .tut-mirror-line,
+.tut.is-done .tut-mirror-line {
+  stroke: var(--accent);
+  filter: drop-shadow(0 0 8px var(--accent));
+}
+
 .tut-hand svg {
   width: clamp(70px, 10vh, 100px);
   height: clamp(70px, 10vh, 100px);
