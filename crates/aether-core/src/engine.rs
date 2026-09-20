@@ -141,6 +141,9 @@ pub struct Engine {
 
     time: f32,
     frame: u32,
+    /// The warped `dt` the last `step` advanced the simulation by; what a GPU
+    /// particle step has to integrate to stay in lockstep with the fluid.
+    last_sim_dt: f32,
     /// Seconds since any hand, pose or mask arrived.
     since_perception: f32,
     stats: Stats,
@@ -178,6 +181,7 @@ impl Engine {
             obstacle_dirty: true,
             time: 0.0,
             frame: 0,
+            last_sim_dt: 0.0,
             since_perception: f32::MAX / 4.0,
             stats: Stats {
                 time_scale: 1.0,
@@ -303,6 +307,10 @@ impl Engine {
         // The two-hand time-warp gesture scales simulated time, not real time,
         // so the frame pacing and the perception clocks stay untouched.
         let warped_dt = sane_dt(real_dt * self.params.time_scale * self.report.time_scale);
+        self.last_sim_dt = warped_dt;
+        // A GPU pool replays last frame's ops from the log; anything still in
+        // it now was drained (or never read) and must not be replayed twice.
+        self.particles.clear_ops();
 
         self.body.decay(real_dt);
 
@@ -527,6 +535,81 @@ impl Engine {
         self.debug_rgba.as_ptr()
     }
 
+    // ----------------------------------------------------------- gpu offload
+
+    /// Moves the particle simulation to the browser's GPU (or back).
+    ///
+    /// The fluid, the flow, the spells and every bit of gameplay stay here;
+    /// only the pool's per-particle integration leaves. What crosses the
+    /// boundary each frame: the velocity field and obstacle (out), the op log
+    /// (out) and the live count (in).
+    pub fn set_gpu_particles(&mut self, on: bool) {
+        self.particles.set_offloaded(on);
+    }
+
+    #[inline]
+    pub fn gpu_particles(&self) -> bool {
+        self.particles.offloaded()
+    }
+
+    /// The particle op log for the frame `step` just produced.
+    #[inline]
+    pub fn particle_ops(&self) -> &[f32] {
+        self.particles.ops().records()
+    }
+
+    #[inline]
+    pub fn particle_ops_ptr(&self) -> *const f32 {
+        self.particles.ops().ptr()
+    }
+
+    #[inline]
+    pub fn particle_ops_len(&self) -> usize {
+        self.particles.ops().len()
+    }
+
+    /// Live count as measured on the GPU; ignored unless offloaded.
+    pub fn set_particles_alive(&mut self, alive: usize) {
+        self.particles.set_alive_hint(alive);
+        self.stats.particles_alive = self.particles.alive() as u32;
+    }
+
+    /// Everything a GPU particle step needs beyond the fields:
+    /// `[sim_dt, life, drag, spawn_rate, damping, curl_influence, gravity]`.
+    pub fn particle_step_params(&self) -> [f32; 7] {
+        [
+            self.last_sim_dt,
+            self.params.particle_life,
+            self.params.particle_drag,
+            self.params.spawn_rate,
+            self.particle_cfg.damping,
+            self.particle_cfg.curl_influence,
+            self.particle_cfg.gravity,
+        ]
+    }
+
+    /// Fluid velocity, `u` then `v`, each `FLUID_CELLS` floats in grid cells per second.
+    #[inline]
+    pub fn velocity_u_ptr(&self) -> *const f32 {
+        self.fluid.velocity().u.data.as_ptr()
+    }
+
+    #[inline]
+    pub fn velocity_v_ptr(&self) -> *const f32 {
+        self.fluid.velocity().v.data.as_ptr()
+    }
+
+    /// Obstacle field the particles collide with; `[w, h, max_abs]` describes it.
+    #[inline]
+    pub fn obstacle_ptr(&self) -> *const f32 {
+        self.fluid.obstacle().data.as_ptr()
+    }
+
+    pub fn obstacle_info(&self) -> [f32; 3] {
+        let o = self.fluid.obstacle();
+        [o.w as f32, o.h as f32, o.max_abs()]
+    }
+
     // ----------------------------------------------------------------- stats
 
     fn collect_stats(&mut self, repairs: usize, ambient: bool) {
@@ -672,9 +755,11 @@ impl Engine {
     /// Full reset: clears the fluid, re-seeds particles, forgets perception.
     pub fn reset(&mut self) {
         let active = self.particles.active();
+        let offloaded = self.particles.offloaded();
         self.fluid.reset();
         self.particles = Particles::new(MAX_PARTICLES, self.seed);
         self.particles.set_active(active);
+        self.particles.set_offloaded(offloaded);
         self.particles
             .seed_uniform(FLUID_W, FLUID_H, self.params.particle_life);
         self.clear_perception();
@@ -851,6 +936,46 @@ mod tests {
         assert!(e.body().coverage() > 0.0);
         e.step(1.0 / 60.0);
         assert_eq!(e.stats().nan_repairs, 0);
+    }
+
+    #[test]
+    fn gpu_offload_logs_spell_ops_instead_of_moving_particles() {
+        use crate::particles::offload::{OP_BURST, OP_RING, OP_STRIDE};
+        let mut e = Engine::new(11);
+        e.set_gpu_particles(true);
+        assert!(e.gpu_particles());
+        assert_eq!(e.particle_step_params()[1], e.params().particle_life);
+
+        // Nothing has fired yet: an empty log and a pool that is not advanced.
+        e.step(1.0 / 60.0);
+        assert_eq!(e.particle_ops_len(), 0);
+        assert!(e.particle_step_params()[0] > 0.0, "sim dt is reported");
+
+        // Ambient mode does not spawn; drive a burst directly through the pool
+        // API the spells use and check it lands in the log, not the streams.
+        let before: Vec<f32> = e.particle_buffer()[..64].to_vec();
+        e.particles.spawn_burst(10.0, 10.0, 100, 50.0, 1.0, 2.0);
+        e.particles.spawn_ring(20.0, 20.0, 50, 5.0, 30.0, 0.5, 1.0);
+        assert_eq!(e.particle_ops_len(), 2);
+        let ops = e.particle_ops();
+        assert_eq!(ops[0], OP_BURST);
+        assert_eq!(ops[3], 100.0, "count");
+        assert_eq!(ops[7], 0.0, "burst slot starts at the cursor");
+        assert_eq!(ops[OP_STRIDE], OP_RING);
+        assert_eq!(ops[OP_STRIDE + 8], 100.0, "ring slots follow the burst");
+        e.particles.build_render_buffer(FLUID_W, FLUID_H);
+        assert_eq!(&e.particle_buffer()[..64], &before[..], "streams untouched");
+
+        // The next step drains the log; the fed-back count reaches the stats.
+        e.step(1.0 / 60.0);
+        assert_eq!(e.particle_ops_len(), 0);
+        e.set_particles_alive(4321);
+        assert_eq!(e.stats().particles_alive, 4321);
+
+        // Reset keeps the offload flag: the GPU pool does not silently come back.
+        e.reset();
+        assert!(e.gpu_particles());
+        assert_eq!(e.obstacle_info().len(), 3);
     }
 
     #[test]
