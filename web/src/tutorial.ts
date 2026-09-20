@@ -19,6 +19,7 @@
  * straight from `AetherEngine.spell_name`.
  */
 
+import { handArt } from './hand-art';
 import { HandMirror } from './hand-mirror';
 import type { GestureSpec } from './hud-spec';
 import { HOW_TO, STEPS } from './tutorial-steps';
@@ -109,6 +110,7 @@ export class GestureTutorial {
   private readonly count: HTMLElement;
   private readonly dots: HTMLElement;
   private readonly num: HTMLElement;
+  private readonly art: HTMLElement;
   private readonly hand: HTMLElement;
   private readonly mirror: HandMirror;
   private readonly effect: HTMLElement;
@@ -156,6 +158,10 @@ export class GestureTutorial {
             <circle class="tut-ring-v" cx="50" cy="50" r="45" pathLength="1"/>
           </svg>
         </span>
+        <span class="tut-arrow" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false"><path d="M3 12h15m0 0-6-6m6 6-6 6"/></svg>
+        </span>
+        <span class="tut-goal"><span class="tut-hand" data-tut-art></span></span>
         <div class="tut-text">
           <b data-tut-hand></b>
           <span class="tut-effect" data-tut-effect></span>
@@ -171,6 +177,7 @@ export class GestureTutorial {
     this.count = this.el.querySelector('[data-tut-count]')!;
     this.dots = this.el.querySelector('[data-tut-dots]')!;
     this.num = this.el.querySelector('[data-tut-num]')!;
+    this.art = this.el.querySelector('[data-tut-art]')!;
     // The caster's own skeleton, over the taught glyph: the lesson is a comparison.
     this.mirror = new HandMirror(this.el.querySelector('.tut-art')!);
     this.hand = this.el.querySelector('[data-tut-hand]')!;
@@ -270,6 +277,7 @@ export class GestureTutorial {
     this.count.textContent = `${this.progress.index + 1} / ${STEPS.length}`;
     this.num.textContent = String(this.progress.index + 1).padStart(2, '0');
     this.markDots(this.progress.index);
+    this.art.innerHTML = handArt(step.spell);
     this.hand.textContent = step.hand;
     this.effect.textContent = `${step.spell} · ${step.effect}`;
     this.how.textContent = HOW_TO[step.spell] ?? '';
@@ -286,6 +294,7 @@ export class GestureTutorial {
     this.count.textContent = `${STEPS.length} / ${STEPS.length}`;
     this.num.textContent = '\u2713';
     this.markDots(STEPS.length);
+    this.art.innerHTML = handArt('release');
     this.hand.textContent = 'you know the spells';
     this.effect.textContent = 'combos are live again — chain the poses together';
     this.how.textContent = 'the spellbook in the panel shows every sequence';
