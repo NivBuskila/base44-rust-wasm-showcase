@@ -1012,29 +1012,15 @@ input[type='range']::-moz-range-thumb {
   transform-origin: 50% 65%;
 }
 
-/* The sketch: a dashed contour that slowly travels, so the hand reads as drawn
-   by hand rather than stamped out as an icon. */
-.ha-ink {
-  stroke-dasharray: 5 6;
-  animation: ha-draw 12s linear infinite;
-}
-
-.ha-crease {
-  stroke-width: 2.2;
-  stroke-dasharray: 3 6;
-  opacity: 0.45;
-}
-
-@keyframes ha-draw {
-  to {
-    stroke-dashoffset: -110;
-  }
+/* The glyph is a filled hand, so the glow comes from the shape itself. */
+.ha-hand {
+  fill: currentColor;
 }
 
 .tut-art svg {
-  width: 88px;
-  height: 108px;
-  filter: drop-shadow(0 0 8px rgba(53, 214, 255, 0.35));
+  width: 84px;
+  height: 84px;
+  filter: drop-shadow(0 0 9px rgba(53, 214, 255, 0.4));
 }
 
 /* Each pose hints at what it does, so the drawing is never quite static. */
@@ -1109,8 +1095,7 @@ input[type='range']::-moz-range-thumb {
   .ha-pop,
   .ha-burst,
   .ha-spark,
-  .ha-arrow,
-  .ha-ink {
+  .ha-arrow {
     animation: none;
   }
 }
