@@ -27,6 +27,20 @@ describe('poseLandmarks', () => {
     expect(dist(p[TIP.thumb], p[TIP.index])).toBeLessThan(0.1);
   });
 
+  it('lays the thumb across the fist for attract', () => {
+    const p = poseLandmarks('attract')!;
+    // Across the front of the folded fingers: below their tips, reaching right.
+    expect(p[TIP.thumb][1]).toBeGreaterThan(p[TIP.middle][1]);
+    expect(p[TIP.thumb][0]).toBeGreaterThan(p[1][0]);
+  });
+
+  it('stands the thumb above the fist for shatter', () => {
+    const p = poseLandmarks('shatter')!;
+    for (const tip of [TIP.index, TIP.middle, TIP.ring, TIP.pinky]) {
+      expect(p[TIP.thumb][1]).toBeLessThan(p[tip][1]);
+    }
+  });
+
   it('spreads every finger for repel', () => {
     const p = poseLandmarks('repel')!;
     const xs = [TIP.index, TIP.middle, TIP.ring, TIP.pinky].map((i) => p[i][0]);
