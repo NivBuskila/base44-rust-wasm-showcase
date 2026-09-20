@@ -976,7 +976,13 @@ export class GpuRenderer implements SceneRenderer {
     pass.dispatchWorkgroups(groups);
     pass.end();
 
-    encoder.copyBufferToBuffer(this.counters, 0, this.counterStaging, 0, 8);
+    // Copy only while the staging buffer is unmapped: a submission that touches
+    // a mapped (or pending-map) buffer is dropped *whole* by the driver, so the
+    // simulation and the scene it drew simply never appear — read as flicker.
+    // The probe copy is already guarded this way; the counters were not.
+    if (!this.countersPending) {
+      encoder.copyBufferToBuffer(this.counters, 0, this.counterStaging, 0, 8);
+    }
     return style.particles > 0 ? active : 0;
   }
 
