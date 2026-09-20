@@ -61,16 +61,65 @@ const folded = (dir: number): Finger => ({
 /** Thumb tucked along the side of a curled hand. */
 const THUMB_TUCKED: Finger = { dir: 34, curl: [16, 14, 8], seg: [0.9, 0.9, 0.9] };
 
-const POSES: Record<string, Pose> = {
-  // fist, thumb laid across the folded fingers
+/**
+ * Some poses are not a front-facing hand at all — a fist and a thumbs-up are
+ * seen from the side, so the knuckles stack instead of arching and the fingers
+ * fold sideways. Those two are traced straight from real captured landmarks
+ * (21 points, wrist first) rather than generated, because the finger-chain
+ * model only knows the front view.
+ */
+const TRACED: Record<string, readonly (readonly number[])[]> = {
+  // closed fist, seen from the thumb side, thumb wrapped over the fingers
   attract: [
-    // laid flat across the front of the folded fingers, not raised beside them
-    { dir: 62, curl: [10, 8, 6], seg: [1, 0.95, 0.9] },
-    folded(-4),
-    folded(2),
-    folded(8),
-    folded(14),
+    [0.33, 0.88],
+    [0.36, 0.76],
+    [0.4, 0.66],
+    [0.46, 0.6],
+    [0.5, 0.62],
+    [0.4, 0.58],
+    [0.44, 0.44],
+    [0.38, 0.42],
+    [0.36, 0.5],
+    [0.46, 0.57],
+    [0.5, 0.42],
+    [0.44, 0.4],
+    [0.42, 0.49],
+    [0.51, 0.58],
+    [0.56, 0.46],
+    [0.5, 0.45],
+    [0.48, 0.53],
+    [0.55, 0.62],
+    [0.6, 0.52],
+    [0.55, 0.51],
+    [0.53, 0.58],
   ],
+  // thumbs up: hand turned sideways, thumb a long vertical, fingers folded right
+  shatter: [
+    [0.38, 0.92],
+    [0.4, 0.8],
+    [0.42, 0.6],
+    [0.44, 0.4],
+    [0.45, 0.24],
+    [0.5, 0.62],
+    [0.7, 0.57],
+    [0.62, 0.54],
+    [0.52, 0.56],
+    [0.5, 0.7],
+    [0.72, 0.67],
+    [0.63, 0.64],
+    [0.53, 0.66],
+    [0.5, 0.78],
+    [0.7, 0.76],
+    [0.62, 0.73],
+    [0.53, 0.75],
+    [0.49, 0.86],
+    [0.66, 0.85],
+    [0.59, 0.82],
+    [0.51, 0.84],
+  ],
+};
+
+const POSES: Record<string, Pose> = {
   // pinch: the index curls right back onto the thumb tip
   vortex: [
     { dir: -16, curl: [-6, -8, -6] },
@@ -81,15 +130,6 @@ const POSES: Record<string, Pose> = {
   ],
   // index straight up, the rest folded away
   ignite: [THUMB_TUCKED, up(-8), folded(2), folded(10), folded(16)],
-  // fist with the thumb straight up out of it
-  // thumb standing straight up out of the fist, clearing the knuckles
-  shatter: [
-    { dir: -8, curl: [2, 4, 2], seg: [1.5, 1.4, 1.3] },
-    folded(-4),
-    folded(2),
-    folded(8),
-    folded(14),
-  ],
   // index and middle up in a V
   freeze: [THUMB_TUCKED, up(-24), up(6), folded(10), folded(16)],
   // all five spread, palm flat to the camera
@@ -119,6 +159,8 @@ function chain(
 
 /** The 21 landmarks of a taught pose, or `null` when the spell has no pose. */
 export function poseLandmarks(spell: string): number[][] | null {
+  const traced = TRACED[spell];
+  if (traced) return traced.map(([x, y]) => [x, y]);
   const pose = POSES[spell];
   if (!pose) return null;
   const pts: number[][] = [[WRIST[0], WRIST[1]]];
