@@ -884,6 +884,166 @@ input[type='range']::-moz-range-thumb {
   color: var(--faint);
 }
 
+/* Gesture tutorial ------------------------------------------------------- */
+
+.tut {
+  --v: 0%;
+  position: absolute;
+  left: 50%;
+  bottom: max(26px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  width: min(400px, calc(100vw - 2 * var(--gut)));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px 12px;
+  background: linear-gradient(180deg, var(--panel-a), var(--panel-b));
+  border: 1px solid var(--edge-hi);
+  border-radius: var(--r);
+  box-shadow:
+    0 0 0 1px var(--accent-soft),
+    0 0 32px rgba(53, 214, 255, 0.14),
+    0 12px 40px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  pointer-events: auto;
+  transition:
+    border-color 200ms ease,
+    box-shadow 200ms ease;
+}
+
+.tut.is-in {
+  animation: od-in 520ms cubic-bezier(0.2, 0.9, 0.2, 1.1) both;
+}
+
+.tut.is-pass,
+.tut.is-done {
+  border-color: rgba(53, 214, 255, 0.55);
+  box-shadow:
+    0 0 0 1px rgba(53, 214, 255, 0.2),
+    0 0 40px rgba(53, 214, 255, 0.3),
+    0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.tut-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 9px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.tut-tag {
+  color: var(--accent);
+}
+
+.tut-count {
+  flex: 1;
+}
+
+.tut-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.tut-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  background: var(--well);
+  border: 1px solid var(--edge);
+  color: var(--accent);
+}
+
+.tut-icon svg {
+  width: 24px;
+  height: 24px;
+}
+
+.tut-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.tut-text b {
+  font-size: 15px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
+
+.tut-text span {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+
+.tut-btn {
+  flex: none;
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  color: var(--dim);
+  font: inherit;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    color 150ms ease,
+    border-color 150ms ease;
+}
+
+.tut-btn:hover,
+.tut-btn:focus-visible {
+  color: var(--ink);
+  border-color: var(--edge-hi);
+  outline: none;
+}
+
+.tut-track {
+  height: 3px;
+  border-radius: 999px;
+  background: var(--well);
+  overflow: hidden;
+}
+
+.tut-fill {
+  display: block;
+  height: 100%;
+  width: var(--v);
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 80ms linear;
+}
+
+.tut.is-pass .tut-fill,
+.tut.is-done .tut-fill {
+  box-shadow: 0 0 10px var(--accent);
+}
+
+.tut-note {
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  text-align: center;
+}
+
+#hud.is-hidden .tut {
+  display: none;
+}
+
 /* Help sheet ------------------------------------------------------------- */
 
 .hud-help {
