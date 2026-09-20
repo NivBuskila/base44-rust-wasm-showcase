@@ -262,10 +262,10 @@ fn step_main(@builtin(global_invocation_id) gid: vec3<u32>,
   workgroupBarrier();
 
   let i = gid.x;
-  let active = S.counts.x;
+  let aliveCount = S.counts.x;
   var alive = 0u;
 
-  if (i < active) {
+  if (i < aliveCount) {
     var p = apply_ops(i, P[i]);
 
     let dt = S.rates.x;

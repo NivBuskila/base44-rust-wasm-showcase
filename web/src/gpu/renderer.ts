@@ -34,16 +34,25 @@ import {
   MAX_PARTICLE_OPS,
   MAX_PARTICLES,
   PARTICLE_OP_STRIDE,
-} from '../constants';
-import { OVERLAY_CAPACITY, OVERLAY_STRIDE, buildHandMesh } from '../render/handmesh';
-import { NOISE_SIZE, buildNoiseTile } from '../render/noise';
-import type { ModeStyle } from '../render/styles';
-import { STYLES } from '../render/styles';
-import type { GpuSimFrame, RenderBackend, RenderFrame, SceneRenderer } from '../types';
-import type { GpuContext } from './device';
-import { BLOOM_DOWN_WGSL, BLOOM_UP_WGSL } from './shaders/bloom';
-import { BLIT_WGSL, COMPOSITE_WGSL } from './shaders/composite';
-import { OVERLAY_LINES_WGSL, OVERLAY_POINTS_WGSL } from './shaders/overlay';
+} from "../constants";
+import {
+  OVERLAY_CAPACITY,
+  OVERLAY_STRIDE,
+  buildHandMesh,
+} from "../render/handmesh";
+import { NOISE_SIZE, buildNoiseTile } from "../render/noise";
+import type { ModeStyle } from "../render/styles";
+import { STYLES } from "../render/styles";
+import type {
+  GpuSimFrame,
+  RenderBackend,
+  RenderFrame,
+  SceneRenderer,
+} from "../types";
+import type { GpuContext } from "./device";
+import { BLOOM_DOWN_WGSL, BLOOM_UP_WGSL } from "./shaders/bloom";
+import { BLIT_WGSL, COMPOSITE_WGSL } from "./shaders/composite";
+import { OVERLAY_LINES_WGSL, OVERLAY_POINTS_WGSL } from "./shaders/overlay";
 import {
   DRAW_UNIFORM_FLOATS,
   PARTICLE_BYTES,
@@ -51,11 +60,11 @@ import {
   PARTICLE_DRAW_WGSL,
   SIM_UNIFORM_FLOATS,
   STEP_WORKGROUP,
-} from './shaders/particles';
-import { SCENE_WGSL } from './shaders/scene';
+} from "./shaders/particles";
+import { SCENE_WGSL } from "./shaders/scene";
 
 /** Intermediate HDR format; guaranteed renderable and blendable in WebGPU. */
-const HDR_FORMAT: GPUTextureFormat = 'rgba16float';
+const HDR_FORMAT: GPUTextureFormat = "rgba16float";
 
 const MAX_DPR = 2;
 const BLOOM_LEVELS = 5;
@@ -78,10 +87,12 @@ const HEAT_RISE = 3.5;
 /** `aether_core::particles::MAX_STEP`. */
 const MAX_SIM_STEP = 0.25;
 
-const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, v));
+const clamp = (v: number, lo: number, hi: number): number =>
+  Math.min(hi, Math.max(lo, v));
 /** `aether_core::math::decay`. */
 const decay = (rate: number, dt: number): number => Math.exp(-rate * dt);
-const finite = (v: number, fallback: number): number => (Number.isFinite(v) ? v : fallback);
+const finite = (v: number, fallback: number): number =>
+  Number.isFinite(v) ? v : fallback;
 
 export class GpuRendererError extends Error {}
 
@@ -107,7 +118,9 @@ class Target {
       size: { width: w, height: h },
       format: this.format,
       usage:
-        GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | this.extraUsage,
+        GPUTextureUsage.RENDER_ATTACHMENT |
+        GPUTextureUsage.TEXTURE_BINDING |
+        this.extraUsage,
     });
     this.view = this.texture.createView();
     this.width = w;
@@ -125,7 +138,7 @@ class Target {
 }
 
 export class GpuRenderer implements SceneRenderer {
-  readonly backend: RenderBackend = 'webgpu';
+  readonly backend: RenderBackend = "webgpu";
 
   private readonly canvas: HTMLCanvasElement;
   private readonly device: GPUDevice;
@@ -163,6 +176,7 @@ export class GpuRenderer implements SceneRenderer {
   private readonly blitPipe: GPURenderPipeline;
   private readonly stepPipe: GPUComputePipeline;
   private readonly seedPipe: GPUComputePipeline;
+  private readonly simLayout: GPUBindGroupLayout;
 
   // --- uniforms and buffers
   private readonly sceneUniform: GPUBuffer;
@@ -208,7 +222,9 @@ export class GpuRenderer implements SceneRenderer {
   private readonly simScratch = new ArrayBuffer(SIM_UNIFORM_FLOATS * 4);
   private readonly simF32 = new Float32Array(this.simScratch);
   private readonly simU32 = new Uint32Array(this.simScratch);
-  private readonly overlayVerts = new Float32Array(OVERLAY_CAPACITY * OVERLAY_STRIDE);
+  private readonly overlayVerts = new Float32Array(
+    OVERLAY_CAPACITY * OVERLAY_STRIDE,
+  );
   private readonly zeroCounters = new Uint32Array(2);
 
   // --- frame state
@@ -231,40 +247,59 @@ export class GpuRenderer implements SceneRenderer {
     this.canvas = canvas;
     this.device = ctx.device;
     this.adapterLabel = ctx.label;
-    const context = canvas.getContext('webgpu');
-    if (!context) throw new GpuRendererError('could not get a webgpu canvas context');
+    const context = canvas.getContext("webgpu");
+    if (!context)
+      throw new GpuRendererError("could not get a webgpu canvas context");
     this.context = context;
     this.format = navigator.gpu.getPreferredCanvasFormat();
-    context.configure({ device: this.device, format: this.format, alphaMode: 'opaque' });
+    context.configure({
+      device: this.device,
+      format: this.format,
+      alphaMode: "opaque",
+    });
 
     const d = this.device;
-    this.scene = new Target(d, HDR_FORMAT, 'scene');
-    this.bloom = Array.from({ length: BLOOM_LEVELS }, (_, i) => new Target(d, HDR_FORMAT, `bloom${i}`));
-    this.frameTarget = new Target(d, 'rgba8unorm', 'frame');
-    this.probeTarget = new Target(d, 'rgba8unorm', 'probe', GPUTextureUsage.COPY_SRC);
+    this.scene = new Target(d, HDR_FORMAT, "scene");
+    this.bloom = Array.from(
+      { length: BLOOM_LEVELS },
+      (_, i) => new Target(d, HDR_FORMAT, `bloom${i}`),
+    );
+    this.frameTarget = new Target(d, "rgba8unorm", "frame");
+    this.probeTarget = new Target(
+      d,
+      "rgba8unorm",
+      "probe",
+      GPUTextureUsage.COPY_SRC,
+    );
 
-    this.clampSampler = d.createSampler({ magFilter: 'linear', minFilter: 'linear' });
-    this.repeatSampler = d.createSampler({
-      magFilter: 'linear',
-      minFilter: 'linear',
-      addressModeU: 'repeat',
-      addressModeV: 'repeat',
+    this.clampSampler = d.createSampler({
+      magFilter: "linear",
+      minFilter: "linear",
     });
-    this.nearestSampler = d.createSampler({ magFilter: 'nearest', minFilter: 'nearest' });
+    this.repeatSampler = d.createSampler({
+      magFilter: "linear",
+      minFilter: "linear",
+      addressModeU: "repeat",
+      addressModeV: "repeat",
+    });
+    this.nearestSampler = d.createSampler({
+      magFilter: "nearest",
+      minFilter: "nearest",
+    });
 
     const grid = (label: string): GPUTexture =>
       d.createTexture({
         label,
         size: { width: FLUID_W, height: FLUID_H },
-        format: 'rgba8unorm',
+        format: "rgba8unorm",
         usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
       });
-    this.dyeTex = grid('dye');
-    this.debugTex = grid('debug');
+    this.dyeTex = grid("dye");
+    this.debugTex = grid("debug");
     this.noiseTex = d.createTexture({
-      label: 'noise',
+      label: "noise",
       size: { width: NOISE_SIZE, height: NOISE_SIZE },
-      format: 'rgba8unorm',
+      format: "rgba8unorm",
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
     });
     d.queue.writeTexture(
@@ -287,42 +322,46 @@ export class GpuRenderer implements SceneRenderer {
       const m = module(code, label);
       return d.createRenderPipeline({
         label,
-        layout: 'auto',
-        vertex: { module: m, entryPoint: 'vs_main' },
-        fragment: { module: m, entryPoint: 'fs_main', targets: [{ format, blend }] },
-        primitive: { topology: 'triangle-strip' },
+        layout: "auto",
+        vertex: { module: m, entryPoint: "vs_main" },
+        fragment: {
+          module: m,
+          entryPoint: "fs_main",
+          targets: [{ format, blend }],
+        },
+        primitive: { topology: "triangle-strip" },
       });
     };
     const additive: GPUBlendState = {
-      color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
-      alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+      color: { srcFactor: "one", dstFactor: "one", operation: "add" },
+      alpha: { srcFactor: "one", dstFactor: "one", operation: "add" },
     };
 
-    this.scenePipe = fullscreen(SCENE_WGSL, 'scene', HDR_FORMAT);
-    this.downPipe = fullscreen(BLOOM_DOWN_WGSL, 'bloom-down', HDR_FORMAT);
-    this.upPipe = fullscreen(BLOOM_UP_WGSL, 'bloom-up', HDR_FORMAT, additive);
-    this.compositePipe = fullscreen(COMPOSITE_WGSL, 'composite', 'rgba8unorm');
-    this.blitPipe = fullscreen(BLIT_WGSL, 'blit', this.format);
+    this.scenePipe = fullscreen(SCENE_WGSL, "scene", HDR_FORMAT);
+    this.downPipe = fullscreen(BLOOM_DOWN_WGSL, "bloom-down", HDR_FORMAT);
+    this.upPipe = fullscreen(BLOOM_UP_WGSL, "bloom-up", HDR_FORMAT, additive);
+    this.compositePipe = fullscreen(COMPOSITE_WGSL, "composite", "rgba8unorm");
+    this.blitPipe = fullscreen(BLIT_WGSL, "blit", this.format);
 
-    const drawModule = module(PARTICLE_DRAW_WGSL, 'particles-draw');
+    const drawModule = module(PARTICLE_DRAW_WGSL, "particles-draw");
     this.particleDrawPipe = d.createRenderPipeline({
-      label: 'particles-draw',
-      layout: 'auto',
-      vertex: { module: drawModule, entryPoint: 'vs_main' },
+      label: "particles-draw",
+      layout: "auto",
+      vertex: { module: drawModule, entryPoint: "vs_main" },
       fragment: {
         module: drawModule,
-        entryPoint: 'fs_main',
+        entryPoint: "fs_main",
         targets: [{ format: HDR_FORMAT, blend: additive }],
       },
-      primitive: { topology: 'triangle-list' },
+      primitive: { topology: "triangle-list" },
     });
 
     const overlayVertexLayout: GPUVertexBufferLayout[] = [
       {
         arrayStride: OVERLAY_STRIDE * 4,
         attributes: [
-          { shaderLocation: 0, offset: 0, format: 'float32x2' },
-          { shaderLocation: 1, offset: 8, format: 'float32' },
+          { shaderLocation: 0, offset: 0, format: "float32x2" },
+          { shaderLocation: 1, offset: 8, format: "float32" },
         ],
       },
     ];
@@ -335,38 +374,69 @@ export class GpuRenderer implements SceneRenderer {
       const m = module(code, label);
       return d.createRenderPipeline({
         label,
-        layout: 'auto',
+        layout: "auto",
         vertex: {
           module: m,
-          entryPoint: 'vs_main',
+          entryPoint: "vs_main",
           buffers: [{ ...overlayVertexLayout[0], stepMode }],
         },
         fragment: {
           module: m,
-          entryPoint: 'fs_main',
+          entryPoint: "fs_main",
           targets: [{ format: HDR_FORMAT, blend: additive }],
         },
         primitive: { topology },
       });
     };
-    this.overlayLinePipe = overlayPipe(OVERLAY_LINES_WGSL, 'overlay-lines', 'line-list', 'vertex');
+    this.overlayLinePipe = overlayPipe(
+      OVERLAY_LINES_WGSL,
+      "overlay-lines",
+      "line-list",
+      "vertex",
+    );
     this.overlayPointPipe = overlayPipe(
       OVERLAY_POINTS_WGSL,
-      'overlay-points',
-      'triangle-list',
-      'instance',
+      "overlay-points",
+      "triangle-list",
+      "instance",
     );
 
-    const computeModule = module(PARTICLE_COMPUTE_WGSL, 'particles-step');
+    const computeModule = module(PARTICLE_COMPUTE_WGSL, "particles-step");
+    // One explicit layout for both entry points: `'auto'` would only include
+    // the bindings each entry point touches, and the seed pass reads two of
+    // seven, so the shared bind group would not fit it.
+    const simBuffer = (
+      binding: number,
+      type: GPUBufferBindingType,
+    ): GPUBindGroupLayoutEntry => ({
+      binding,
+      visibility: GPUShaderStage.COMPUTE,
+      buffer: { type },
+    });
+    this.simLayout = d.createBindGroupLayout({
+      label: "particles-sim",
+      entries: [
+        simBuffer(0, "uniform"),
+        simBuffer(1, "storage"),
+        simBuffer(2, "read-only-storage"),
+        simBuffer(3, "read-only-storage"),
+        simBuffer(4, "read-only-storage"),
+        simBuffer(5, "read-only-storage"),
+        simBuffer(6, "storage"),
+      ],
+    });
+    const simPipelineLayout = d.createPipelineLayout({
+      bindGroupLayouts: [this.simLayout],
+    });
     this.stepPipe = d.createComputePipeline({
-      label: 'particles-step',
-      layout: 'auto',
-      compute: { module: computeModule, entryPoint: 'step_main' },
+      label: "particles-step",
+      layout: simPipelineLayout,
+      compute: { module: computeModule, entryPoint: "step_main" },
     });
     this.seedPipe = d.createComputePipeline({
-      label: 'particles-seed',
-      layout: 'auto',
-      compute: { module: computeModule, entryPoint: 'seed_main' },
+      label: "particles-seed",
+      layout: simPipelineLayout,
+      compute: { module: computeModule, entryPoint: "seed_main" },
     });
 
     // --- buffers
@@ -376,19 +446,23 @@ export class GpuRenderer implements SceneRenderer {
         size: floats * 4,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
-    this.sceneUniform = uniform(24, 'scene-uniform');
-    this.compositeUniform = uniform(12, 'composite-uniform');
-    this.drawUniform = uniform(DRAW_UNIFORM_FLOATS, 'draw-uniform');
-    this.simUniform = uniform(SIM_UNIFORM_FLOATS, 'sim-uniform');
+    this.sceneUniform = uniform(24, "scene-uniform");
+    this.compositeUniform = uniform(12, "composite-uniform");
+    this.drawUniform = uniform(DRAW_UNIFORM_FLOATS, "draw-uniform");
+    this.simUniform = uniform(SIM_UNIFORM_FLOATS, "sim-uniform");
     // Two buffers, not one: `queue.writeBuffer` lands before the whole encoder
     // is submitted, so a second write would also change the first draw.
-    this.overlayLineUniform = uniform(8, 'overlay-lines-uniform');
-    this.overlayPointUniform = uniform(8, 'overlay-points-uniform');
-    this.downUniforms = Array.from({ length: BLOOM_LEVELS }, (_, i) => uniform(4, `down${i}`));
-    this.upUniforms = Array.from({ length: BLOOM_LEVELS }, (_, i) => uniform(4, `up${i}`));
+    this.overlayLineUniform = uniform(8, "overlay-lines-uniform");
+    this.overlayPointUniform = uniform(8, "overlay-points-uniform");
+    this.downUniforms = Array.from({ length: BLOOM_LEVELS }, (_, i) =>
+      uniform(4, `down${i}`),
+    );
+    this.upUniforms = Array.from({ length: BLOOM_LEVELS }, (_, i) =>
+      uniform(4, `up${i}`),
+    );
 
     this.overlayBuffer = d.createBuffer({
-      label: 'overlay',
+      label: "overlay",
       size: this.overlayVerts.byteLength,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
@@ -398,28 +472,31 @@ export class GpuRenderer implements SceneRenderer {
         size: bytes,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       });
-    this.opsBuffer = storage(MAX_PARTICLE_OPS * PARTICLE_OP_STRIDE * 4, 'ops');
-    this.velUBuffer = storage(FLUID_W * FLUID_H * 4, 'vel-u');
-    this.velVBuffer = storage(FLUID_W * FLUID_H * 4, 'vel-v');
-    this.obstacleBuffer = storage(FLUID_W * FLUID_H * 4, 'obstacle');
+    this.opsBuffer = storage(MAX_PARTICLE_OPS * PARTICLE_OP_STRIDE * 4, "ops");
+    this.velUBuffer = storage(FLUID_W * FLUID_H * 4, "vel-u");
+    this.velVBuffer = storage(FLUID_W * FLUID_H * 4, "vel-v");
+    this.obstacleBuffer = storage(FLUID_W * FLUID_H * 4, "obstacle");
     this.counters = d.createBuffer({
-      label: 'counters',
+      label: "counters",
       size: 8,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC,
+      usage:
+        GPUBufferUsage.STORAGE |
+        GPUBufferUsage.COPY_DST |
+        GPUBufferUsage.COPY_SRC,
     });
     this.counterStaging = d.createBuffer({
-      label: 'counters-read',
+      label: "counters-read",
       size: 8,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
     this.probeStaging = d.createBuffer({
-      label: 'probe-read',
+      label: "probe-read",
       size: PROBE_ROW_BYTES * PROBE,
       usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
     });
 
     this.buildStaticBinds();
-    window.addEventListener('resize', this.onResize);
+    window.addEventListener("resize", this.onResize);
     this.resize();
   }
 
@@ -429,9 +506,9 @@ export class GpuRenderer implements SceneRenderer {
     this.videoTexW = w;
     this.videoTexH = h;
     return this.device.createTexture({
-      label: 'video',
+      label: "video",
       size: { width: w, height: h },
-      format: 'rgba8unorm',
+      format: "rgba8unorm",
       usage:
         GPUTextureUsage.TEXTURE_BINDING |
         GPUTextureUsage.COPY_DST |
@@ -480,7 +557,7 @@ export class GpuRenderer implements SceneRenderer {
       );
       this.particleBuffer?.destroy();
       this.particleBuffer = this.device.createBuffer({
-        label: 'particles',
+        label: "particles",
         size: capacity * PARTICLE_BYTES,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       });
@@ -488,21 +565,20 @@ export class GpuRenderer implements SceneRenderer {
       this.seededCount = 0;
 
       const pool = this.particleBuffer;
-      const simEntries = (layout: GPUBindGroupLayout): GPUBindGroup =>
-        this.device.createBindGroup({
-          layout,
-          entries: [
-            { binding: 0, resource: { buffer: this.simUniform } },
-            { binding: 1, resource: { buffer: pool } },
-            { binding: 2, resource: { buffer: this.velUBuffer } },
-            { binding: 3, resource: { buffer: this.velVBuffer } },
-            { binding: 4, resource: { buffer: this.obstacleBuffer } },
-            { binding: 5, resource: { buffer: this.opsBuffer } },
-            { binding: 6, resource: { buffer: this.counters } },
-          ],
-        });
-      this.stepBind = simEntries(this.stepPipe.getBindGroupLayout(0));
-      this.seedBind = simEntries(this.seedPipe.getBindGroupLayout(0));
+      const simBind = this.device.createBindGroup({
+        layout: this.simLayout,
+        entries: [
+          { binding: 0, resource: { buffer: this.simUniform } },
+          { binding: 1, resource: { buffer: pool } },
+          { binding: 2, resource: { buffer: this.velUBuffer } },
+          { binding: 3, resource: { buffer: this.velVBuffer } },
+          { binding: 4, resource: { buffer: this.obstacleBuffer } },
+          { binding: 5, resource: { buffer: this.opsBuffer } },
+          { binding: 6, resource: { buffer: this.counters } },
+        ],
+      });
+      this.stepBind = simBind;
+      this.seedBind = simBind;
       this.drawBind = this.device.createBindGroup({
         layout: this.particleDrawPipe.getBindGroupLayout(0),
         entries: [
@@ -517,12 +593,18 @@ export class GpuRenderer implements SceneRenderer {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    window.removeEventListener('resize', this.onResize);
+    window.removeEventListener("resize", this.onResize);
     this.scene.dispose();
     for (const level of this.bloom) level.dispose();
     this.frameTarget.dispose();
     this.probeTarget.dispose();
-    for (const tex of [this.dyeTex, this.debugTex, this.noiseTex, this.videoTex]) tex.destroy();
+    for (const tex of [
+      this.dyeTex,
+      this.debugTex,
+      this.noiseTex,
+      this.videoTex,
+    ])
+      tex.destroy();
     this.particleBuffer?.destroy();
     this.particleBuffer = null;
     this.video = null;
@@ -547,10 +629,15 @@ export class GpuRenderer implements SceneRenderer {
       this.canvas.width = w;
       this.canvas.height = h;
     }
-    this.viewScale = clamp(this.canvas.clientWidth / PARTICLE_SIZE_REF_WIDTH, 0.45, 1);
+    this.viewScale = clamp(
+      this.canvas.clientWidth / PARTICLE_SIZE_REF_WIDTH,
+      0.45,
+      1,
+    );
 
     const pixels = w * h;
-    const budgeted = pixels > SCENE_PIXEL_BUDGET ? Math.sqrt(SCENE_PIXEL_BUDGET / pixels) : 1;
+    const budgeted =
+      pixels > SCENE_PIXEL_BUDGET ? Math.sqrt(SCENE_PIXEL_BUDGET / pixels) : 1;
     this.sceneScale = clamp(budgeted * this.qualityScale, MIN_SCENE_SCALE, 1);
     const sw = Math.max(1, Math.round(w * this.sceneScale));
     const sh = Math.max(1, Math.round(h * this.sceneScale));
@@ -586,8 +673,13 @@ export class GpuRenderer implements SceneRenderer {
     ): GPUBindGroup => {
       const entries: GPUBindGroupEntry[] = [];
       let binding = 0;
-      if (uniformBuffer) entries.push({ binding: binding++, resource: { buffer: uniformBuffer } });
-      for (const view of views) entries.push({ binding: binding++, resource: view });
+      if (uniformBuffer)
+        entries.push({
+          binding: binding++,
+          resource: { buffer: uniformBuffer },
+        });
+      for (const view of views)
+        entries.push({ binding: binding++, resource: view });
       entries.push({ binding, resource: this.clampSampler });
       return d.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries });
     };
@@ -596,8 +688,12 @@ export class GpuRenderer implements SceneRenderer {
     this.upBinds = [];
     for (let i = 0; i < this.bloomLevels; i++) {
       const src = i === 0 ? this.scene : this.bloom[i - 1];
-      this.downBinds.push(sampled(this.downPipe, [src.view!], this.downUniforms[i]));
-      this.upBinds.push(sampled(this.upPipe, [this.bloom[i].view!], this.upUniforms[i]));
+      this.downBinds.push(
+        sampled(this.downPipe, [src.view!], this.downUniforms[i]),
+      );
+      this.upBinds.push(
+        sampled(this.upPipe, [this.bloom[i].view!], this.upUniforms[i]),
+      );
     }
     this.compositeBind = sampled(
       this.compositePipe,
@@ -629,7 +725,8 @@ export class GpuRenderer implements SceneRenderer {
 
   /** True when the video texture holds a usable frame. */
   private uploadVideo(v: HTMLVideoElement | null): boolean {
-    if (!v || v.readyState < 2 || v.videoWidth === 0 || v.videoHeight === 0) return false;
+    if (!v || v.readyState < 2 || v.videoWidth === 0 || v.videoHeight === 0)
+      return false;
     if (this.videoTexW !== v.videoWidth || this.videoTexH !== v.videoHeight) {
       this.videoTex.destroy();
       this.videoTex = this.createVideoTexture(v.videoWidth, v.videoHeight);
@@ -669,7 +766,13 @@ export class GpuRenderer implements SceneRenderer {
   private uploadFloats(buffer: GPUBuffer, data: Float32Array): void {
     const floats = Math.min(data.length, buffer.size / 4);
     if (floats <= 0) return;
-    this.device.queue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, floats * 4);
+    this.device.queue.writeBuffer(
+      buffer,
+      0,
+      data.buffer,
+      data.byteOffset,
+      floats * 4,
+    );
   }
 
   // ----------------------------------------------------------------- frame
@@ -683,7 +786,7 @@ export class GpuRenderer implements SceneRenderer {
 
     const encoder = this.device.createCommandEncoder();
 
-    if (frame.mode === 'debug') {
+    if (frame.mode === "debug") {
       this.drawDebug(encoder, frame);
       this.device.queue.submit([encoder.finish()]);
       return;
@@ -692,7 +795,8 @@ export class GpuRenderer implements SceneRenderer {
     const style = STYLES[frame.mode];
     const drawn = frame.sim ? this.stepParticles(encoder, frame.sim, style) : 0;
     this.drawScene(encoder, frame, style, intensity, time);
-    if (drawn > 0) this.drawParticles(encoder, drawn, style, intensity, frame.sim!);
+    if (drawn > 0)
+      this.drawParticles(encoder, drawn, style, intensity, frame.sim!);
     this.drawOverlay(encoder, frame, style);
     this.drawBloom(encoder, style);
     this.drawComposite(encoder, frame, style, intensity);
@@ -707,10 +811,17 @@ export class GpuRenderer implements SceneRenderer {
     view: GPUTextureView,
     pipe: GPURenderPipeline,
     bind: GPUBindGroup,
-    load: GPULoadOp = 'clear',
+    load: GPULoadOp = "clear",
   ): void {
     const p = encoder.beginRenderPass({
-      colorAttachments: [{ view, loadOp: load, storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
+      colorAttachments: [
+        {
+          view,
+          loadOp: load,
+          storeOp: "store",
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+        },
+      ],
     });
     p.setPipeline(pipe);
     p.setBindGroup(0, bind);
@@ -720,14 +831,16 @@ export class GpuRenderer implements SceneRenderer {
 
   private drawDebug(encoder: GPUCommandEncoder, frame: RenderFrame): void {
     const view = this.context.getCurrentTexture().createView();
-    const ok = frame.debug ? this.uploadGrid(this.debugTex, frame.debug) : false;
+    const ok = frame.debug
+      ? this.uploadGrid(this.debugTex, frame.debug)
+      : false;
     if (!ok) {
       const p = encoder.beginRenderPass({
         colorAttachments: [
           {
             view,
-            loadOp: 'clear',
-            storeOp: 'store',
+            loadOp: "clear",
+            storeOp: "store",
             clearValue: { r: 0.03, g: 0.035, b: 0.05, a: 1 },
           },
         ],
@@ -744,7 +857,11 @@ export class GpuRenderer implements SceneRenderer {
    * Advances the pool: uploads the fluid, the obstacle and the op log, then one
    * compute pass per frame. Returns the particles that are worth drawing.
    */
-  private stepParticles(encoder: GPUCommandEncoder, sim: GpuSimFrame, style: ModeStyle): number {
+  private stepParticles(
+    encoder: GPUCommandEncoder,
+    sim: GpuSimFrame,
+    style: ModeStyle,
+  ): number {
     const active = Math.min(MAX_PARTICLES, Math.max(0, Math.floor(sim.active)));
     if (active === 0 || sim.gridW < 2 || sim.gridH < 2) return 0;
     if (!this.ensurePool(active)) return 0;
@@ -763,7 +880,7 @@ export class GpuRenderer implements SceneRenderer {
       if (this.obstacleBuffer.size < bytes) {
         this.obstacleBuffer.destroy();
         this.obstacleBuffer = this.device.createBuffer({
-          label: 'obstacle',
+          label: "obstacle",
           size: Math.ceil(bytes / 256) * 256,
           usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
@@ -774,7 +891,10 @@ export class GpuRenderer implements SceneRenderer {
       this.uploadFloats(this.obstacleBuffer, sim.obstacle);
     }
 
-    const opCount = Math.min(MAX_PARTICLE_OPS, Math.max(0, Math.floor(sim.opCount)));
+    const opCount = Math.min(
+      MAX_PARTICLE_OPS,
+      Math.max(0, Math.floor(sim.opCount)),
+    );
     if (opCount > 0) {
       this.device.queue.writeBuffer(
         this.opsBuffer,
@@ -831,7 +951,7 @@ export class GpuRenderer implements SceneRenderer {
     this.device.queue.writeBuffer(this.counters, 0, this.zeroCounters);
 
     const groups = Math.ceil(active / STEP_WORKGROUP);
-    const pass = encoder.beginComputePass({ label: 'particles' });
+    const pass = encoder.beginComputePass({ label: "particles" });
     if (this.seededCount < active) {
       // A fresh or grown pool: scatter it once, exactly as `seed_uniform` does.
       pass.setPipeline(this.seedPipe);
@@ -862,15 +982,23 @@ export class GpuRenderer implements SceneRenderer {
       style.camTint[0] + style.camTint[1] + style.camTint[2] > 0 ||
       style.camEdge[0] + style.camEdge[1] + style.camEdge[2] > 0;
     const wantCamera =
-      camUsed && (frame.mode === 'camera' || frame.mode === 'blend' || frame.showCamera);
+      camUsed &&
+      (frame.mode === "camera" || frame.mode === "blend" || frame.showCamera);
     const v = frame.video ?? this.video;
     const hasVideo = wantCamera && this.uploadVideo(v);
 
-    const canvasAspect = Math.max(1e-6, this.canvas.width / Math.max(1, this.canvas.height));
+    const canvasAspect = Math.max(
+      1e-6,
+      this.canvas.width / Math.max(1, this.canvas.height),
+    );
     const videoAspect =
-      hasVideo && v && v.videoHeight > 0 ? v.videoWidth / v.videoHeight : canvasAspect;
-    const camScaleX = videoAspect > canvasAspect ? canvasAspect / videoAspect : 1;
-    const camScaleY = videoAspect > canvasAspect ? 1 : videoAspect / canvasAspect;
+      hasVideo && v && v.videoHeight > 0
+        ? v.videoWidth / v.videoHeight
+        : canvasAspect;
+    const camScaleX =
+      videoAspect > canvasAspect ? canvasAspect / videoAspect : 1;
+    const camScaleY =
+      videoAspect > canvasAspect ? 1 : videoAspect / canvasAspect;
 
     const s = this.sceneScratch;
     s[0] = FLUID_W;
@@ -923,8 +1051,10 @@ export class GpuRenderer implements SceneRenderer {
     this.device.queue.writeBuffer(this.drawUniform, 0, d);
 
     const p = encoder.beginRenderPass({
-      label: 'particles',
-      colorAttachments: [{ view: this.scene.view!, loadOp: 'load', storeOp: 'store' }],
+      label: "particles",
+      colorAttachments: [
+        { view: this.scene.view!, loadOp: "load", storeOp: "store" },
+      ],
     });
     p.setPipeline(this.particleDrawPipe);
     p.setBindGroup(0, this.drawBind!);
@@ -932,7 +1062,11 @@ export class GpuRenderer implements SceneRenderer {
     p.end();
   }
 
-  private drawOverlay(encoder: GPUCommandEncoder, frame: RenderFrame, style: ModeStyle): void {
+  private drawOverlay(
+    encoder: GPUCommandEncoder,
+    frame: RenderFrame,
+    style: ModeStyle,
+  ): void {
     if (style.overlay <= 0 || !frame.hands) return;
     const mesh = buildHandMesh(frame.hands, this.overlayVerts);
     const vertices = mesh.lineVertices + mesh.pointVertices;
@@ -954,8 +1088,10 @@ export class GpuRenderer implements SceneRenderer {
     u[6] = 1.0;
 
     const p = encoder.beginRenderPass({
-      label: 'overlay',
-      colorAttachments: [{ view: this.scene.view!, loadOp: 'load', storeOp: 'store' }],
+      label: "overlay",
+      colorAttachments: [
+        { view: this.scene.view!, loadOp: "load", storeOp: "store" },
+      ],
     });
     if (mesh.lineVertices > 0) {
       u[1] = 1;
@@ -974,8 +1110,10 @@ export class GpuRenderer implements SceneRenderer {
       u[7] = 1;
       this.device.queue.writeBuffer(this.overlayPointUniform, 0, u);
       const q = encoder.beginRenderPass({
-        label: 'overlay-joints',
-        colorAttachments: [{ view: this.scene.view!, loadOp: 'load', storeOp: 'store' }],
+        label: "overlay-joints",
+        colorAttachments: [
+          { view: this.scene.view!, loadOp: "load", storeOp: "store" },
+        ],
       });
       q.setPipeline(this.overlayPointPipe);
       q.setBindGroup(0, this.overlayPointBind!);
@@ -1012,7 +1150,13 @@ export class GpuRenderer implements SceneRenderer {
       b[2] = 1;
       b[3] = 0;
       this.device.queue.writeBuffer(this.upUniforms[i], 0, b);
-      this.pass(encoder, this.bloom[i - 1].view!, this.upPipe, this.upBinds[i], 'load');
+      this.pass(
+        encoder,
+        this.bloom[i - 1].view!,
+        this.upPipe,
+        this.upBinds[i],
+        "load",
+      );
     }
   }
 
@@ -1030,7 +1174,10 @@ export class GpuRenderer implements SceneRenderer {
     c[4] = style.grade;
     c[5] = this.frameIndex;
     const rush = frame.rush;
-    const power = rush && rush.length >= 4 && Number.isFinite(rush[3]) ? Math.max(0, rush[3]) : 0;
+    const power =
+      rush && rush.length >= 4 && Number.isFinite(rush[3])
+        ? Math.max(0, rush[3])
+        : 0;
     c[6] = power > 0 ? rush![2] : 0;
     c[7] = power;
     // The scene target already holds the image the way the screen shows it, so
@@ -1040,7 +1187,12 @@ export class GpuRenderer implements SceneRenderer {
     c[10] = 0;
     c[11] = 0;
     this.device.queue.writeBuffer(this.compositeUniform, 0, c);
-    this.pass(encoder, this.frameTarget.view!, this.compositePipe, this.compositeBind!);
+    this.pass(
+      encoder,
+      this.frameTarget.view!,
+      this.compositePipe,
+      this.compositeBind!,
+    );
   }
 
   /** Frame texture to the canvas, plus the 16x16 luminance probe. */
@@ -1055,7 +1207,11 @@ export class GpuRenderer implements SceneRenderer {
     this.pass(encoder, this.probeTarget.view!, this.blitPipe, this.probeBind!);
     encoder.copyTextureToBuffer(
       { texture: this.probeTarget.texture! },
-      { buffer: this.probeStaging, bytesPerRow: PROBE_ROW_BYTES, rowsPerImage: PROBE },
+      {
+        buffer: this.probeStaging,
+        bytesPerRow: PROBE_ROW_BYTES,
+        rowsPerImage: PROBE,
+      },
       { width: PROBE, height: PROBE },
     );
   }
@@ -1069,7 +1225,9 @@ export class GpuRenderer implements SceneRenderer {
       void this.counterStaging
         .mapAsync(GPUMapMode.READ)
         .then(() => {
-          const v = new Uint32Array(this.counterStaging.getMappedRange().slice(0));
+          const v = new Uint32Array(
+            this.counterStaging.getMappedRange().slice(0),
+          );
           this.counterStaging.unmap();
           this.alive = v[1];
         })
@@ -1083,7 +1241,9 @@ export class GpuRenderer implements SceneRenderer {
       void this.probeStaging
         .mapAsync(GPUMapMode.READ)
         .then(() => {
-          const px = new Uint8Array(this.probeStaging.getMappedRange().slice(0));
+          const px = new Uint8Array(
+            this.probeStaging.getMappedRange().slice(0),
+          );
           this.probeStaging.unmap();
           let total = 0;
           for (let row = 0; row < PROBE; row++) {
