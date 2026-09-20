@@ -1015,12 +1015,84 @@ input[type='range']::-moz-range-thumb {
 /* The glyph is a filled hand, so the glow comes from the shape itself. */
 .ha-hand {
   fill: currentColor;
+  transform-origin: 50% 65%;
 }
 
-.tut-art svg {
-  width: 84px;
-  height: 84px;
+/* Two stacked frames, rest and pose, cross-fading half a period apart: the card
+   shows the movement into the pose instead of a shape to decode. */
+.ha-f1,
+.ha-f2 {
+  animation: ha-frame 2.6s ease-in-out infinite;
+}
+
+/* Resting state (also what `prefers-reduced-motion` leaves): the taught pose. */
+.ha-f1 {
+  opacity: 0;
+}
+
+.ha-f2 {
+  animation-delay: -1.3s;
+}
+
+@keyframes ha-frame {
+  0%,
+  100% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+
+  12%,
+  42% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  54% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+
+.tut-hand svg {
+  width: 74px;
+  height: 74px;
   filter: drop-shadow(0 0 9px rgba(53, 214, 255, 0.4));
+}
+
+/* The charge ring lives beside the hand, not inside it: the hand drawing is
+   replaced on every step, the ring is not. */
+.tut-art {
+  position: relative;
+}
+
+.tut-hand {
+  display: grid;
+  place-items: center;
+}
+
+.tut-ring {
+  position: absolute;
+  inset: 8px;
+  transform: rotate(-90deg);
+  pointer-events: none;
+}
+
+.tut-ring circle {
+  fill: none;
+  stroke-width: 3.5;
+  stroke-dasharray: 1;
+}
+
+.tut-ring-bg {
+  stroke: rgba(53, 214, 255, 0.14);
+}
+
+.tut-ring-v {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-dashoffset: calc(1 - var(--vn, 0));
+  transition: stroke-dashoffset 90ms linear;
+  filter: drop-shadow(0 0 5px rgba(53, 214, 255, 0.7));
 }
 
 /* Each pose hints at what it does, so the drawing is never quite static. */
@@ -1040,15 +1112,6 @@ input[type='range']::-moz-range-thumb {
 .ha-pop,
 .ha-burst {
   animation: ha-breathe 2.4s ease-in-out infinite;
-}
-
-.ha-spark {
-  fill: currentColor;
-  animation: ha-spark 1.6s ease-in-out infinite;
-}
-
-.ha-arrow {
-  animation: ha-arrow 1.8s ease-in-out infinite;
 }
 
 @keyframes ha-pull {
@@ -1075,27 +1138,15 @@ input[type='range']::-moz-range-thumb {
   }
 }
 
-@keyframes ha-spark {
-  50% {
-    opacity: 0.25;
-  }
-}
-
-@keyframes ha-arrow {
-  50% {
-    transform: translateX(0.5px);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
+  .ha-f1,
+  .ha-f2,
   .ha-pull,
   .ha-push,
   .ha-spin,
   .ha-trail,
   .ha-pop,
-  .ha-burst,
-  .ha-spark,
-  .ha-arrow {
+  .ha-burst {
     animation: none;
   }
 }

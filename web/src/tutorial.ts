@@ -121,7 +121,7 @@ export class GestureTutorial {
   /** Set while the "passed" flash is showing; the next step paints after it. */
   private passUntil = 0;
   private doneAt = 0;
-  private lastPct = '';
+  private lastCharge = -1;
   private autoStarted = remembered();
 
   constructor(
@@ -148,7 +148,13 @@ export class GestureTutorial {
       </header>
       <div class="tut-dots" data-tut-dots></div>
       <div class="tut-body">
-        <span class="tut-art" data-tut-art></span>
+        <span class="tut-art">
+          <svg class="tut-ring" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+            <circle class="tut-ring-bg" cx="50" cy="50" r="45" pathLength="1"/>
+            <circle class="tut-ring-v" cx="50" cy="50" r="45" pathLength="1"/>
+          </svg>
+          <span class="tut-hand" data-tut-art></span>
+        </span>
         <div class="tut-text">
           <b data-tut-hand></b>
           <span class="tut-effect" data-tut-effect></span>
@@ -241,13 +247,13 @@ export class GestureTutorial {
     const charge = this.progress.feed(spells, now);
     if (charge >= 1) {
       this.el.classList.add('is-pass');
-      this.setPct('100%');
+      this.setCharge(1);
       this.markDots(this.progress.index);
       if (this.progress.done) this.paintDone(now + PASS_MS);
       else this.passUntil = now + PASS_MS;
       return;
     }
-    this.setPct(`${Math.round(charge * 100)}%`);
+    this.setCharge(charge);
   }
 
   private paintStep(): void {
@@ -262,7 +268,7 @@ export class GestureTutorial {
     this.how.textContent = HOW_TO[step.spell] ?? '';
     this.setNote('hold the pose until the bar fills');
     this.next.textContent = 'next ›';
-    this.setPct('0%');
+    this.setCharge(0);
   }
 
   private paintDone(at: number): void {
@@ -276,7 +282,7 @@ export class GestureTutorial {
     this.how.textContent = 'the spellbook in the panel shows every sequence';
     this.setNote('press ? for two-hand duets and thrown bolts');
     this.next.textContent = 'done';
-    this.setPct('100%');
+    this.setCharge(1);
   }
 
   /** Steps before `upto` are done, `upto` is current, the rest are ahead. */
@@ -292,9 +298,16 @@ export class GestureTutorial {
     if (this.note.textContent !== text) this.note.textContent = text;
   }
 
-  private setPct(pct: string): void {
-    if (pct === this.lastPct) return;
-    this.lastPct = pct;
-    this.fill.style.setProperty('--v', pct);
+  /**
+   * Charge 0..1 into the bar and the ring around the hand. The ring reads `--vn`
+   * off the card (the hand drawing itself is replaced every step), the bar keeps
+   * its percentage.
+   */
+  private setCharge(charge: number): void {
+    const v = Math.round(charge * 100) / 100;
+    if (v === this.lastCharge) return;
+    this.lastCharge = v;
+    this.fill.style.setProperty('--v', `${v * 100}%`);
+    this.el.style.setProperty('--vn', `${v}`);
   }
 }
