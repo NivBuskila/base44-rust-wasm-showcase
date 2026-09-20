@@ -211,6 +211,7 @@ class App {
       onToggleCamera: (on) => {
         this.showCamera = on;
       },
+      onPractice: (on) => this.engine.set_practice(on),
       onReset: () => {
         this.engine.reset();
         this.views = this.makeViews();
@@ -360,7 +361,7 @@ class App {
       comboProgress: this.engine.combo_progress(),
       duetBook: this.duetBook,
       duetProgress: this.engine.duet_progress(),
-      gunAiming: this.engine.gun_aiming(),
+      hands: stats[STAT.HANDS_PRESENT] > 0 ? this.lastHands : null,
       perception: this.perceptionStatus,
     });
     this.hudMs = performance.now() - hudStart;
@@ -493,7 +494,6 @@ class App {
       mode: this.mode,
       showCamera: this.showCamera && this.cameraAvailable,
       rush: this.engine.rush_state(),
-      gunAim: stats[STAT.HANDS_PRESENT] > 0 ? this.engine.gun_aim() : null,
     };
   }
 

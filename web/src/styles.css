@@ -884,6 +884,544 @@ input[type='range']::-moz-range-thumb {
   color: var(--faint);
 }
 
+/* Gesture tutorial ------------------------------------------------------- */
+
+/* Turns the card into a mode: the live stage stays visible through it, the rest
+   of the interface recedes behind a vignette. */
+.tut-scrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    90deg,
+    rgba(4, 8, 14, 0.9) 0%,
+    rgba(4, 8, 14, 0.7) 26%,
+    rgba(4, 8, 14, 0.12) 52%,
+    rgba(4, 8, 14, 0) 72%
+  );
+  animation: tut-fade 420ms ease both;
+}
+
+@keyframes tut-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.tut {
+  --v: 0%;
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto auto;
+  grid-template-columns: min(420px, 46vw);
+  justify-content: start;
+  gap: 10px;
+  padding: clamp(18px, 4vh, 44px) var(--gut);
+  pointer-events: auto;
+}
+
+.tut.is-in {
+  animation: tut-fade 520ms ease both;
+}
+
+/* Each step arrives as its own cut, staged: numeral, hand, then the words. */
+.tut.is-step .tut-num {
+  animation: tut-num-in 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.tut.is-step .tut-art {
+  animation: tut-cut 720ms cubic-bezier(0.16, 1, 0.3, 1) 90ms both;
+}
+
+.tut.is-step .tut-text > * {
+  animation: tut-cut 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.tut.is-step .tut-text > b {
+  animation-delay: 180ms;
+}
+
+.tut.is-step .tut-text > .tut-effect {
+  animation-delay: 270ms;
+}
+
+.tut.is-step .tut-text > .tut-how {
+  animation-delay: 360ms;
+}
+
+@keyframes tut-cut {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+    filter: blur(8px);
+  }
+}
+
+@keyframes tut-num-in {
+  from {
+    opacity: 0;
+    transform: translate(-0.12em, 0.16em) scale(1.25);
+    filter: blur(14px);
+  }
+}
+
+/* The step number, set oversized behind the lesson: cinematic chapter marker. */
+.tut-num {
+  position: absolute;
+  left: -0.06em;
+  top: -0.3em;
+  font-size: clamp(120px, 26vh, 240px);
+  font-weight: 300;
+  line-height: 0.8;
+  letter-spacing: -0.04em;
+  color: transparent;
+  -webkit-text-stroke: 1px rgba(53, 214, 255, 0.16);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.tut.is-done .tut-num,
+.tut.is-pass .tut-num {
+  -webkit-text-stroke-color: rgba(53, 214, 255, 0.4);
+}
+
+.tut-body > *:not(.tut-num) {
+  position: relative;
+  z-index: 1;
+}
+
+.tut-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 9px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+.tut-tag {
+  color: var(--accent);
+}
+
+.tut-count {
+  flex: 1;
+}
+
+.tut-dots {
+  display: flex;
+  gap: 5px;
+}
+
+.tut-dots i {
+  flex: 1;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--well);
+  transition:
+    background-color 220ms ease,
+    box-shadow 220ms ease;
+}
+
+.tut-dots i.is-done {
+  background: rgba(53, 214, 255, 0.45);
+}
+
+.tut-dots i.is-now {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.tut-body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: clamp(12px, 2.4vh, 22px);
+  text-align: left;
+}
+
+/* The drawn hand: the biggest thing on the card, because it is the lesson. */
+.tut-art {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: clamp(112px, 16vh, 156px);
+  height: clamp(112px, 16vh, 156px);
+  border-radius: 50%;
+  background:
+    radial-gradient(90% 80% at 50% 20%, rgba(53, 214, 255, 0.1), transparent 70%),
+    var(--well);
+  border: 1px solid var(--edge);
+  color: var(--accent);
+}
+
+.ha {
+  transform-origin: 50% 65%;
+}
+
+/* The glyph is a filled hand, so the glow comes from the shape itself. */
+.ha-hand {
+  fill: currentColor;
+  transform-origin: 50% 65%;
+}
+
+/* Two stacked frames, rest and pose, cross-fading half a period apart: the card
+   shows the movement into the pose instead of a shape to decode. */
+.ha-f1,
+.ha-f2 {
+  animation: ha-frame 2.6s ease-in-out infinite;
+}
+
+/* Resting state (also what `prefers-reduced-motion` leaves): the taught pose. */
+.ha-f1 {
+  opacity: 0;
+}
+
+.ha-f2 {
+  animation-delay: -1.3s;
+}
+
+@keyframes ha-frame {
+  0%,
+  100% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+
+  12%,
+  42% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  54% {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+}
+
+/* your hand → the pose to reach, on one row. */
+.tut-pair {
+  display: flex;
+  align-items: center;
+  gap: clamp(6px, 1.2vw, 14px);
+}
+
+.tut-arrow {
+  flex: none;
+  display: grid;
+  place-items: center;
+  align-self: center;
+  color: rgba(53, 214, 255, 0.55);
+}
+
+.tut-arrow svg {
+  width: clamp(22px, 3.4vh, 34px);
+  height: clamp(22px, 3.4vh, 34px);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  animation: tut-arrow-run 1.8s ease-in-out infinite;
+}
+
+@keyframes tut-arrow-run {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: translateX(-3px);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateX(3px);
+  }
+}
+
+/* The taught pose: the same skeleton drawing, in the same round tile. */
+.tut-goal {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: clamp(92px, 13vh, 128px);
+  height: clamp(92px, 13vh, 128px);
+  border-radius: 50%;
+  background: var(--well);
+  border: 1px solid var(--edge);
+}
+
+.tut-goal-art {
+  position: absolute;
+  inset: 14%;
+  overflow: visible;
+  fill: none;
+}
+
+.tut-goal-art .tut-mirror-line {
+  stroke: var(--accent);
+  stroke-width: 1.4;
+  filter: drop-shadow(0 0 5px rgba(53, 214, 255, 0.5));
+}
+
+.tut.is-step .tut-goal,
+.tut.is-step .tut-arrow {
+  animation: tut-cut 720ms cubic-bezier(0.16, 1, 0.3, 1) 150ms both;
+}
+
+/* The live pose mirror: the caster's own skeleton over the taught glyph. */
+.tut-mirror {
+  position: absolute;
+  inset: 16%;
+  overflow: visible;
+  opacity: 0;
+  fill: none;
+  transition: opacity 260ms ease;
+  pointer-events: none;
+}
+
+.tut-mirror.is-live {
+  opacity: 1;
+}
+
+.tut-mirror-line {
+  stroke: #fff;
+  stroke-width: 1.1;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.55));
+}
+
+/* The hold timer: the same skeleton in accent blue, revealed wrist-upwards. */
+.tut-mirror-fill {
+  stroke: var(--accent);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 7px var(--accent));
+}
+
+.tut-mirror-wrist {
+  fill: var(--accent);
+  filter: drop-shadow(0 0 6px var(--accent));
+}
+
+/* Pose matched: the skeleton itself lights up in the accent. */
+.tut.is-pass .tut-mirror-line,
+.tut.is-done .tut-mirror-line {
+  stroke: var(--accent);
+  filter: drop-shadow(0 0 8px var(--accent));
+}
+
+.tut-hand svg {
+  width: clamp(70px, 10vh, 100px);
+  height: clamp(70px, 10vh, 100px);
+  filter: drop-shadow(0 0 9px rgba(53, 214, 255, 0.4));
+}
+
+/* The charge ring lives beside the hand, not inside it: the hand drawing is
+   replaced on every step, the ring is not. */
+.tut-art {
+  position: relative;
+}
+
+.tut-hand {
+  display: grid;
+  place-items: center;
+}
+
+.tut-ring {
+  position: absolute;
+  inset: 8px;
+  transform: rotate(-90deg);
+  pointer-events: none;
+}
+
+.tut-ring circle {
+  fill: none;
+  stroke-width: 3.5;
+  stroke-dasharray: 1;
+}
+
+.tut-ring-bg {
+  stroke: rgba(53, 214, 255, 0.14);
+}
+
+.tut-ring-v {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-dashoffset: calc(1 - var(--vn, 0));
+  transition: stroke-dashoffset 90ms linear;
+  filter: drop-shadow(0 0 5px rgba(53, 214, 255, 0.7));
+}
+
+/* Each pose hints at what it does, so the drawing is never quite static. */
+.ha-pull {
+  animation: ha-pull 2.6s ease-in-out infinite;
+}
+
+.ha-push {
+  animation: ha-push 2.6s ease-in-out infinite;
+}
+
+.ha-spin {
+  animation: ha-spin 3.4s ease-in-out infinite;
+}
+
+.ha-trail,
+.ha-pop,
+.ha-burst {
+  animation: ha-breathe 2.4s ease-in-out infinite;
+}
+
+@keyframes ha-pull {
+  50% {
+    transform: scale(0.94);
+  }
+}
+
+@keyframes ha-push {
+  50% {
+    transform: scale(1.06);
+  }
+}
+
+@keyframes ha-spin {
+  50% {
+    transform: rotate(-9deg);
+  }
+}
+
+@keyframes ha-breathe {
+  50% {
+    opacity: 0.72;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ha-f1,
+  .ha-f2,
+  .ha-pull,
+  .ha-push,
+  .ha-spin,
+  .ha-trail,
+  .ha-pop,
+  .ha-burst {
+    animation: none;
+  }
+}
+
+.tut-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 30ch;
+}
+
+.tut-text b {
+  font-size: clamp(26px, 4.4vh, 40px);
+  font-weight: 300;
+  letter-spacing: 0.14em;
+  text-transform: lowercase;
+  line-height: 1;
+  color: var(--ink);
+  text-shadow: 0 0 26px rgba(53, 214, 255, 0.35);
+}
+
+.tut-effect {
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.tut-how {
+  font-size: 14px;
+  line-height: 1.6;
+  letter-spacing: 0.02em;
+  color: var(--dim);
+}
+
+.tut-btn {
+  flex: none;
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  color: var(--dim);
+  font: inherit;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    color 150ms ease,
+    border-color 150ms ease;
+}
+
+.tut-btn:hover,
+.tut-btn:focus-visible {
+  color: var(--ink);
+  border-color: var(--edge-hi);
+  outline: none;
+}
+
+.tut-track {
+  width: 100%;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--well);
+  overflow: hidden;
+}
+
+.tut-fill {
+  display: block;
+  height: 100%;
+  width: var(--v);
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 80ms linear;
+}
+
+.tut.is-pass .tut-fill,
+.tut.is-done .tut-fill {
+  box-shadow: 0 0 10px var(--accent);
+}
+
+.tut-foot {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.tut-dots {
+  margin-top: 10px;
+}
+
+.tut-note {
+  flex: 1;
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* A hand in frame: the note brightens, so "is the camera seeing me" is answered
+   before the pose is even right. */
+.tut.is-seen .tut-note {
+  color: var(--dim);
+}
+
+#hud.is-hidden .tut,
+#hud.is-hidden .tut-scrim {
+  display: none;
+}
+
 /* Help sheet ------------------------------------------------------------- */
 
 .hud-help {

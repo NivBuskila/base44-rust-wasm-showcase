@@ -1,0 +1,344 @@
+/**
+ * Interactive gesture tutorial.
+ *
+ * Walks through the single-hand spells one at a time and advances only when the
+ * engine itself reports the spell latched — the card teaches what the recogniser
+ * accepts, not what a drawing suggests. Each step is passed by holding the spell
+ * for {@link HOLD_MS}; `release` is a one-frame event in `spells.rs`, so it
+ * passes on sight.
+ *
+ * It is a *mode*, not a tooltip: opening it dims the stage, brings up a large
+ * drawn hand for the pose (`hand-art.ts`), and puts the engine into practice
+ * mode through {@link TutorialCallbacks.onMode} so that going from one taught
+ * pose straight into the next cannot cast a combo. Nothing is asked of the
+ * caster between steps — no resting, no lowering the hand.
+ *
+ * Starts on its own the first time a hand is seen in a session that has never
+ * finished it (remembered in `localStorage`), and can be reopened from the panel
+ * or `T` at any time. Everything here is presentation: the spell names come
+ * straight from `AetherEngine.spell_name`.
+ */
+
+import { HandMirror } from './hand-mirror';
+import { GoalPose } from './goal-pose';
+import { HandSkeleton } from './hand-skeleton';
+import type { GestureSpec } from './hud-spec';
+import { HOW_TO, STEPS } from './tutorial-steps';
+
+export { STEPS };
+
+/** How long a spell must stay latched before the step is passed. */
+export const HOLD_MS = 700;
+/** The "passed" flash before the next step slides in. */
+const PASS_MS = 650;
+/** How long the completion card lingers before closing itself. */
+const DONE_MS = 6000;
+const STORAGE_KEY = 'aether.tutorial.done';
+
+/** What the tutorial needs from its host while it is open. */
+export interface TutorialCallbacks {
+  /**
+   * Called on every open and close. The app puts the engine into practice mode
+   * (`set_practice`) so single poses still cast but sequences and duets do not.
+   */
+  onMode(active: boolean): void;
+}
+
+function remembered(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function remember(): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, '1');
+  } catch {
+    /* private mode: the tutorial simply offers itself again next time */
+  }
+}
+
+/**
+ * Pure step logic, separate from the DOM so it can be unit-tested: feeds the
+ * current spell names and returns the charge through the current step.
+ */
+export class TutorialProgress {
+  index = 0;
+  /** `performance.now()` when the current spell was first seen; null when not held. */
+  private heldSince: number | null = null;
+
+  constructor(private readonly steps: readonly GestureSpec[] = STEPS) {}
+
+  get step(): GestureSpec | undefined {
+    return this.steps[this.index];
+  }
+
+  get done(): boolean {
+    return this.index >= this.steps.length;
+  }
+
+  /** Charge 0..1; `1` means the step just passed and `index` has advanced. */
+  feed(spells: readonly string[], now: number): number {
+    const step = this.step;
+    if (!step) return 1;
+    const latched = spells.includes(step.spell);
+    if (!latched) {
+      this.heldSince = null;
+      return 0;
+    }
+    if (step.spell === 'release') return this.pass();
+    if (this.heldSince === null) this.heldSince = now;
+    const t = (now - this.heldSince) / HOLD_MS;
+    return t >= 1 ? this.pass() : t;
+  }
+
+  skip(): void {
+    this.heldSince = null;
+    this.index++;
+  }
+
+  private pass(): number {
+    this.skip();
+    return 1;
+  }
+}
+
+export class GestureTutorial {
+  private readonly el: HTMLElement;
+  private readonly scrim: HTMLElement;
+  private readonly count: HTMLElement;
+  private readonly dots: HTMLElement;
+  private readonly num: HTMLElement;
+  private readonly hand: HTMLElement;
+  private readonly mirror: HandMirror;
+  private readonly goal: GoalPose;
+  private readonly effect: HTMLElement;
+  private readonly how: HTMLElement;
+  private readonly fill: HTMLElement;
+  private readonly note: HTMLElement;
+  private readonly next: HTMLButtonElement;
+
+  private progress = new TutorialProgress();
+  private on = false;
+  /** Set while the "passed" flash is showing; the next step paints after it. */
+  private passUntil = 0;
+  private doneAt = 0;
+  private lastCharge = -1;
+  private autoStarted = remembered();
+
+  constructor(
+    parent: HTMLElement,
+    private readonly cb: TutorialCallbacks = { onMode: () => {} },
+  ) {
+    // The scrim is what turns the card into a mode: the stage stays visible and
+    // live behind it (the caster has to see what the pose does) but everything
+    // else recedes.
+    this.scrim = document.createElement('div');
+    this.scrim.className = 'tut-scrim';
+    this.scrim.hidden = true;
+    parent.appendChild(this.scrim);
+
+    this.el = document.createElement('aside');
+    this.el.className = 'tut';
+    this.el.hidden = true;
+    this.el.setAttribute('aria-live', 'polite');
+    this.el.innerHTML = `
+      <header class="tut-head">
+        <span class="tut-tag">tutorial</span>
+        <span class="tut-count" data-tut-count></span>
+        <button type="button" class="tut-btn" data-tut="skip">skip all</button>
+      </header>
+      <div class="tut-dots" data-tut-dots></div>
+      <div class="tut-body">
+        <b class="tut-num" data-tut-num aria-hidden="true"></b>
+        <div class="tut-pair">
+          <span class="tut-art">
+            <svg class="tut-ring" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+              <circle class="tut-ring-bg" cx="50" cy="50" r="45" pathLength="1"/>
+              <circle class="tut-ring-v" cx="50" cy="50" r="45" pathLength="1"/>
+            </svg>
+          </span>
+          <span class="tut-arrow" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false"><path d="M3 12h15m0 0-6-6m6 6-6 6"/></svg>
+          </span>
+          <span class="tut-goal"></span>
+        </div>
+        <div class="tut-text">
+          <b data-tut-hand></b>
+          <span class="tut-effect" data-tut-effect></span>
+          <span class="tut-how" data-tut-how></span>
+        </div>
+      </div>
+      <div class="tut-track"><i class="tut-fill" data-tut-fill></i></div>
+      <footer class="tut-foot">
+        <span class="tut-note" data-tut-note></span>
+        <button type="button" class="tut-btn" data-tut="next">next ›</button>
+      </footer>`;
+    parent.appendChild(this.el);
+    this.count = this.el.querySelector('[data-tut-count]')!;
+    this.dots = this.el.querySelector('[data-tut-dots]')!;
+    this.num = this.el.querySelector('[data-tut-num]')!;
+    // Your hand, then the pose to reach — the same drawing twice, so the lesson
+    // is a comparison rather than two graphic languages side by side.
+    this.mirror = new HandMirror(this.el.querySelector('.tut-art')!);
+    this.goal = new GoalPose(
+      new HandSkeleton(this.el.querySelector('.tut-goal')!, { className: 'tut-goal-art' }),
+    );
+    this.hand = this.el.querySelector('[data-tut-hand]')!;
+    this.effect = this.el.querySelector('[data-tut-effect]')!;
+    this.how = this.el.querySelector('[data-tut-how]')!;
+    this.fill = this.el.querySelector('[data-tut-fill]')!;
+    this.note = this.el.querySelector('[data-tut-note]')!;
+    this.next = this.el.querySelector('[data-tut="next"]')!;
+    this.dots.innerHTML = STEPS.map(() => '<i></i>').join('');
+
+    this.el.querySelector('[data-tut="skip"]')!.addEventListener('click', () => this.stop());
+    this.next.addEventListener('click', () => {
+      if (this.progress.done) {
+        this.stop();
+        return;
+      }
+      this.progress.skip();
+      if (this.progress.done) this.paintDone(performance.now());
+      else this.paintStep();
+    });
+  }
+
+  get active(): boolean {
+    return this.on;
+  }
+
+  start(): void {
+    this.progress = new TutorialProgress();
+    this.passUntil = 0;
+    this.doneAt = 0;
+    this.on = true;
+    this.autoStarted = true;
+    this.scrim.hidden = false;
+    this.el.hidden = false;
+    this.el.classList.remove('is-in');
+    void this.el.offsetWidth;
+    this.el.classList.add('is-in');
+    this.paintStep();
+    this.cb.onMode(true);
+  }
+
+  /** Closes the card. Finishing or dismissing both count as "seen". */
+  stop(): void {
+    if (this.on) this.cb.onMode(false);
+    this.goal.stop();
+    this.on = false;
+    this.el.hidden = true;
+    this.scrim.hidden = true;
+    remember();
+  }
+
+  toggle(): void {
+    if (this.on) this.stop();
+    else this.start();
+  }
+
+  /**
+   * Once per frame. `hands` is the engine's `HANDS_PRESENT` stat, used only to
+   * start the tutorial the first time someone actually shows a hand.
+   */
+  update(spells: readonly string[], hands: number, now: number, landmarks: Float32Array | null = null): void {
+    if (!this.on) {
+      if (!this.autoStarted && hands > 0) this.start();
+      return;
+    }
+    this.mirror.update(landmarks);
+    if (this.progress.done) {
+      if (this.doneAt > 0 && now - this.doneAt > DONE_MS) this.stop();
+      return;
+    }
+    if (this.passUntil > 0) {
+      if (now < this.passUntil) return;
+      this.passUntil = 0;
+      this.paintStep();
+    }
+    // "Seen" is worth showing on its own: a hand in frame with no pose latched
+    // is the moment the caster wonders whether the camera is working at all.
+    this.el.classList.toggle('is-seen', hands > 0);
+    const charge = this.progress.feed(spells, now);
+    if (charge >= 1) {
+      this.el.classList.add('is-pass');
+      this.setCharge(1);
+      this.markDots(this.progress.index);
+      if (this.progress.done) this.paintDone(now + PASS_MS);
+      else this.passUntil = now + PASS_MS;
+      return;
+    }
+    this.setCharge(charge);
+  }
+
+  private paintStep(): void {
+    const step = this.progress.step;
+    if (!step) return;
+    this.el.classList.remove('is-pass', 'is-done', 'is-step');
+    // Re-trigger the per-step entrance: each step is its own cut.
+    void this.el.offsetWidth;
+    this.el.classList.add('is-step');
+    this.count.textContent = `${this.progress.index + 1} / ${STEPS.length}`;
+    this.num.textContent = String(this.progress.index + 1).padStart(2, '0');
+    this.markDots(this.progress.index);
+    this.paintGoal(step.spell);
+    this.hand.textContent = step.hand;
+    this.effect.textContent = `${step.spell} · ${step.effect}`;
+    this.how.textContent = HOW_TO[step.spell] ?? '';
+    this.setNote('hold the pose until your hand fills');
+    this.next.textContent = 'next ›';
+    this.setCharge(0);
+  }
+
+  private paintDone(at: number): void {
+    this.doneAt = at;
+    this.el.classList.remove('is-step');
+    void this.el.offsetWidth;
+    this.el.classList.add('is-done', 'is-step');
+    this.count.textContent = `${STEPS.length} / ${STEPS.length}`;
+    this.num.textContent = '\u2713';
+    this.markDots(STEPS.length);
+    this.paintGoal('release');
+    this.hand.textContent = 'you know the spells';
+    this.effect.textContent = 'combos are live again — chain the poses together';
+    this.how.textContent = 'the spellbook in the panel shows every sequence';
+    this.setNote('press ? for two-hand duets and thrown bolts');
+    this.next.textContent = 'done';
+    this.setCharge(1);
+  }
+
+  /** Draws the taught pose in the target tile, in the same skeleton language. */
+  private paintGoal(spell: string): void {
+    this.goal.show(spell);
+  }
+
+  /** Steps before `upto` are done, `upto` is current, the rest are ahead. */
+  private markDots(upto: number): void {
+    const dots = this.dots.children;
+    for (let i = 0; i < dots.length; i++) {
+      const cls = i < upto ? 'is-done' : i === upto ? 'is-now' : '';
+      if (dots[i].className !== cls) dots[i].className = cls;
+    }
+  }
+
+  private setNote(text: string): void {
+    if (this.note.textContent !== text) this.note.textContent = text;
+  }
+
+  /**
+   * Charge 0..1 into the bar and the ring around the hand. The ring reads `--vn`
+   * off the card (the hand drawing itself is replaced every step), the bar keeps
+   * its percentage.
+   */
+  private setCharge(charge: number): void {
+    const v = Math.round(charge * 100) / 100;
+    if (v === this.lastCharge) return;
+    this.lastCharge = v;
+    this.fill.style.setProperty('--v', `${v * 100}%`);
+    this.el.style.setProperty('--vn', `${v}`);
+    this.mirror.setCharge(v);
+  }
+}

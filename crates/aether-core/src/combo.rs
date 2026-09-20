@@ -199,7 +199,11 @@ impl ComboTracker {
     /// first match wins there. Both hands may land together, which is what makes
     /// a two-handed cast possible.
     pub fn update(&mut self, tracker: &GestureTracker, dt: f32) -> [Option<ComboHit>; HANDS] {
-        let dt = if dt.is_finite() { dt.clamp(0.0, 0.25) } else { 0.0 };
+        let dt = if dt.is_finite() {
+            dt.clamp(0.0, 0.25)
+        } else {
+            0.0
+        };
         if self.show > 0.0 {
             self.show -= dt;
             if self.show <= 0.0 {

@@ -223,11 +223,7 @@ class Section {
  * than latched spells, so the engine has no book for them; the instructions
  * are static and are never painted with progress.
  */
-const SHOTS_BOOK = 'throw:palm,flick;gun:finger gun,thumb down';
-
-/** Index of the gun row inside {@link SHOTS_BOOK}. */
-const GUN_ROW = 1;
-
+const SHOTS_BOOK = 'throw:palm,flick';
 export class ComboBook {
   private readonly el: HTMLElement;
   private readonly sequences = new Section('sequences', parseBook);
@@ -267,15 +263,8 @@ export class ComboBook {
   }
 
   /** Paints one frame of progress. */
-  update(
-    combos: ComboState,
-    duets: DuetState = duetState(undefined),
-    gunAiming = false,
-  ): void {
-    // The gun row lights while the pose is held, so a pose the recogniser did
-    // not accept is visibly different from a trigger pull that fired nothing.
-    // Row 1 of the static shots book is the gun; -1 is "no row active".
-    this.shots.paint(gunAiming ? GUN_ROW : -1, 0, 0, -1);
+  update(combos: ComboState, duets: DuetState = duetState(undefined)): void {
+    this.shots.paint(-1, 0, 0, -1);
     this.sequences.paint(combos.active, combos.matched, combos.charge, combos.fired);
     // A duet has no step counter: the whole wind-up is the charge on its last
     // step, and every step before it is shown done, because the caster is
