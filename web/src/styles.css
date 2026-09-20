@@ -1103,6 +1103,57 @@ input[type='range']::-moz-range-thumb {
   }
 }
 
+/* your hand → the pose to reach: the arrow says which way the lesson runs. */
+.tut-arrow {
+  flex: none;
+  display: grid;
+  place-items: center;
+  align-self: center;
+  color: rgba(53, 214, 255, 0.55);
+}
+
+.tut-arrow svg {
+  width: clamp(22px, 3.4vh, 34px);
+  height: clamp(22px, 3.4vh, 34px);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  animation: tut-arrow-run 1.8s ease-in-out infinite;
+}
+
+@keyframes tut-arrow-run {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: translateX(-3px);
+  }
+
+  50% {
+    opacity: 1;
+    transform: translateX(3px);
+  }
+}
+
+/* The taught pose, drawn: the target beside the live hand. */
+.tut-goal {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: clamp(96px, 13vh, 132px);
+  height: clamp(96px, 13vh, 132px);
+  border-radius: 50%;
+  background: var(--well);
+  border: 1px solid var(--edge);
+  color: var(--accent);
+}
+
+.tut.is-step .tut-goal,
+.tut.is-step .tut-arrow {
+  animation: tut-cut 720ms cubic-bezier(0.16, 1, 0.3, 1) 150ms both;
+}
+
 /* The live pose mirror: the caster's own skeleton over the taught glyph. */
 .tut-mirror {
   position: absolute;
