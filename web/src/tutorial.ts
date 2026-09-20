@@ -7,6 +7,12 @@
  * holding the spell for {@link HOLD_MS}; `release` is a one-frame event in
  * `spells.rs`, so it passes on sight.
  *
+ * Between two steps the hand must go back to rest (no spell on either hand for
+ * {@link CLEAR_MS}) before the next step starts charging, and the order is
+ * chosen so no two consecutive steps are the opening of a combo in
+ * `combo.rs` — otherwise learning "fist" then "open palm" casts nova by
+ * accident and the lesson reads as a bug.
+ *
  * Starts on its own the first time a hand is seen in a session that has never
  * finished it (remembered in `localStorage`), and can be reopened from the
  * panel or `T` at any time. Everything here is presentation: the spell names
@@ -23,8 +29,28 @@ const PASS_MS = 650;
 const DONE_MS = 6000;
 const STORAGE_KEY = 'aether.tutorial.done';
 
-/** Warp is two-handed and read from the time scale, not a spell name. */
-export const STEPS: readonly GestureSpec[] = GESTURES.filter((g) => g.spell !== 'warp');
+/** How long the hand must rest between two steps before the next one arms. */
+export const CLEAR_MS = 450;
+
+/**
+ * Teaching order. Warp is two-handed and read from the time scale, not a spell
+ * name, so it is left to the reference sheet. The rest are ordered so that no
+ * step follows another in a way that opens a combo (`attract,repel` = nova,
+ * `repel,vortex` = tempest, `attract,freeze,...` = supernova).
+ */
+const ORDER: readonly string[] = [
+  'attract',
+  'vortex',
+  'ignite',
+  'shatter',
+  'freeze',
+  'repel',
+  'release',
+];
+
+export const STEPS: readonly GestureSpec[] = ORDER.map(
+  (spell) => GESTURES.find((g) => g.spell === spell)!,
+);
 
 function svg(paths: string): string {
   return (
@@ -58,6 +84,9 @@ export class TutorialProgress {
   index = 0;
   /** `performance.now()` when the current spell was first seen; null when not held. */
   private heldSince: number | null = null;
+  /** Set after a step passes: the hand has to rest before the next one arms. */
+  private restSince: number | null = null;
+  private waitingForRest = false;
 
   constructor(private readonly steps: readonly GestureSpec[] = STEPS) {}
 
@@ -69,10 +98,28 @@ export class TutorialProgress {
     return this.index >= this.steps.length;
   }
 
+  /** True while the card is asking for the hand to go back to rest. */
+  get resting(): boolean {
+    return this.waitingForRest;
+  }
+
   /** Charge 0..1; `1` means the step just passed and `index` has advanced. */
   feed(spells: readonly string[], now: number): number {
     const step = this.step;
     if (!step) return 1;
+    if (this.waitingForRest) {
+      // Any spell still latched keeps the gate shut: a hand going straight from
+      // one taught shape into the next is exactly what casts a combo.
+      const quiet = !spells.some((s) => s && s !== 'idle');
+      if (!quiet) {
+        this.restSince = null;
+        return 0;
+      }
+      if (this.restSince === null) this.restSince = now;
+      if (now - this.restSince < CLEAR_MS) return 0;
+      this.waitingForRest = false;
+      this.restSince = null;
+    }
     const latched = spells.includes(step.spell);
     if (!latched) {
       this.heldSince = null;
@@ -86,11 +133,14 @@ export class TutorialProgress {
 
   skip(): void {
     this.heldSince = null;
+    this.restSince = null;
+    this.waitingForRest = false;
     this.index++;
   }
 
   private pass(): number {
     this.skip();
+    this.waitingForRest = true;
     return 1;
   }
 }
@@ -203,6 +253,7 @@ export class GestureTutorial {
       this.paintStep();
     }
     const charge = this.progress.feed(spells, now);
+    if (this.progress.resting) this.setNote('let your hand rest, then the next pose arms');
     if (charge >= 1) {
       this.el.classList.add('is-pass');
       this.setPct('100%');
@@ -221,10 +272,11 @@ export class GestureTutorial {
     this.icon.innerHTML = svg(step.icon);
     this.hand.textContent = step.hand;
     this.effect.textContent = `${step.spell} · ${step.effect}`;
-    this.note.textContent =
+    this.setNote(
       step.spell === 'release'
         ? 'make a fist, hold it a moment, then open it'
-        : 'show one hand to the camera and hold the pose';
+        : 'relax your hand, then show this pose on its own and hold it',
+    );
     this.next.textContent = 'next ›';
     this.setPct('0%');
   }
@@ -235,9 +287,13 @@ export class GestureTutorial {
     this.count.textContent = `${STEPS.length} / ${STEPS.length}`;
     this.hand.textContent = 'you know the spells';
     this.effect.textContent = 'chain them into combos — the book is in the panel';
-    this.note.textContent = 'press ? for two-hand duets, throws and the finger gun';
+    this.note.textContent = 'press ? for two-hand duets and thrown bolts';
     this.next.textContent = 'done';
     this.setPct('100%');
+  }
+
+  private setNote(text: string): void {
+    if (this.note.textContent !== text) this.note.textContent = text;
   }
 
   private setPct(pct: string): void {
