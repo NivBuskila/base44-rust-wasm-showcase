@@ -239,7 +239,7 @@ export class Hud {
     // the component, so an unchanged sequence costs nothing.
     if (s.comboBook) this.combos.setBook(s.comboBook);
     if (s.duetBook) this.combos.setDuetBook(s.duetBook);
-    this.combos.update(comboState(s.comboProgress), duetState(s.duetProgress), s.gunAiming === true);
+    this.combos.update(comboState(s.comboProgress), duetState(s.duetProgress));
     // Every frame too: its hold bar is the feedback that the pose is being read.
     this.tutorial.update(s.spells ?? [], finite(s.stats?.[STAT.HANDS_PRESENT]), now);
 
