@@ -361,6 +361,7 @@ class App {
       comboProgress: this.engine.combo_progress(),
       duetBook: this.duetBook,
       duetProgress: this.engine.duet_progress(),
+      hands: stats[STAT.HANDS_PRESENT] > 0 ? this.lastHands : null,
       perception: this.perceptionStatus,
     });
     this.hudMs = performance.now() - hudStart;
