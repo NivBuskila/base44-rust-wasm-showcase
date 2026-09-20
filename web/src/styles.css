@@ -892,11 +892,9 @@ input[type='range']::-moz-range-thumb {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(
-    120% 90% at 50% 40%,
-    rgba(4, 8, 14, 0) 38%,
-    rgba(4, 8, 14, 0.52) 100%
-  );
+  background:
+    radial-gradient(120% 90% at 50% 45%, rgba(4, 8, 14, 0.34) 0%, rgba(4, 8, 14, 0.86) 100%),
+    linear-gradient(180deg, rgba(4, 8, 14, 0.7), rgba(4, 8, 14, 0.3) 45%, rgba(4, 8, 14, 0.82));
   animation: tut-fade 420ms ease both;
 }
 
@@ -909,46 +907,35 @@ input[type='range']::-moz-range-thumb {
 .tut {
   --v: 0%;
   position: absolute;
-  left: 50%;
-  bottom: max(26px, env(safe-area-inset-bottom));
-  transform: translateX(-50%);
-  width: min(430px, calc(100vw - 2 * var(--gut)));
-  display: flex;
-  flex-direction: column;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto auto;
   gap: 10px;
-  padding: 14px 16px;
-  background: linear-gradient(180deg, var(--panel-a), var(--panel-b));
-  border: 1px solid var(--edge-hi);
-  border-radius: var(--r);
-  box-shadow:
-    0 0 0 1px var(--accent-soft),
-    0 0 32px rgba(53, 214, 255, 0.14),
-    0 12px 40px rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  padding: clamp(18px, 4vh, 44px) var(--gut);
   pointer-events: auto;
-  transition:
-    border-color 200ms ease,
-    box-shadow 200ms ease;
 }
 
 .tut.is-in {
-  animation: od-in 520ms cubic-bezier(0.2, 0.9, 0.2, 1.1) both;
+  animation: tut-fade 520ms ease both;
 }
 
-.tut.is-pass,
-.tut.is-done {
-  border-color: rgba(53, 214, 255, 0.55);
-  box-shadow:
-    0 0 0 1px rgba(53, 214, 255, 0.2),
-    0 0 40px rgba(53, 214, 255, 0.3),
-    0 12px 40px rgba(0, 0, 0, 0.5);
+/* Each step arrives as its own cut: the stage fades and pushes forward. */
+.tut.is-step .tut-body {
+  animation: tut-cut 620ms cubic-bezier(0.2, 0.9, 0.2, 1.05) both;
+}
+
+@keyframes tut-cut {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.965);
+    filter: blur(6px);
+  }
 }
 
 .tut-head {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
   font-size: 9px;
   letter-spacing: 0.28em;
   text-transform: uppercase;
@@ -989,8 +976,11 @@ input[type='range']::-moz-range-thumb {
 
 .tut-body {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 16px;
+  justify-content: center;
+  gap: clamp(14px, 3vh, 30px);
+  text-align: center;
 }
 
 /* The drawn hand: the biggest thing on the card, because it is the lesson. */
@@ -998,9 +988,9 @@ input[type='range']::-moz-range-thumb {
   flex: none;
   display: grid;
   place-items: center;
-  width: 108px;
-  height: 116px;
-  border-radius: 14px;
+  width: clamp(150px, 22vh, 230px);
+  height: clamp(150px, 22vh, 230px);
+  border-radius: 50%;
   background:
     radial-gradient(90% 80% at 50% 20%, rgba(53, 214, 255, 0.1), transparent 70%),
     var(--well);
@@ -1054,8 +1044,8 @@ input[type='range']::-moz-range-thumb {
 }
 
 .tut-hand svg {
-  width: 74px;
-  height: 74px;
+  width: clamp(92px, 14vh, 150px);
+  height: clamp(92px, 14vh, 150px);
   filter: drop-shadow(0 0 9px rgba(53, 214, 255, 0.4));
 }
 
@@ -1152,29 +1142,32 @@ input[type='range']::-moz-range-thumb {
 }
 
 .tut-text {
-  flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  max-width: 34ch;
 }
 
 .tut-text b {
-  font-size: 17px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
+  font-size: clamp(30px, 6vh, 56px);
+  font-weight: 400;
+  letter-spacing: 0.1em;
+  line-height: 1;
   color: var(--ink);
+  text-shadow: 0 0 26px rgba(53, 214, 255, 0.35);
 }
 
 .tut-effect {
-  font-size: 10px;
-  letter-spacing: 0.06em;
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
   color: var(--accent);
 }
 
 .tut-how {
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: 14px;
+  line-height: 1.6;
   letter-spacing: 0.02em;
   color: var(--dim);
 }
@@ -1204,7 +1197,9 @@ input[type='range']::-moz-range-thumb {
 }
 
 .tut-track {
-  height: 3px;
+  width: min(520px, 100%);
+  margin: 0 auto;
+  height: 2px;
   border-radius: 999px;
   background: var(--well);
   overflow: hidden;
@@ -1227,7 +1222,11 @@ input[type='range']::-moz-range-thumb {
 .tut-foot {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
+}
+
+.tut-dots {
+  margin-top: 10px;
 }
 
 .tut-note {
