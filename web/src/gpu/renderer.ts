@@ -174,6 +174,8 @@ export class GpuRenderer implements SceneRenderer {
   private readonly upPipe: GPURenderPipeline;
   private readonly compositePipe: GPURenderPipeline;
   private readonly blitPipe: GPURenderPipeline;
+  /** Same blit, but into the `rgba8unorm` probe: the canvas is often BGRA. */
+  private readonly probePipe: GPURenderPipeline;
   private readonly stepPipe: GPUComputePipeline;
   private readonly seedPipe: GPUComputePipeline;
   private readonly simLayout: GPUBindGroupLayout;
@@ -342,6 +344,7 @@ export class GpuRenderer implements SceneRenderer {
     this.upPipe = fullscreen(BLOOM_UP_WGSL, "bloom-up", HDR_FORMAT, additive);
     this.compositePipe = fullscreen(COMPOSITE_WGSL, "composite", "rgba8unorm");
     this.blitPipe = fullscreen(BLIT_WGSL, "blit", this.format);
+    this.probePipe = fullscreen(BLIT_WGSL, "probe-blit", "rgba8unorm");
 
     const drawModule = module(PARTICLE_DRAW_WGSL, "particles-draw");
     this.particleDrawPipe = d.createRenderPipeline({
@@ -708,7 +711,7 @@ export class GpuRenderer implements SceneRenderer {
       ],
     });
     this.probeBind = d.createBindGroup({
-      layout: this.blitPipe.getBindGroupLayout(0),
+      layout: this.probePipe.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: this.frameTarget.view! },
         { binding: 1, resource: this.clampSampler },
@@ -1204,7 +1207,7 @@ export class GpuRenderer implements SceneRenderer {
       this.blitSceneBind!,
     );
     if (this.probePending) return;
-    this.pass(encoder, this.probeTarget.view!, this.blitPipe, this.probeBind!);
+    this.pass(encoder, this.probeTarget.view!, this.probePipe, this.probeBind!);
     encoder.copyTextureToBuffer(
       { texture: this.probeTarget.texture! },
       {
