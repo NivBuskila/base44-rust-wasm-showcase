@@ -282,7 +282,10 @@ mod tests {
         for entry in book.split(';') {
             let (name, steps) = entry.split_once(':').expect("no name:steps separator");
             assert!(!name.is_empty(), "combo with no name");
-            assert!(steps.split(',').count() >= 2, "a one-step combo is a gesture");
+            assert!(
+                steps.split(',').count() >= 2,
+                "a one-step combo is a gesture"
+            );
         }
         let p = e.combo_progress();
         assert_eq!(p.len(), 4);

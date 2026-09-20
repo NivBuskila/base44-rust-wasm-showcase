@@ -5,7 +5,6 @@
 use super::*;
 
 impl Fluid {
-
     pub(super) fn diffuse(&mut self, dt: f32, viscosity: f32) {
         // Cells are square in screen space (256x144 over 16:9), so a single
         // spacing h = 1/w serves both axes and the discrete Laplacian picks up
@@ -49,6 +48,8 @@ impl Fluid {
     // ------------------------------------------------------------- vorticity
 
     /// Central-difference curl, `omega = dv/dx - du/dy`, zero inside walls.
+    // `x` also builds the flat index `i`; an iterator over `row` would hide that.
+    #[allow(clippy::needless_range_loop)]
     pub(super) fn compute_curl(&mut self) {
         let (w, h) = (self.w, self.h);
         // Taken out of `self` so the rows can be written while the velocity and

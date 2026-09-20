@@ -178,7 +178,11 @@ impl DuetTracker {
 
     /// Advances by `dt` and returns this step's tide strength and event.
     pub fn update(&mut self, tracker: &GestureTracker, dt: f32) -> DuetFrame {
-        let dt = if dt.is_finite() { dt.clamp(0.0, 0.25) } else { 0.0 };
+        let dt = if dt.is_finite() {
+            dt.clamp(0.0, 0.25)
+        } else {
+            0.0
+        };
         if self.show > 0.0 {
             self.show -= dt;
             if self.show <= 0.0 {

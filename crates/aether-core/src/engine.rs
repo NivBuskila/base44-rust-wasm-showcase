@@ -23,22 +23,22 @@
 //! engine.step(dt)  -> then read dye_ptr() and particle_ptr()
 //! ```
 
+use crate::bolt::{self, ThrowTracker};
+use crate::combo::{ComboProgress, ComboTracker};
 use crate::config::{
-    Params, DEFAULT_PARTICLES, FLOW_CELLS, FLOW_H, FLOW_W, FLUID_CELLS, FLUID_H, FLUID_W,
-    HAND_BUFFER, HANDS, MAX_PARTICLES, PARTICLE_STRIDE, POSE_STRIDE,
+    Params, DEFAULT_PARTICLES, FLOW_CELLS, FLOW_H, FLOW_W, FLUID_CELLS, FLUID_H, FLUID_W, HANDS,
+    HAND_BUFFER, MAX_PARTICLES, PARTICLE_STRIDE, POSE_STRIDE,
 };
+use crate::duet::{DuetProgress, DuetTracker};
 use crate::field::{Grid, VecField};
-use crate::fluid::Fluid;
 use crate::flow::{FlowConfig, OpticalFlow};
+use crate::fluid::Fluid;
 use crate::gesture::{GestureConfig, GestureTracker, Spell};
+use crate::gun::GunTracker;
 use crate::mask::{BodyMask, MaskConfig};
 use crate::math::hue_to_rgb;
 use crate::particles::{ParticleConfig, Particles};
-use crate::bolt::{self, ThrowTracker};
-use crate::gun::GunTracker;
 use crate::rush::Rush;
-use crate::combo::{ComboProgress, ComboTracker};
-use crate::duet::{DuetProgress, DuetTracker};
 use crate::spells::{self, SpellReport, SpellState};
 
 /// Largest segmentation mask the input buffer accepts, per axis. MediaPipe's
@@ -426,7 +426,7 @@ impl Engine {
 
         self.fluid.step(warped_dt, &self.params);
 
-        let repairs = if self.frame % SANITIZE_EVERY == 0 {
+        let repairs = if self.frame.is_multiple_of(SANITIZE_EVERY) {
             self.fluid.sanitize()
         } else {
             0
@@ -577,7 +577,7 @@ impl Engine {
         // These three each walk the whole velocity field. The HUD repaints at
         // 10 Hz, so recomputing them at 60 Hz burns grid passes to produce
         // numbers nobody reads.
-        if self.frame % STATS_EVERY == 0 {
+        if self.frame.is_multiple_of(STATS_EVERY) {
             self.stats.fluid_energy = self.fluid.energy();
             self.stats.fluid_max_speed = self.fluid.max_speed();
             self.stats.fluid_divergence = self.fluid.last_divergence();
@@ -787,7 +787,7 @@ fn tonemap_lut(lut: &[f32], x: f32) -> f32 {
     // Non-finite dye should be impossible, but a NaN here would write a
     // garbage byte into the texture and flash a stray pixel, so it is cheaper
     // to test than to debug.
-    if !(x > 0.0) {
+    if x.is_nan() || x <= 0.0 {
         return 0.0;
     }
     if x >= TONEMAP_MAX {
@@ -1034,7 +1034,11 @@ mod tests {
         for _ in 0..=SANITIZE_EVERY {
             e.step(1.0 / 60.0);
         }
-        assert_eq!(e.stats().nan_repairs, 0, "clean run should report no repairs");
+        assert_eq!(
+            e.stats().nan_repairs,
+            0,
+            "clean run should report no repairs"
+        );
     }
 
     #[test]

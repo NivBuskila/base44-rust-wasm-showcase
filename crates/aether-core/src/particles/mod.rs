@@ -272,7 +272,6 @@ impl Particles {
         }
     }
 
-
     /// Advances every active particle.
     ///
     /// One pass, no allocation, no per-particle branching beyond the cull test.

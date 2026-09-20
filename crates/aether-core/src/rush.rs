@@ -143,7 +143,11 @@ impl Rush {
 
     fn start(&mut self, at: [f32; 2], power: f32, kind: RushKind) {
         self.kind = kind;
-        let power = if power.is_finite() { power.clamp(0.0, 1.0) } else { 0.0 };
+        let power = if power.is_finite() {
+            power.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         self.at = [fin(at[0]).clamp(0.0, 1.0), fin(at[1]).clamp(0.0, 1.0)];
         // A weak push is still a push: the floor keeps the staging visible
         // rather than letting a barely-triggered rush do nothing at all.
@@ -167,7 +171,14 @@ impl Rush {
     ///
     /// `sx`/`sy` are the grid extents the normalised origin maps onto, the same
     /// convention [`crate::bolt::fire`] takes.
-    pub fn step(&mut self, fluid: &mut Fluid, particles: &mut Particles, dt: f32, sx: f32, sy: f32) {
+    pub fn step(
+        &mut self,
+        fluid: &mut Fluid,
+        particles: &mut Particles,
+        dt: f32,
+        sx: f32,
+        sy: f32,
+    ) {
         let Some(age) = self.age else { return };
         let dt = if dt.is_finite() && dt > 0.0 {
             dt.min(0.05)
@@ -263,7 +274,13 @@ mod tests {
 
     fn run(rush: &mut Rush, fluid: &mut Fluid, particles: &mut Particles, frames: usize) {
         for _ in 0..frames {
-            rush.step(fluid, particles, DT, (FLUID_W - 1) as f32, (FLUID_H - 1) as f32);
+            rush.step(
+                fluid,
+                particles,
+                DT,
+                (FLUID_W - 1) as f32,
+                (FLUID_H - 1) as f32,
+            );
         }
     }
 
