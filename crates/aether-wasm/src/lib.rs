@@ -222,15 +222,10 @@ impl AetherEngine {
         vec![idx(p.active), p.charge, idx(p.fired)]
     }
 
-    /// True while a hand holds the finger-gun pose, for the HUD's aim light.
-    pub fn gun_aiming(&self) -> bool {
-        self.inner.gun_aiming()
-    }
-
-    /// Per-hand gun aim for the renderer's laser sight:
-    /// `[active, x, y, dx, dy]` per hand.
-    pub fn gun_aim(&self) -> Vec<f32> {
-        self.inner.gun_aim().to_vec()
+    /// Practice mode for the tutorial: single gestures still cast, sequences
+    /// and duets are held back.
+    pub fn set_practice(&mut self, on: bool) {
+        self.inner.set_practice(on);
     }
 
     /// Packed lens-rush staging for the renderer: `[x, y, progress, power]`,
@@ -282,7 +277,10 @@ mod tests {
         for entry in book.split(';') {
             let (name, steps) = entry.split_once(':').expect("no name:steps separator");
             assert!(!name.is_empty(), "combo with no name");
-            assert!(steps.split(',').count() >= 2, "a one-step combo is a gesture");
+            assert!(
+                steps.split(',').count() >= 2,
+                "a one-step combo is a gesture"
+            );
         }
         let p = e.combo_progress();
         assert_eq!(p.len(), 4);
