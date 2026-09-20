@@ -15,8 +15,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # rust-toolchain.toml pins the stable channel and the wasm32 target.
-      - uses: dtolnay/rust-toolchain@stable
+      # Must match rust-toolchain.toml: cargo honours that pin, so installing a
+      # different stable leaves the pinned toolchain without rustfmt/clippy.
+      - uses: dtolnay/rust-toolchain@1.90.0
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
@@ -29,15 +30,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.90.0
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-pack@0.13.1
-      # The baseline (single-threaded) build generates web/src/wasm, whose
-      # .d.ts the TypeScript typecheck depends on. The threaded nightly build
-      # is exercised locally only.
+      # Both builds run: the typecheck follows `engine-loader.ts` into
+      # web/src/wasm-mt as well, so the threaded module's .d.ts has to exist
+      # (the script installs the pinned nightly + rust-src on demand).
       - run: bash scripts/build-wasm.sh release
+      - run: bash scripts/build-wasm.sh release --threads
       - uses: actions/setup-node@v4
         with:
           node-version: 22
