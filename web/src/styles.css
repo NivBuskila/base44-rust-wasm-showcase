@@ -1012,6 +1012,12 @@ input[type='range']::-moz-range-thumb {
   transform-origin: 50% 65%;
 }
 
+/* The hand is one flat silhouette: a single group opacity, so the overlapping
+   capsules and palm never show a seam where they meet. */
+.ha-body {
+  opacity: 0.92;
+}
+
 .tut-art svg {
   width: 88px;
   height: 108px;
