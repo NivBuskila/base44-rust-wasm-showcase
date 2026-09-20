@@ -28,13 +28,7 @@
  * worth.
  */
 
-import {
-  FLUID_H,
-  FLUID_W,
-  MAX_PARTICLE_OPS,
-  MAX_PARTICLES,
-  PARTICLE_OP_STRIDE,
-} from "../constants";
+import { FLUID_H, FLUID_W } from "../constants";
 import {
   OVERLAY_CAPACITY,
   OVERLAY_STRIDE,
@@ -51,18 +45,14 @@ import type {
 } from "../types";
 import type { GpuContext } from "./device";
 import { recordGpuError } from "./error-log";
+import { ParticleSim } from "./particle-sim";
+import { Readback } from "./readback";
 import { BLOOM_DOWN_WGSL, BLOOM_UP_WGSL } from "./shaders/bloom";
 import { BLIT_WGSL, COMPOSITE_WGSL } from "./shaders/composite";
 import { OVERLAY_LINES_WGSL, OVERLAY_POINTS_WGSL } from "./shaders/overlay";
-import {
-  DRAW_UNIFORM_FLOATS,
-  PARTICLE_BYTES,
-  PARTICLE_COMPUTE_WGSL,
-  PARTICLE_DRAW_WGSL,
-  SIM_UNIFORM_FLOATS,
-  STEP_WORKGROUP,
-} from "./shaders/particles";
+import { DRAW_UNIFORM_FLOATS, PARTICLE_DRAW_WGSL } from "./shaders/particles";
 import { SCENE_WGSL } from "./shaders/scene";
+import { clamp, finite } from "./sim-uniform";
 
 /** Intermediate HDR format; guaranteed renderable and blendable in WebGPU. */
 const HDR_FORMAT: GPUTextureFormat = "rgba16float";
@@ -79,21 +69,18 @@ const PROBE = 16;
 /** `copyTextureToBuffer` wants rows aligned to 256 bytes. */
 const PROBE_ROW_BYTES = 256;
 
-/** Pool allocations are rounded up to this, so a slider drag is not a realloc. */
-const PARTICLE_BUCKET = 32768;
-
-/** Mirrors `aether_core::particles`: heat decay and rise rates. */
-const HEAT_DECAY = 0.85;
-const HEAT_RISE = 3.5;
-/** `aether_core::particles::MAX_STEP`. */
-const MAX_SIM_STEP = 0.25;
-
-const clamp = (v: number, lo: number, hi: number): number =>
-  Math.min(hi, Math.max(lo, v));
-/** `aether_core::math::decay`. */
-const decay = (rate: number, dt: number): number => Math.exp(-rate * dt);
-const finite = (v: number, fallback: number): number =>
-  Number.isFinite(v) ? v : fallback;
+/** Mean Rec.709 luminance of the probe readback, `[0, 1]`, rows 256-aligned. */
+function meanLuminance(px: Uint8Array): number {
+  let total = 0;
+  for (let row = 0; row < PROBE; row++) {
+    const base = row * PROBE_ROW_BYTES;
+    for (let i = 0; i < PROBE; i++) {
+      const p = base + i * 4;
+      total += 0.2126 * px[p] + 0.7152 * px[p + 1] + 0.0722 * px[p + 2];
+    }
+  }
+  return total / (PROBE * PROBE) / 255;
+}
 
 export class GpuRendererError extends Error {}
 
@@ -177,30 +164,22 @@ export class GpuRenderer implements SceneRenderer {
   private readonly blitPipe: GPURenderPipeline;
   /** Same blit, but into the `rgba8unorm` probe: the canvas is often BGRA. */
   private readonly probePipe: GPURenderPipeline;
-  private readonly stepPipe: GPUComputePipeline;
-  private readonly seedPipe: GPUComputePipeline;
-  private readonly simLayout: GPUBindGroupLayout;
 
   // --- uniforms and buffers
   private readonly sceneUniform: GPUBuffer;
   private readonly compositeUniform: GPUBuffer;
   private readonly drawUniform: GPUBuffer;
-  private readonly simUniform: GPUBuffer;
   private readonly overlayLineUniform: GPUBuffer;
   private readonly overlayPointUniform: GPUBuffer;
   private readonly downUniforms: GPUBuffer[];
   private readonly upUniforms: GPUBuffer[];
   private readonly overlayBuffer: GPUBuffer;
-  private readonly opsBuffer: GPUBuffer;
-  private readonly velUBuffer: GPUBuffer;
-  private readonly velVBuffer: GPUBuffer;
-  private obstacleBuffer: GPUBuffer;
-  private readonly counters: GPUBuffer;
-  private readonly counterStaging: GPUBuffer;
-  private readonly probeStaging: GPUBuffer;
-  private particleBuffer: GPUBuffer | null = null;
-  private particleCapacity = 0;
-  private seededCount = 0;
+
+  /** The pool and its compute passes; see `particle-sim.ts`. */
+  private readonly sim: ParticleSim;
+  /** Pool generation the draw bind group was built against. */
+  private drawnPoolVersion = -1;
+  private readonly probeRead: Readback;
 
   // --- bind groups (rebuilt when the resources behind them change)
   private sceneBind: GPUBindGroup | null = null;
@@ -212,8 +191,6 @@ export class GpuRenderer implements SceneRenderer {
   private upBinds: GPUBindGroup[] = [];
   private overlayLineBind: GPUBindGroup | null = null;
   private overlayPointBind: GPUBindGroup | null = null;
-  private stepBind: GPUBindGroup | null = null;
-  private seedBind: GPUBindGroup | null = null;
   private drawBind: GPUBindGroup | null = null;
 
   // --- scratch
@@ -222,13 +199,9 @@ export class GpuRenderer implements SceneRenderer {
   private readonly drawScratch = new Float32Array(DRAW_UNIFORM_FLOATS);
   private readonly overlayScratchU = new Float32Array(8);
   private readonly bloomScratch = new Float32Array(4);
-  private readonly simScratch = new ArrayBuffer(SIM_UNIFORM_FLOATS * 4);
-  private readonly simF32 = new Float32Array(this.simScratch);
-  private readonly simU32 = new Uint32Array(this.simScratch);
   private readonly overlayVerts = new Float32Array(
     OVERLAY_CAPACITY * OVERLAY_STRIDE,
   );
-  private readonly zeroCounters = new Uint32Array(2);
 
   // --- frame state
   private dpr = 1;
@@ -237,11 +210,7 @@ export class GpuRenderer implements SceneRenderer {
   private qualityScale = 1;
   private frameIndex = 0;
   private video: HTMLVideoElement | null = null;
-  private respawnCredit = 0;
-  private alive = 0;
   private luminance = 0;
-  private countersPending = false;
-  private probePending = false;
   private disposed = false;
 
   private readonly onResize = (): void => this.resize();
@@ -413,44 +382,6 @@ export class GpuRenderer implements SceneRenderer {
       "instance",
     );
 
-    const computeModule = module(PARTICLE_COMPUTE_WGSL, "particles-step");
-    // One explicit layout for both entry points: `'auto'` would only include
-    // the bindings each entry point touches, and the seed pass reads two of
-    // seven, so the shared bind group would not fit it.
-    const simBuffer = (
-      binding: number,
-      type: GPUBufferBindingType,
-    ): GPUBindGroupLayoutEntry => ({
-      binding,
-      visibility: GPUShaderStage.COMPUTE,
-      buffer: { type },
-    });
-    this.simLayout = d.createBindGroupLayout({
-      label: "particles-sim",
-      entries: [
-        simBuffer(0, "uniform"),
-        simBuffer(1, "storage"),
-        simBuffer(2, "read-only-storage"),
-        simBuffer(3, "read-only-storage"),
-        simBuffer(4, "read-only-storage"),
-        simBuffer(5, "read-only-storage"),
-        simBuffer(6, "storage"),
-      ],
-    });
-    const simPipelineLayout = d.createPipelineLayout({
-      bindGroupLayouts: [this.simLayout],
-    });
-    this.stepPipe = d.createComputePipeline({
-      label: "particles-step",
-      layout: simPipelineLayout,
-      compute: { module: computeModule, entryPoint: "step_main" },
-    });
-    this.seedPipe = d.createComputePipeline({
-      label: "particles-seed",
-      layout: simPipelineLayout,
-      compute: { module: computeModule, entryPoint: "seed_main" },
-    });
-
     // --- buffers
     const uniform = (floats: number, label: string): GPUBuffer =>
       d.createBuffer({
@@ -461,7 +392,6 @@ export class GpuRenderer implements SceneRenderer {
     this.sceneUniform = uniform(24, "scene-uniform");
     this.compositeUniform = uniform(12, "composite-uniform");
     this.drawUniform = uniform(DRAW_UNIFORM_FLOATS, "draw-uniform");
-    this.simUniform = uniform(SIM_UNIFORM_FLOATS, "sim-uniform");
     // Two buffers, not one: `queue.writeBuffer` lands before the whole encoder
     // is submitted, so a second write would also change the first draw.
     this.overlayLineUniform = uniform(8, "overlay-lines-uniform");
@@ -478,34 +408,8 @@ export class GpuRenderer implements SceneRenderer {
       size: this.overlayVerts.byteLength,
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
-    const storage = (bytes: number, label: string): GPUBuffer =>
-      d.createBuffer({
-        label,
-        size: bytes,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-      });
-    this.opsBuffer = storage(MAX_PARTICLE_OPS * PARTICLE_OP_STRIDE * 4, "ops");
-    this.velUBuffer = storage(FLUID_W * FLUID_H * 4, "vel-u");
-    this.velVBuffer = storage(FLUID_W * FLUID_H * 4, "vel-v");
-    this.obstacleBuffer = storage(FLUID_W * FLUID_H * 4, "obstacle");
-    this.counters = d.createBuffer({
-      label: "counters",
-      size: 8,
-      usage:
-        GPUBufferUsage.STORAGE |
-        GPUBufferUsage.COPY_DST |
-        GPUBufferUsage.COPY_SRC,
-    });
-    this.counterStaging = d.createBuffer({
-      label: "counters-read",
-      size: 8,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-    });
-    this.probeStaging = d.createBuffer({
-      label: "probe-read",
-      size: PROBE_ROW_BYTES * PROBE,
-      usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-    });
+    this.sim = new ParticleSim(d);
+    this.probeRead = new Readback(d, "probe-read", PROBE_ROW_BYTES * PROBE);
 
     this.buildStaticBinds();
     window.addEventListener("resize", this.onResize);
@@ -559,38 +463,16 @@ export class GpuRenderer implements SceneRenderer {
     });
   }
 
-  /** Bind groups over the pool; rebuilt whenever it is reallocated. */
-  private ensurePool(active: number): boolean {
-    const want = Math.min(MAX_PARTICLES, Math.max(1, active));
-    if (want > this.particleCapacity) {
-      const capacity = Math.min(
-        MAX_PARTICLES,
-        Math.ceil(want / PARTICLE_BUCKET) * PARTICLE_BUCKET,
-      );
-      this.particleBuffer?.destroy();
-      this.particleBuffer = this.device.createBuffer({
-        label: "particles",
-        size: capacity * PARTICLE_BYTES,
-        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-      });
-      this.particleCapacity = capacity;
-      this.seededCount = 0;
-
-      const pool = this.particleBuffer;
-      const simBind = this.device.createBindGroup({
-        layout: this.simLayout,
-        entries: [
-          { binding: 0, resource: { buffer: this.simUniform } },
-          { binding: 1, resource: { buffer: pool } },
-          { binding: 2, resource: { buffer: this.velUBuffer } },
-          { binding: 3, resource: { buffer: this.velVBuffer } },
-          { binding: 4, resource: { buffer: this.obstacleBuffer } },
-          { binding: 5, resource: { buffer: this.opsBuffer } },
-          { binding: 6, resource: { buffer: this.counters } },
-        ],
-      });
-      this.stepBind = simBind;
-      this.seedBind = simBind;
+  /**
+   * Keeps the instanced draw's bind group pointing at the live pool. The pool
+   * belongs to `ParticleSim` and is reallocated when it grows, so the version it
+   * reports — not a size comparison here — is what invalidates this.
+   */
+  private ensureDrawBind(): boolean {
+    const pool = this.sim.pool;
+    if (!pool) return false;
+    if (this.drawnPoolVersion !== this.sim.poolVersion) {
+      this.drawnPoolVersion = this.sim.poolVersion;
       this.drawBind = this.device.createBindGroup({
         layout: this.particleDrawPipe.getBindGroupLayout(0),
         entries: [
@@ -599,7 +481,7 @@ export class GpuRenderer implements SceneRenderer {
         ],
       });
     }
-    return this.particleBuffer !== null;
+    return this.drawBind !== null;
   }
 
   dispose(): void {
@@ -617,8 +499,8 @@ export class GpuRenderer implements SceneRenderer {
       this.videoTex,
     ])
       tex.destroy();
-    this.particleBuffer?.destroy();
-    this.particleBuffer = null;
+    this.sim.dispose();
+    this.probeRead.dispose();
     this.video = null;
   }
 
@@ -774,19 +656,6 @@ export class GpuRenderer implements SceneRenderer {
     return true;
   }
 
-  /** Copies a WASM-memory view into a storage buffer, never past its size. */
-  private uploadFloats(buffer: GPUBuffer, data: Float32Array): void {
-    const floats = Math.min(data.length, buffer.size / 4);
-    if (floats <= 0) return;
-    this.device.queue.writeBuffer(
-      buffer,
-      0,
-      data.buffer,
-      data.byteOffset,
-      floats * 4,
-    );
-  }
-
   // ----------------------------------------------------------------- frame
 
   render(frame: RenderFrame): void {
@@ -866,124 +735,18 @@ export class GpuRenderer implements SceneRenderer {
   // ------------------------------------------------------------ simulation
 
   /**
-   * Advances the pool: uploads the fluid, the obstacle and the op log, then one
-   * compute pass per frame. Returns the particles that are worth drawing.
+   * Steps the pool for this frame and returns how many particles to draw — zero
+   * in a mode whose style emits no particle light, even though the simulation
+   * still advanced, so the pool never freezes behind a mode switch.
    */
   private stepParticles(
     encoder: GPUCommandEncoder,
     sim: GpuSimFrame,
     style: ModeStyle,
   ): number {
-    const active = Math.min(MAX_PARTICLES, Math.max(0, Math.floor(sim.active)));
-    if (active === 0 || sim.gridW < 2 || sim.gridH < 2) return 0;
-    if (!this.ensurePool(active)) return 0;
-
-    const cells = sim.gridW * sim.gridH;
-    if (sim.velU.length < cells || sim.velV.length < cells) return 0;
-    this.uploadFloats(this.velUBuffer, sim.velU);
-    this.uploadFloats(this.velVBuffer, sim.velV);
-
-    const ow = Math.max(1, Math.floor(sim.obstacleInfo[0] ?? 0));
-    const oh = Math.max(1, Math.floor(sim.obstacleInfo[1] ?? 0));
-    const maxAbs = sim.obstacleInfo[2] ?? 0;
-    const usableObstacle = sim.obstacle.length >= ow * oh && maxAbs >= 0.5;
-    if (usableObstacle) {
-      const bytes = ow * oh * 4;
-      if (this.obstacleBuffer.size < bytes) {
-        this.obstacleBuffer.destroy();
-        this.obstacleBuffer = this.device.createBuffer({
-          label: "obstacle",
-          size: Math.ceil(bytes / 256) * 256,
-          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
-        });
-        // The bind groups hold the old buffer; force a rebuild.
-        this.particleCapacity = 0;
-        if (!this.ensurePool(active)) return 0;
-      }
-      this.uploadFloats(this.obstacleBuffer, sim.obstacle);
-    }
-
-    const opCount = Math.min(
-      MAX_PARTICLE_OPS,
-      Math.max(0, Math.floor(sim.opCount)),
-    );
-    if (opCount > 0) {
-      this.device.queue.writeBuffer(
-        this.opsBuffer,
-        0,
-        sim.ops.buffer,
-        sim.ops.byteOffset,
-        opCount * PARTICLE_OP_STRIDE * 4,
-      );
-    }
-
-    // Everything the Rust `Frame` folds through dt, folded the same way here.
-    const dt = clamp(finite(sim.params[0], 0), 0, MAX_SIM_STEP);
-    const maxx = sim.gridW - 1;
-    const maxy = sim.gridH - 1;
-    const life = clamp(finite(sim.params[1], 1), 0.05, 60);
-    const drag = clamp(finite(sim.params[2], 1), 0, 8);
-    const spawnRate = Math.max(0, finite(sim.params[3], 0));
-    const damping = Math.max(0, finite(sim.params[4], 0));
-    const swirl = finite(sim.params[5], 0) * dt;
-    const gravity = finite(sim.params[6], 0) * dt;
-
-    const perFrame = spawnRate * dt;
-    const credit = Math.min(this.respawnCredit + perFrame, perFrame + 1);
-    const budget = Math.floor(credit);
-    this.respawnCredit = credit - budget;
-
-    const f = this.simF32;
-    const u = this.simU32;
-    f[0] = maxx;
-    f[1] = maxy;
-    f[2] = (ow - 1) / Math.max(1, maxx);
-    f[3] = (oh - 1) / Math.max(1, maxy);
-    f[4] = dt;
-    f[5] = decay(damping, dt);
-    f[6] = decay(HEAT_DECAY, dt);
-    f[7] = 1 - decay(HEAT_RISE, dt);
-    f[8] = dt > 0 ? 1 / dt : 0;
-    f[9] = swirl;
-    f[10] = gravity;
-    f[11] = drag;
-    f[12] = life;
-    f[13] = ow;
-    f[14] = oh;
-    f[15] = usableObstacle ? 1 : 0;
-    u[16] = active;
-    u[17] = opCount;
-    u[18] = this.frameIndex;
-    u[19] = budget;
-    u[20] = sim.gridW;
-    u[21] = sim.gridH;
-    u[22] = 0;
-    u[23] = 0;
-    this.device.queue.writeBuffer(this.simUniform, 0, this.simScratch);
-    this.device.queue.writeBuffer(this.counters, 0, this.zeroCounters);
-
-    const groups = Math.ceil(active / STEP_WORKGROUP);
-    const pass = encoder.beginComputePass({ label: "particles" });
-    if (this.seededCount < active) {
-      // A fresh or grown pool: scatter it once, exactly as `seed_uniform` does.
-      pass.setPipeline(this.seedPipe);
-      pass.setBindGroup(0, this.seedBind!);
-      pass.dispatchWorkgroups(groups);
-      this.seededCount = active;
-    }
-    pass.setPipeline(this.stepPipe);
-    pass.setBindGroup(0, this.stepBind!);
-    pass.dispatchWorkgroups(groups);
-    pass.end();
-
-    // Copy only while the staging buffer is unmapped: a submission that touches
-    // a mapped (or pending-map) buffer is dropped *whole* by the driver, so the
-    // simulation and the scene it drew simply never appear — read as flicker.
-    // The probe copy is already guarded this way; the counters were not.
-    if (!this.countersPending) {
-      encoder.copyBufferToBuffer(this.counters, 0, this.counterStaging, 0, 8);
-    }
-    return style.particles > 0 ? active : 0;
+    const stepped = this.sim.step(encoder, sim, this.frameIndex);
+    if (stepped === 0 || !this.ensureDrawBind()) return 0;
+    return style.particles > 0 ? stepped : 0;
   }
 
   // ---------------------------------------------------------------- passes
@@ -1221,12 +984,14 @@ export class GpuRenderer implements SceneRenderer {
       this.blitPipe,
       this.blitSceneBind!,
     );
-    if (this.probePending) return;
+    // Skipped while the read is in flight: a copy into a busy staging buffer
+    // would cost the whole submission. See `readback.ts`.
+    if (!this.probeRead.idle) return;
     this.pass(encoder, this.probeTarget.view!, this.probePipe, this.probeBind!);
     encoder.copyTextureToBuffer(
       { texture: this.probeTarget.texture! },
       {
-        buffer: this.probeStaging,
+        buffer: this.probeRead.buffer,
         bytesPerRow: PROBE_ROW_BYTES,
         rowsPerImage: PROBE,
       },
@@ -1236,48 +1001,12 @@ export class GpuRenderer implements SceneRenderer {
 
   // ------------------------------------------------------------ inspection
 
-  /** Maps this frame's counters and probe when the previous map has landed. */
+  /** Starts this frame's reads. Must run after the submit, never before it. */
   private readback(): void {
-    if (!this.countersPending) {
-      this.countersPending = true;
-      void this.counterStaging
-        .mapAsync(GPUMapMode.READ)
-        .then(() => {
-          const v = new Uint32Array(
-            this.counterStaging.getMappedRange().slice(0),
-          );
-          this.counterStaging.unmap();
-          this.alive = v[1];
-        })
-        .catch(() => undefined)
-        .finally(() => {
-          this.countersPending = false;
-        });
-    }
-    if (!this.probePending) {
-      this.probePending = true;
-      void this.probeStaging
-        .mapAsync(GPUMapMode.READ)
-        .then(() => {
-          const px = new Uint8Array(
-            this.probeStaging.getMappedRange().slice(0),
-          );
-          this.probeStaging.unmap();
-          let total = 0;
-          for (let row = 0; row < PROBE; row++) {
-            const base = row * PROBE_ROW_BYTES;
-            for (let i = 0; i < PROBE; i++) {
-              const p = base + i * 4;
-              total += 0.2126 * px[p] + 0.7152 * px[p + 1] + 0.0722 * px[p + 2];
-            }
-          }
-          this.luminance = total / (PROBE * PROBE) / 255;
-        })
-        .catch(() => undefined)
-        .finally(() => {
-          this.probePending = false;
-        });
-    }
+    this.sim.pollAlive();
+    this.probeRead.poll((bytes) => {
+      this.luminance = meanLuminance(new Uint8Array(bytes));
+    });
   }
 
   /** Mean luminance of the last completed frame, `[0, 1]`. */
@@ -1286,6 +1015,6 @@ export class GpuRenderer implements SceneRenderer {
   }
 
   particlesAlive(): number {
-    return this.alive;
+    return this.sim.alive;
   }
 }
