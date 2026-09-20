@@ -109,6 +109,7 @@ export class GestureTutorial {
   private readonly count: HTMLElement;
   private readonly dots: HTMLElement;
   private readonly art: HTMLElement;
+  private readonly num: HTMLElement;
   private readonly hand: HTMLElement;
   private readonly effect: HTMLElement;
   private readonly how: HTMLElement;
@@ -148,6 +149,7 @@ export class GestureTutorial {
       </header>
       <div class="tut-dots" data-tut-dots></div>
       <div class="tut-body">
+        <b class="tut-num" data-tut-num aria-hidden="true"></b>
         <span class="tut-art">
           <svg class="tut-ring" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
             <circle class="tut-ring-bg" cx="50" cy="50" r="45" pathLength="1"/>
@@ -170,6 +172,7 @@ export class GestureTutorial {
     this.count = this.el.querySelector('[data-tut-count]')!;
     this.dots = this.el.querySelector('[data-tut-dots]')!;
     this.art = this.el.querySelector('[data-tut-art]')!;
+    this.num = this.el.querySelector('[data-tut-num]')!;
     this.hand = this.el.querySelector('[data-tut-hand]')!;
     this.effect = this.el.querySelector('[data-tut-effect]')!;
     this.how = this.el.querySelector('[data-tut-how]')!;
@@ -264,6 +267,7 @@ export class GestureTutorial {
     void this.el.offsetWidth;
     this.el.classList.add('is-step');
     this.count.textContent = `${this.progress.index + 1} / ${STEPS.length}`;
+    this.num.textContent = String(this.progress.index + 1).padStart(2, '0');
     this.markDots(this.progress.index);
     this.art.innerHTML = handArt(step.spell);
     this.hand.textContent = step.hand;
@@ -280,6 +284,7 @@ export class GestureTutorial {
     void this.el.offsetWidth;
     this.el.classList.add('is-done', 'is-step');
     this.count.textContent = `${STEPS.length} / ${STEPS.length}`;
+    this.num.textContent = '\u2713';
     this.markDots(STEPS.length);
     this.art.innerHTML = handArt('release');
     this.hand.textContent = 'you know the spells';
