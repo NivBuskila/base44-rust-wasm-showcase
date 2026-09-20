@@ -26,7 +26,7 @@
 use crate::bolt::{self, ThrowTracker};
 use crate::combo::{ComboProgress, ComboTracker};
 use crate::config::{
-    Params, DEFAULT_PARTICLES, FLOW_CELLS, FLOW_H, FLOW_W, FLUID_CELLS, FLUID_H, FLUID_W, HANDS,
+    Params, DEFAULT_PARTICLES, FLOW_CELLS, FLOW_H, FLOW_W, FLUID_CELLS, FLUID_H, FLUID_W,
     HAND_BUFFER, MAX_PARTICLES, PARTICLE_STRIDE, POSE_STRIDE,
 };
 use crate::duet::{DuetProgress, DuetTracker};
@@ -34,7 +34,6 @@ use crate::field::{Grid, VecField};
 use crate::flow::{FlowConfig, OpticalFlow};
 use crate::fluid::Fluid;
 use crate::gesture::{GestureConfig, GestureTracker, Spell};
-use crate::gun::GunTracker;
 use crate::mask::{BodyMask, MaskConfig};
 use crate::math::hue_to_rgb;
 use crate::particles::{ParticleConfig, Particles};
@@ -116,8 +115,6 @@ pub struct Engine {
     duets: DuetTracker,
     /// Recognises a flick of an open hand as a thrown energy bolt.
     throws: ThrowTracker,
-    /// Recognises the finger gun and its trigger pull.
-    gun: GunTracker,
     /// Stages a bolt thrown at the lens as an approach towards the viewer.
     rush: Rush,
 
@@ -167,7 +164,6 @@ impl Engine {
             combos: ComboTracker::new(),
             duets: DuetTracker::new(),
             throws: ThrowTracker::new(),
-            gun: GunTracker::new(),
             rush: Rush::new(),
             luma: vec![0; FLOW_CELLS],
             mask_in: vec![0.0; MASK_IN_CAPACITY],
@@ -381,40 +377,7 @@ impl Engine {
                 (FLUID_H - 1) as f32,
             );
         }
-        let shots = self.gun.update(&self.tracker, dt);
-        for shot in shots.into_iter().flatten() {
-            // A gun aimed at the lens has no screen bearing, so it is staged the
-            // same way a bolt pushed at the camera is: a rush plus a detonation
-            // at the fingertip rather than a tracer across the field.
-            if shot.dir == [0.0, 0.0] {
-                // A gunshot at the lens is staged as a gunshot, not as energy
-                // arriving: muzzle crack and recoil rather than the bolt's dolly.
-                self.rush.trigger_shot(shot.from, 0.9);
-                bolt::fire(
-                    &mut self.fluid,
-                    &mut self.particles,
-                    self.params.particle_life,
-                    bolt::Throw {
-                        from: shot.from,
-                        dir: [0.0, 0.0],
-                        power: 0.9,
-                    },
-                    (FLUID_W - 1) as f32,
-                    (FLUID_H - 1) as f32,
-                );
-                continue;
-            }
-            bolt::shoot(
-                &mut self.fluid,
-                &mut self.particles,
-                self.params.particle_life,
-                shot,
-                (FLUID_W - 1) as f32,
-                (FLUID_H - 1) as f32,
-            );
-        }
-
-        // After the shots, before the solve: the rush injects force and dye like
+        // Before the solve: the rush injects force and dye like
         // any other source, so the same step carries it.
         self.rush.step(
             &mut self.fluid,
@@ -610,31 +573,6 @@ impl Engine {
         self.combos.progress()
     }
 
-    /// Whether either hand is holding the finger-gun pose, so the HUD can say
-    /// the aim was recognised before the trigger is pulled: without it a pose
-    /// the recogniser rejected looks exactly like a trigger that did nothing.
-    pub fn gun_aiming(&self) -> bool {
-        (0..crate::config::HANDS).any(|slot| self.gun.aiming(&self.tracker, slot))
-    }
-
-    /// Aim rays of the hands holding the gun pose, for the laser sight the
-    /// renderer draws: per hand `[active, x, y, dx, dy]`, `active == 0` when
-    /// that hand is not aiming and `dir == [0, 0]` when it aims at the lens.
-    pub fn gun_aim(&self) -> [f32; 5 * HANDS] {
-        let mut out = [0.0; 5 * HANDS];
-        for slot in 0..HANDS {
-            if let Some(shot) = self.gun.aim(&self.tracker, slot) {
-                let o = slot * 5;
-                out[o] = 1.0;
-                out[o + 1] = shot.from[0];
-                out[o + 2] = shot.from[1];
-                out[o + 3] = shot.dir[0];
-                out[o + 4] = shot.dir[1];
-            }
-        }
-        out
-    }
-
     /// Which two-hand duet is being wound up, for the HUD's spellbook.
     #[inline]
     pub fn duet_progress(&self) -> DuetProgress {
@@ -735,7 +673,6 @@ impl Engine {
         self.combos.reset();
         self.duets.reset();
         self.throws.reset();
-        self.gun.reset();
         self.rush.reset();
     }
 }

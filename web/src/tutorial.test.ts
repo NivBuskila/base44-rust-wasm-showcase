@@ -1,17 +1,45 @@
 import { describe, expect, it } from 'vitest';
-import { HOLD_MS, STEPS, TutorialProgress } from './tutorial';
+import { CLEAR_MS, HOLD_MS, STEPS, TutorialProgress } from './tutorial';
 
 describe('TutorialProgress', () => {
   it('covers every single-hand spell and leaves warp to the reference', () => {
     expect(STEPS.map((s) => s.spell)).toEqual([
       'attract',
-      'repel',
       'vortex',
       'ignite',
-      'freeze',
       'shatter',
+      'freeze',
+      'repel',
       'release',
     ]);
+  });
+
+  it('never puts two combo-opening spells back to back', () => {
+    const pairs = [
+      ['attract', 'repel'],
+      ['repel', 'vortex'],
+      ['attract', 'freeze'],
+    ];
+    const order = STEPS.map((s) => s.spell);
+    for (let i = 0; i + 1 < order.length; i++) {
+      expect(pairs).not.toContainEqual([order[i], order[i + 1]]);
+    }
+  });
+
+  it('waits for the hand to rest before arming the next step', () => {
+    const p = new TutorialProgress();
+    p.feed(['attract', 'idle'], 0);
+    expect(p.feed(['attract', 'idle'], HOLD_MS)).toBe(1);
+    expect(p.resting).toBe(true);
+    // Straight into the next pose: ignored while the gate is shut.
+    expect(p.feed(['vortex', 'idle'], HOLD_MS + 10)).toBe(0);
+    expect(p.feed(['vortex', 'idle'], HOLD_MS + 10 + CLEAR_MS + HOLD_MS)).toBe(0);
+    // Resting clears the gate, and only then does the step charge.
+    p.feed(['idle', 'idle'], 5000);
+    expect(p.feed(['idle', 'idle'], 5000 + CLEAR_MS)).toBe(0);
+    expect(p.resting).toBe(false);
+    p.feed(['vortex', 'idle'], 6000);
+    expect(p.feed(['vortex', 'idle'], 6000 + HOLD_MS)).toBe(1);
   });
 
   it('charges while the spell is held and passes at HOLD_MS', () => {
@@ -21,7 +49,7 @@ describe('TutorialProgress', () => {
     expect(p.index).toBe(0);
     expect(p.feed(['attract', 'idle'], 1000 + HOLD_MS)).toBe(1);
     expect(p.index).toBe(1);
-    expect(p.step?.spell).toBe('repel');
+    expect(p.step?.spell).toBe('vortex');
   });
 
   it('resets the charge when the pose breaks', () => {

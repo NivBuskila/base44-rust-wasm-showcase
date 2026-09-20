@@ -27,7 +27,6 @@ pub mod field;
 pub mod flow;
 pub mod fluid;
 pub mod gesture;
-pub mod gun;
 pub mod mask;
 pub mod math;
 pub mod par;
