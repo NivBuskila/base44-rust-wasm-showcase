@@ -131,6 +131,9 @@ export function markup(): string {
         <b data-fps data-tone="ok">—</b><span>fps</span>
       </div>
       <div class="hud-acts">
+        <button type="button" class="ico-btn" data-act="tutorial" aria-label="Gesture tutorial" title="Gesture tutorial (T)">
+          ${svg('<path d="M4 19V6.5A1.5 1.5 0 0 1 5.5 5H10l2 2h6.5A1.5 1.5 0 0 1 20 8.5V19"/><path d="M4 19h16"/><path d="M12 10.5v5M9.5 13h5"/>')}
+        </button>
         <button type="button" class="ico-btn" data-act="help" aria-label="Help and keyboard shortcuts" title="Help (?)">
           ${svg('<circle cx="12" cy="12" r="9"/><path d="M9.6 9.2a2.5 2.5 0 1 1 3.6 2.3c-.8.5-1.2 1-1.2 2"/><path d="M12 17.2h.01"/>')}
         </button>

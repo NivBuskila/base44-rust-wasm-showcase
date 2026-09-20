@@ -86,8 +86,8 @@ describe('QaRecorder', () => {
 
   it('summarises frame rate with percentiles and the share of slow samples', () => {
     const c = clock();
-    c.warm();
     const rec = new QaRecorder();
+    c.warm();
     const fps = [60, 60, 60, 60, 60, 60, 60, 60, 30, 45];
     for (const f of fps) {
       rec.sample(diag({ fps: f, stepMs: f === 30 ? 20 : 4 }));
@@ -109,8 +109,8 @@ describe('QaRecorder', () => {
 
   it('drops non-finite timings without dropping the sample', () => {
     const c = clock();
-    c.warm();
     const rec = new QaRecorder();
+    c.warm();
     rec.sample(diag({ fps: 60, stepMs: NaN }));
     c.tick();
     rec.sample(diag({ fps: 60, stepMs: 5 }));
@@ -121,8 +121,8 @@ describe('QaRecorder', () => {
 
   it('records each kind of transition once, with the session time', () => {
     const c = clock();
-    c.warm();
     const rec = new QaRecorder();
+    c.warm();
     rec.sample(diag());
     c.tick();
     rec.sample(
@@ -157,8 +157,8 @@ describe('QaRecorder', () => {
 
   it('caps the event log so a flapping governor cannot grow the record', () => {
     const c = clock();
-    c.warm();
     const rec = new QaRecorder();
+    c.warm();
     for (let i = 0; i < MAX_EVENTS + 20; i++) {
       rec.sample(diag({ qualityTier: i % 2 }));
       c.tick();
@@ -176,8 +176,8 @@ describe('QaRecorder', () => {
 
   it('persists from a top-level tab to storage and to the dev-server drop box', () => {
     const c = clock();
-    c.warm();
     const rec = new QaRecorder();
+    c.warm();
     rec.sample(diag({ fps: 58 }));
     rec.persist();
 

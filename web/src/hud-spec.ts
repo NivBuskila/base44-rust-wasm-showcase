@@ -198,6 +198,7 @@ export const SHORTCUTS: readonly [string, string][] = [
   ['1 – 5', 'aether / camera / blend / debug / particles'],
   ['C', 'camera feed behind the fluid'],
   ['O', 'overdrive: the full 1M particle pool'],
+  ['T', 'interactive gesture tutorial'],
   ['H', 'hide or show this panel'],
   ['R', 'reset the field'],
   ['?', 'this sheet'],
