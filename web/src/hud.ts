@@ -34,6 +34,7 @@ import { markup } from './hud-markup';
 import { Meter, finite, frameTone } from './hud-meter';
 import { PRESETS, type ParamPreset } from './hud-presets';
 import { Sparkline } from './hud-spark';
+import { GestureTutorial } from './tutorial';
 import {
   CELLS,
   GESTURES,
@@ -133,6 +134,7 @@ export class Hud {
   private readonly particleValue: HTMLElement;
   private readonly presetBtns = new Map<string, HTMLButtonElement>();
   private readonly combos: ComboBook;
+  private readonly tutorial: GestureTutorial;
 
   private framePeak = 0;
   private lastUpdateMs = 0;
@@ -201,6 +203,8 @@ export class Hud {
     // Outside the panel on purpose: sequence progress has to stay visible when
     // the panel is collapsed, which is how most of a session is spent.
     this.combos = new ComboBook(this.root);
+    // Also outside the panel: the card sits over the stage where the hand is.
+    this.tutorial = new GestureTutorial(this.root);
     this.wireControls();
     this.wireKeys();
 
@@ -236,6 +240,8 @@ export class Hud {
     if (s.comboBook) this.combos.setBook(s.comboBook);
     if (s.duetBook) this.combos.setDuetBook(s.duetBook);
     this.combos.update(comboState(s.comboProgress), duetState(s.duetProgress), s.gunAiming === true);
+    // Every frame too: its hold bar is the feedback that the pose is being read.
+    this.tutorial.update(s.spells ?? [], finite(s.stats?.[STAT.HANDS_PRESENT]), now);
 
     if (now - this.lastPaintMs < PAINT_MS) return;
     this.lastPaintMs = now;
@@ -353,6 +359,7 @@ export class Hud {
   private wireControls(): void {
     this.collapseBtn.addEventListener('click', () => this.setCollapsed(!this.collapsed));
     this.q('[data-act="help"]').addEventListener('click', () => this.setHelp(!this.helpOpen));
+    this.q('[data-act="tutorial"]').addEventListener('click', () => this.toggleTutorial());
     this.q('[data-act="help-close"]').addEventListener('click', () => this.setHelp(false));
     // Clicking the backdrop dismisses; clicking the sheet must not.
     this.helpEl.addEventListener('click', (e) => {
@@ -452,6 +459,8 @@ export class Hud {
       this.setHiddenAll(!this.hiddenAll);
     } else if (e.key === 'r' || e.key === 'R') {
       this.cb.onReset();
+    } else if (e.key === 't' || e.key === 'T') {
+      this.toggleTutorial();
     } else if (e.key === '?' || e.key === '/') {
       this.setHelp(!this.helpOpen);
     } else if (e.key === 'Escape') {
@@ -525,8 +534,23 @@ export class Hud {
     if (open) this.q<HTMLButtonElement>('[data-act="help-close"]').focus();
   }
 
+  private toggleTutorial(): void {
+    this.tutorial.toggle();
+    // Both sit at the bottom of the stage; the card supersedes the hint.
+    if (this.tutorial.active && !this.hintDone) {
+      this.hintDone = true;
+      this.hintEl.classList.add('is-gone');
+    }
+    if (this.tutorial.active && this.hiddenAll) this.setHiddenAll(false);
+  }
+
   private tickHint(s: HudStats, now: number): void {
     if (this.hintDone) return;
+    if (this.tutorial.active) {
+      this.hintDone = true;
+      this.hintEl.classList.add('is-gone');
+      return;
+    }
     const cast = s.spells?.[0] !== 'idle' || s.spells?.[1] !== 'idle';
     const seen = finite(s.stats?.[STAT.HANDS_PRESENT]) > 0;
     if (!cast && !seen && now - this.hintStartMs < HINT_MS) return;
