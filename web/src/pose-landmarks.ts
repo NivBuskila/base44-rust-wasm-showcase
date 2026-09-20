@@ -64,7 +64,8 @@ const THUMB_TUCKED: Finger = { dir: 34, curl: [16, 14, 8], seg: [0.9, 0.9, 0.9] 
 const POSES: Record<string, Pose> = {
   // fist, thumb laid across the folded fingers
   attract: [
-    { dir: 48, curl: [12, 10, 6], seg: [0.95, 0.95, 0.95] },
+    // laid flat across the front of the folded fingers, not raised beside them
+    { dir: 62, curl: [10, 8, 6], seg: [1, 0.95, 0.9] },
     folded(-4),
     folded(2),
     folded(8),
@@ -81,7 +82,14 @@ const POSES: Record<string, Pose> = {
   // index straight up, the rest folded away
   ignite: [THUMB_TUCKED, up(-8), folded(2), folded(10), folded(16)],
   // fist with the thumb straight up out of it
-  shatter: [{ dir: -16, curl: [-4, 6, 4] }, folded(-4), folded(2), folded(10), folded(16)],
+  // thumb standing straight up out of the fist, clearing the knuckles
+  shatter: [
+    { dir: -8, curl: [2, 4, 2], seg: [1.5, 1.4, 1.3] },
+    folded(-4),
+    folded(2),
+    folded(8),
+    folded(14),
+  ],
   // index and middle up in a V
   freeze: [THUMB_TUCKED, up(-24), up(6), folded(10), folded(16)],
   // all five spread, palm flat to the camera
