@@ -259,7 +259,10 @@ export class GestureTutorial {
   private paintStep(): void {
     const step = this.progress.step;
     if (!step) return;
-    this.el.classList.remove('is-pass', 'is-done');
+    this.el.classList.remove('is-pass', 'is-done', 'is-step');
+    // Re-trigger the per-step entrance: each step is its own cut.
+    void this.el.offsetWidth;
+    this.el.classList.add('is-step');
     this.count.textContent = `${this.progress.index + 1} / ${STEPS.length}`;
     this.markDots(this.progress.index);
     this.art.innerHTML = handArt(step.spell);
@@ -273,7 +276,9 @@ export class GestureTutorial {
 
   private paintDone(at: number): void {
     this.doneAt = at;
-    this.el.classList.add('is-done');
+    this.el.classList.remove('is-step');
+    void this.el.offsetWidth;
+    this.el.classList.add('is-done', 'is-step');
     this.count.textContent = `${STEPS.length} / ${STEPS.length}`;
     this.markDots(STEPS.length);
     this.art.innerHTML = handArt('release');
