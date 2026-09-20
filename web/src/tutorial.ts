@@ -20,9 +20,9 @@
  */
 
 import { HandMirror } from './hand-mirror';
-import { fit, HandSkeleton } from './hand-skeleton';
+import { GoalPose } from './goal-pose';
+import { HandSkeleton } from './hand-skeleton';
 import type { GestureSpec } from './hud-spec';
-import { poseLandmarks } from './pose-landmarks';
 import { HOW_TO, STEPS } from './tutorial-steps';
 
 export { STEPS };
@@ -113,7 +113,7 @@ export class GestureTutorial {
   private readonly num: HTMLElement;
   private readonly hand: HTMLElement;
   private readonly mirror: HandMirror;
-  private readonly goal: HandSkeleton;
+  private readonly goal: GoalPose;
   private readonly effect: HTMLElement;
   private readonly how: HTMLElement;
   private readonly fill: HTMLElement;
@@ -183,7 +183,9 @@ export class GestureTutorial {
     // Your hand, then the pose to reach — the same drawing twice, so the lesson
     // is a comparison rather than two graphic languages side by side.
     this.mirror = new HandMirror(this.el.querySelector('.tut-art')!);
-    this.goal = new HandSkeleton(this.el.querySelector('.tut-goal')!, { className: 'tut-goal-art' });
+    this.goal = new GoalPose(
+      new HandSkeleton(this.el.querySelector('.tut-goal')!, { className: 'tut-goal-art' }),
+    );
     this.hand = this.el.querySelector('[data-tut-hand]')!;
     this.effect = this.el.querySelector('[data-tut-effect]')!;
     this.how = this.el.querySelector('[data-tut-how]')!;
@@ -226,6 +228,7 @@ export class GestureTutorial {
   /** Closes the card. Finishing or dismissing both count as "seen". */
   stop(): void {
     if (this.on) this.cb.onMode(false);
+    this.goal.stop();
     this.on = false;
     this.el.hidden = true;
     this.scrim.hidden = true;
@@ -309,8 +312,7 @@ export class GestureTutorial {
 
   /** Draws the taught pose in the target tile, in the same skeleton language. */
   private paintGoal(spell: string): void {
-    const pts = poseLandmarks(spell);
-    if (pts) this.goal.draw(fit(pts));
+    this.goal.show(spell);
   }
 
   /** Steps before `upto` are done, `upto` is current, the rest are ahead. */
