@@ -19,9 +19,10 @@
  * straight from `AetherEngine.spell_name`.
  */
 
-import { handArt } from './hand-art';
 import { HandMirror } from './hand-mirror';
+import { fit, HandSkeleton } from './hand-skeleton';
 import type { GestureSpec } from './hud-spec';
+import { poseLandmarks } from './pose-landmarks';
 import { HOW_TO, STEPS } from './tutorial-steps';
 
 export { STEPS };
@@ -110,9 +111,9 @@ export class GestureTutorial {
   private readonly count: HTMLElement;
   private readonly dots: HTMLElement;
   private readonly num: HTMLElement;
-  private readonly art: HTMLElement;
   private readonly hand: HTMLElement;
   private readonly mirror: HandMirror;
+  private readonly goal: HandSkeleton;
   private readonly effect: HTMLElement;
   private readonly how: HTMLElement;
   private readonly fill: HTMLElement;
@@ -152,16 +153,18 @@ export class GestureTutorial {
       <div class="tut-dots" data-tut-dots></div>
       <div class="tut-body">
         <b class="tut-num" data-tut-num aria-hidden="true"></b>
-        <span class="tut-art">
-          <svg class="tut-ring" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
-            <circle class="tut-ring-bg" cx="50" cy="50" r="45" pathLength="1"/>
-            <circle class="tut-ring-v" cx="50" cy="50" r="45" pathLength="1"/>
-          </svg>
-        </span>
-        <span class="tut-arrow" aria-hidden="true">
-          <svg viewBox="0 0 24 24" focusable="false"><path d="M3 12h15m0 0-6-6m6 6-6 6"/></svg>
-        </span>
-        <span class="tut-goal"><span class="tut-hand" data-tut-art></span></span>
+        <div class="tut-pair">
+          <span class="tut-art">
+            <svg class="tut-ring" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+              <circle class="tut-ring-bg" cx="50" cy="50" r="45" pathLength="1"/>
+              <circle class="tut-ring-v" cx="50" cy="50" r="45" pathLength="1"/>
+            </svg>
+          </span>
+          <span class="tut-arrow" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false"><path d="M3 12h15m0 0-6-6m6 6-6 6"/></svg>
+          </span>
+          <span class="tut-goal"></span>
+        </div>
         <div class="tut-text">
           <b data-tut-hand></b>
           <span class="tut-effect" data-tut-effect></span>
@@ -177,9 +180,10 @@ export class GestureTutorial {
     this.count = this.el.querySelector('[data-tut-count]')!;
     this.dots = this.el.querySelector('[data-tut-dots]')!;
     this.num = this.el.querySelector('[data-tut-num]')!;
-    this.art = this.el.querySelector('[data-tut-art]')!;
-    // The caster's own skeleton, over the taught glyph: the lesson is a comparison.
+    // Your hand, then the pose to reach — the same drawing twice, so the lesson
+    // is a comparison rather than two graphic languages side by side.
     this.mirror = new HandMirror(this.el.querySelector('.tut-art')!);
+    this.goal = new HandSkeleton(this.el.querySelector('.tut-goal')!, { className: 'tut-goal-art' });
     this.hand = this.el.querySelector('[data-tut-hand]')!;
     this.effect = this.el.querySelector('[data-tut-effect]')!;
     this.how = this.el.querySelector('[data-tut-how]')!;
@@ -277,7 +281,7 @@ export class GestureTutorial {
     this.count.textContent = `${this.progress.index + 1} / ${STEPS.length}`;
     this.num.textContent = String(this.progress.index + 1).padStart(2, '0');
     this.markDots(this.progress.index);
-    this.art.innerHTML = handArt(step.spell);
+    this.paintGoal(step.spell);
     this.hand.textContent = step.hand;
     this.effect.textContent = `${step.spell} · ${step.effect}`;
     this.how.textContent = HOW_TO[step.spell] ?? '';
@@ -294,13 +298,19 @@ export class GestureTutorial {
     this.count.textContent = `${STEPS.length} / ${STEPS.length}`;
     this.num.textContent = '\u2713';
     this.markDots(STEPS.length);
-    this.art.innerHTML = handArt('release');
+    this.paintGoal('release');
     this.hand.textContent = 'you know the spells';
     this.effect.textContent = 'combos are live again — chain the poses together';
     this.how.textContent = 'the spellbook in the panel shows every sequence';
     this.setNote('press ? for two-hand duets and thrown bolts');
     this.next.textContent = 'done';
     this.setCharge(1);
+  }
+
+  /** Draws the taught pose in the target tile, in the same skeleton language. */
+  private paintGoal(spell: string): void {
+    const pts = poseLandmarks(spell);
+    if (pts) this.goal.draw(fit(pts));
   }
 
   /** Steps before `upto` are done, `upto` is current, the rest are ahead. */
