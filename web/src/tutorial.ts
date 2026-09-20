@@ -19,7 +19,6 @@
  * straight from `AetherEngine.spell_name`.
  */
 
-import { handArt } from './hand-art';
 import { HandMirror } from './hand-mirror';
 import type { GestureSpec } from './hud-spec';
 import { HOW_TO, STEPS } from './tutorial-steps';
@@ -109,7 +108,6 @@ export class GestureTutorial {
   private readonly scrim: HTMLElement;
   private readonly count: HTMLElement;
   private readonly dots: HTMLElement;
-  private readonly art: HTMLElement;
   private readonly num: HTMLElement;
   private readonly hand: HTMLElement;
   private readonly mirror: HandMirror;
@@ -157,7 +155,6 @@ export class GestureTutorial {
             <circle class="tut-ring-bg" cx="50" cy="50" r="45" pathLength="1"/>
             <circle class="tut-ring-v" cx="50" cy="50" r="45" pathLength="1"/>
           </svg>
-          <span class="tut-hand" data-tut-art></span>
         </span>
         <div class="tut-text">
           <b data-tut-hand></b>
@@ -173,7 +170,6 @@ export class GestureTutorial {
     parent.appendChild(this.el);
     this.count = this.el.querySelector('[data-tut-count]')!;
     this.dots = this.el.querySelector('[data-tut-dots]')!;
-    this.art = this.el.querySelector('[data-tut-art]')!;
     this.num = this.el.querySelector('[data-tut-num]')!;
     // The caster's own skeleton, over the taught glyph: the lesson is a comparison.
     this.mirror = new HandMirror(this.el.querySelector('.tut-art')!);
@@ -274,11 +270,10 @@ export class GestureTutorial {
     this.count.textContent = `${this.progress.index + 1} / ${STEPS.length}`;
     this.num.textContent = String(this.progress.index + 1).padStart(2, '0');
     this.markDots(this.progress.index);
-    this.art.innerHTML = handArt(step.spell);
     this.hand.textContent = step.hand;
     this.effect.textContent = `${step.spell} · ${step.effect}`;
     this.how.textContent = HOW_TO[step.spell] ?? '';
-    this.setNote('hold the pose until the bar fills');
+    this.setNote('hold the pose until your hand fills');
     this.next.textContent = 'next ›';
     this.setCharge(0);
   }
@@ -291,7 +286,6 @@ export class GestureTutorial {
     this.count.textContent = `${STEPS.length} / ${STEPS.length}`;
     this.num.textContent = '\u2713';
     this.markDots(STEPS.length);
-    this.art.innerHTML = handArt('release');
     this.hand.textContent = 'you know the spells';
     this.effect.textContent = 'combos are live again — chain the poses together';
     this.how.textContent = 'the spellbook in the panel shows every sequence';
@@ -324,5 +318,6 @@ export class GestureTutorial {
     this.lastCharge = v;
     this.fill.style.setProperty('--v', `${v * 100}%`);
     this.el.style.setProperty('--vn', `${v}`);
+    this.mirror.setCharge(v);
   }
 }

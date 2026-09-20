@@ -69,8 +69,11 @@ function fit(pts: number[][]): number[][] {
 export class HandMirror {
   private readonly el: SVGSVGElement;
   private readonly lines: SVGPolylineElement[];
+  private readonly fills: SVGPolylineElement[];
+  private readonly clip: SVGRectElement;
   private readonly wrist: SVGCircleElement;
   private live = false;
+  private charge = -1;
 
   constructor(parent: HTMLElement) {
     const ns = 'http://www.w3.org/2000/svg';
@@ -79,12 +82,34 @@ export class HandMirror {
     this.el.setAttribute('viewBox', `0 0 ${ICON_BOX} ${ICON_BOX}`);
     this.el.setAttribute('aria-hidden', 'true');
     this.el.setAttribute('focusable', 'false');
+    // The hold timer *is* the hand: a second copy of the same skeleton, in the
+    // accent, revealed from the wrist up by a clip that rises with the charge.
+    const clipId = `tut-mirror-clip-${Math.random().toString(36).slice(2, 8)}`;
+    const defs = document.createElementNS(ns, 'defs');
+    const clipPath = document.createElementNS(ns, 'clipPath');
+    clipPath.setAttribute('id', clipId);
+    this.clip = document.createElementNS(ns, 'rect');
+    this.clip.setAttribute('x', '0');
+    this.clip.setAttribute('width', String(ICON_BOX));
+    clipPath.appendChild(this.clip);
+    defs.appendChild(clipPath);
+    this.el.appendChild(defs);
     this.lines = CHAINS.map(() => {
       const line = document.createElementNS(ns, 'polyline');
       line.setAttribute('class', 'tut-mirror-line');
       this.el.appendChild(line);
       return line;
     });
+    const fillGroup = document.createElementNS(ns, 'g');
+    fillGroup.setAttribute('clip-path', `url(#${clipId})`);
+    this.fills = CHAINS.map(() => {
+      const line = document.createElementNS(ns, 'polyline');
+      line.setAttribute('class', 'tut-mirror-fill');
+      fillGroup.appendChild(line);
+      return line;
+    });
+    this.el.appendChild(fillGroup);
+    this.setCharge(0);
     // The wrist anchors the reading: it says which way the hand is turned.
     this.wrist = document.createElementNS(ns, 'circle');
     this.wrist.setAttribute('class', 'tut-mirror-wrist');
@@ -105,10 +130,9 @@ export class HandMirror {
     }
     const pts = fit(raw);
     CHAINS.forEach((chain, i) => {
-      this.lines[i].setAttribute(
-        'points',
-        chain.map((n) => `${pts[n][0].toFixed(1)},${pts[n][1].toFixed(1)}`).join(' '),
-      );
+      const points = chain.map((n) => `${pts[n][0].toFixed(1)},${pts[n][1].toFixed(1)}`).join(' ');
+      this.lines[i].setAttribute('points', points);
+      this.fills[i].setAttribute('points', points);
     });
     this.wrist.setAttribute('cx', pts[0][0].toFixed(1));
     this.wrist.setAttribute('cy', pts[0][1].toFixed(1));
@@ -116,5 +140,16 @@ export class HandMirror {
       this.live = true;
       this.el.classList.add('is-live');
     }
+  }
+
+  /** Charge 0..1: how much of the hand is filled, from the wrist upwards. */
+  setCharge(charge: number): void {
+    const v = Math.min(1, Math.max(0, charge));
+    if (v === this.charge) return;
+    this.charge = v;
+    // Generous overshoot at the top: fingertips sit inside the padded box.
+    const h = ICON_BOX * v;
+    this.clip.setAttribute('y', (ICON_BOX - h).toFixed(2));
+    this.clip.setAttribute('height', h.toFixed(2));
   }
 }
