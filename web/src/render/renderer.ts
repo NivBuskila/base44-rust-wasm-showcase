@@ -29,10 +29,11 @@ import { FLUID_H, FLUID_W, MAX_PARTICLES, PARTICLE_STRIDE } from '../constants';
 import type { RenderBackend, RenderFrame, SceneRenderer } from '../types';
 import type { ModeStyle } from './styles';
 import { STYLES } from './styles';
+import { BloomChain } from './bloom';
 import { Program, RenderTarget, RendererError, createTexture, isSoftwareRasteriser, probeHdr } from './gl';
+import { LumaProbe } from './luma-probe';
 import { OVERLAY_CAPACITY, OVERLAY_STRIDE, buildHandMesh } from './handmesh';
 import { NOISE_SIZE, buildNoiseTile } from './noise';
-import { BLOOM_DOWN_FRAG, BLOOM_UP_FRAG } from './shaders/bloom';
 import { FULLSCREEN_VERT, buildShader } from './shaders/common';
 import type { ShaderEnv } from './shaders/common';
 import { BLIT_FRAG, COMPOSITE_FRAG } from './shaders/composite';
@@ -43,21 +44,10 @@ import { SCENE_FRAG } from './shaders/scene';
 export { RendererError } from './gl';
 
 /**
- * `sampleLuminance` reduces the frame to an NxN block read from across it.
- * A single pixel is not enough: the fluid is sparse, so the centre pixel is
- * legitimately black much of the time and a one-pixel probe cannot tell that
- * apart from a dead render path.
- */
-const LUMA_SAMPLE_GRID = 16;
-
-/**
  * Device pixel ratio ceiling. Beyond 2 the fill cost buys nothing visible for a
  * field this soft, and it halves the frame rate on phones.
  */
 const MAX_DPR = 2;
-
-/** Deepest bloom mip. Five halvings is a glow radius of ~1/16 of the frame. */
-const BLOOM_LEVELS = 5;
 
 /**
  * Ceiling on the scene and bloom pixel count, per frame.
@@ -84,9 +74,6 @@ const MIN_SCENE_SCALE = 0.4;
 /** Viewport width, in CSS pixels, that particle size is calibrated against. */
 const PARTICLE_SIZE_REF_WIDTH = 1200;
 
-/** Tent filter radius for the bloom fold-back, in source texels. */
-const BLOOM_TENT = 1.1;
-
 /**
  * Particle buffer sizes are rounded up to this many particles.
  *
@@ -100,7 +87,7 @@ const PARTICLE_BUCKET = 32768;
 /** Everything that dies with the GL context and is rebuilt on restore. */
 interface Resources {
   scene: RenderTarget;
-  bloom: RenderTarget[];
+  bloom: BloomChain;
   dyeTex: WebGLTexture;
   debugTex: WebGLTexture;
   videoTex: WebGLTexture;
@@ -113,8 +100,6 @@ interface Resources {
   quadVao: WebGLVertexArrayObject;
   scenePass: Program;
   particlePass: Program;
-  downPass: Program;
-  upPass: Program;
   compositePass: Program;
   overlayPass: Program;
   blitPass: Program;
@@ -135,7 +120,6 @@ export class Renderer implements SceneRenderer {
   private lostContext = false;
 
   private dpr = 1;
-  private bloomLevels = 1;
   private frameIndex = 0;
   /** Scene/bloom resolution as a fraction of the canvas; 1 unless capped. */
   private sceneScale = 1;
@@ -155,8 +139,7 @@ export class Renderer implements SceneRenderer {
   private videoTime = -1;
 
   private readonly overlayScratch = new Float32Array(OVERLAY_CAPACITY * OVERLAY_STRIDE);
-  /** One-row scratch for `sampleLuminance`, grown to the canvas width. */
-  private sampleRow = new Uint8Array(4);
+  private readonly luma: LumaProbe;
 
   private readonly onResize = (): void => this.resize();
   private readonly onLost = (e: Event): void => {
@@ -209,6 +192,7 @@ export class Renderer implements SceneRenderer {
     canvas.addEventListener('webglcontextrestored', this.onRestored);
     window.addEventListener('resize', this.onResize);
 
+    this.luma = new LumaProbe(gl, canvas);
     this.res = this.createResources();
     this.resize();
   }
@@ -231,8 +215,7 @@ export class Renderer implements SceneRenderer {
       new Program(gl, buildShader(v, env), buildShader(f, env), label);
 
     const scene = new RenderTarget(gl, caps.format);
-    const bloom: RenderTarget[] = [];
-    for (let i = 0; i < BLOOM_LEVELS; i++) bloom.push(new RenderTarget(gl, caps.format));
+    const bloom = new BloomChain(gl, env, caps.format);
 
     const rgba8 = { internal: gl.RGBA8, format: gl.RGBA, type: gl.UNSIGNED_BYTE };
     const dyeTex = createTexture(gl, FLUID_W, FLUID_H, rgba8, gl.LINEAR);
@@ -292,8 +275,6 @@ export class Renderer implements SceneRenderer {
       quadVao,
       scenePass: new Program(gl, vert, buildShader(SCENE_FRAG, env), 'scene'),
       particlePass: program(PARTICLE_VERT, PARTICLE_FRAG, 'particles'),
-      downPass: new Program(gl, vert, buildShader(BLOOM_DOWN_FRAG, env), 'bloom-down'),
-      upPass: new Program(gl, vert, buildShader(BLOOM_UP_FRAG, env), 'bloom-up'),
       compositePass: new Program(gl, vert, buildShader(COMPOSITE_FRAG, env), 'composite'),
       overlayPass: program(OVERLAY_VERT, OVERLAY_FRAG, 'overlay'),
       blitPass: new Program(gl, vert, buildShader(BLIT_FRAG, env), 'blit'),
@@ -306,7 +287,7 @@ export class Renderer implements SceneRenderer {
     const gl = this.gl;
     this.res = null;
     res.scene.dispose();
-    for (const level of res.bloom) level.dispose();
+    res.bloom.dispose();
     for (const tex of [res.dyeTex, res.debugTex, res.videoTex, res.noiseTex]) gl.deleteTexture(tex);
     gl.deleteBuffer(res.particleBuffer);
     gl.deleteBuffer(res.overlayBuffer);
@@ -316,8 +297,6 @@ export class Renderer implements SceneRenderer {
     for (const p of [
       res.scenePass,
       res.particlePass,
-      res.downPass,
-      res.upPass,
       res.compositePass,
       res.overlayPass,
       res.blitPass,
@@ -388,22 +367,7 @@ export class Renderer implements SceneRenderer {
     const sw = Math.max(1, Math.round(w * this.sceneScale));
     const sh = Math.max(1, Math.round(h * this.sceneScale));
     res.scene.resize(sw, sh);
-    // The bloom chain stops halving once a level would be too small for the
-    // 13-tap kernel to mean anything; on a phone in portrait that is three
-    // levels, on a 4K canvas it is the full five.
-    let lw = sw;
-    let lh = sh;
-    let levels = 0;
-    while (levels < BLOOM_LEVELS) {
-      const nw = Math.max(1, lw >> 1);
-      const nh = Math.max(1, lh >> 1);
-      if (nw < 8 || nh < 8) break;
-      res.bloom[levels].resize(nw, nh);
-      lw = nw;
-      lh = nh;
-      levels++;
-    }
-    this.bloomLevels = Math.max(1, levels);
+    res.bloom.resize(sw, sh);
   }
 
   setVideo(video: HTMLVideoElement | null): void {
@@ -505,7 +469,9 @@ export class Renderer implements SceneRenderer {
     this.drawScene(res, frame, style, intensity, time);
     this.drawParticles(res, frame, style, intensity);
     this.drawOverlay(res, frame, style);
-    this.drawBloom(res, style);
+    // The overlay left its own VAO bound; the ladder draws fullscreen strips.
+    gl.bindVertexArray(res.quadVao);
+    res.bloom.record(res.scene, style);
     this.drawComposite(res, frame, style, intensity);
   }
 
@@ -665,40 +631,6 @@ export class Renderer implements SceneRenderer {
     gl.disable(gl.BLEND);
   }
 
-  private drawBloom(res: Resources, style: ModeStyle): void {
-    const gl = this.gl;
-    gl.bindVertexArray(res.quadVao);
-
-    const down = res.downPass;
-    down.use();
-    down.f1('u_knee', Math.max(0.05, style.threshold * 0.7));
-    for (let i = 0; i < this.bloomLevels; i++) {
-      const src = i === 0 ? res.scene : res.bloom[i - 1];
-      down.tex('u_src', 0, src.texture);
-      down.f2('u_texel', 1 / src.width, 1 / src.height);
-      // Only the first level thresholds; below that everything in the chain is
-      // already bright by construction.
-      down.f1('u_threshold', i === 0 ? style.threshold : 0);
-      down.f1('u_fromScene', i === 0 ? 1 : 0);
-      res.bloom[i].bind();
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    }
-
-    const up = res.upPass;
-    up.use();
-    up.f1('u_amount', 1);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.ONE, gl.ONE);
-    for (let i = this.bloomLevels - 1; i > 0; i--) {
-      const src = res.bloom[i];
-      up.tex('u_src', 0, src.texture);
-      up.f2('u_texel', BLOOM_TENT / src.width, BLOOM_TENT / src.height);
-      res.bloom[i - 1].bind();
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-    }
-    gl.disable(gl.BLEND);
-  }
-
   private drawComposite(
     res: Resources,
     frame: RenderFrame,
@@ -712,7 +644,7 @@ export class Renderer implements SceneRenderer {
     const p = res.compositePass;
     p.use();
     p.tex('u_scene', 0, res.scene.texture);
-    p.tex('u_bloom', 1, res.bloom[0].texture);
+    p.tex('u_bloom', 1, res.bloom.output);
     p.tex('u_noise', 2, res.noiseTex);
     // Motion drives the glow, not the exposure: pushing exposure with movement
     // makes the whole frame pump, while pushing bloom makes the bright parts
@@ -737,43 +669,10 @@ export class Renderer implements SceneRenderer {
 
   // ------------------------------------------------------------ inspection
 
-  /**
-   * Mean luminance over a grid of samples across the rendered frame, `[0, 1]`.
-   *
-   * Used by the headless tests to tell "something is being drawn" from "the
-   * render path is dead". Reads `LUMA_SAMPLE_GRID^2` pixels spread across the
-   * frame rather than a contiguous block, so a bright region anywhere
-   * registers. One `readPixels` per sampled row: `n` calls instead of `n^2`.
-   */
+  /** Mean luminance over a grid of samples across the rendered frame, `[0, 1]`. */
   sampleLuminance(): number {
     const gl = this.gl;
     if (this.lostContext || gl.isContextLost()) return 0;
-    const n = LUMA_SAMPLE_GRID;
-    const stepX = Math.max(1, Math.floor(this.canvas.width / n));
-    const stepY = Math.max(1, Math.floor(this.canvas.height / n));
-
-    const rowBytes = this.canvas.width * 4;
-    if (this.sampleRow.length < rowBytes) this.sampleRow = new Uint8Array(rowBytes);
-
-    // The composite pass leaves the default framebuffer bound, but a caller
-    // could read between passes, and readPixels would then sample an
-    // intermediate target at the wrong size.
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-
-    let total = 0;
-    let count = 0;
-    for (let row = 0; row < n; row++) {
-      const y = Math.min(this.canvas.height - 1, row * stepY);
-      gl.readPixels(0, y, this.canvas.width, 1, gl.RGBA, gl.UNSIGNED_BYTE, this.sampleRow);
-      for (let i = 0; i < n; i++) {
-        const p = Math.min(this.canvas.width - 1, i * stepX) * 4;
-        total +=
-          0.2126 * this.sampleRow[p] +
-          0.7152 * this.sampleRow[p + 1] +
-          0.0722 * this.sampleRow[p + 2];
-        count++;
-      }
-    }
-    return count === 0 ? 0 : total / count / 255;
+    return this.luma.sample();
   }
 }
