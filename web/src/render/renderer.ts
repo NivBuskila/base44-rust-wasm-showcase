@@ -37,7 +37,7 @@ import {
   probeHdr,
 } from "./gl";
 import { LumaProbe } from "./luma-probe";
-import { OVERLAY_CAPACITY, OVERLAY_STRIDE, buildHandMesh } from "./handmesh";
+import { HandOverlay } from "./overlay";
 import type { ScenePrograms } from "./programs";
 import { createPrograms, disposePrograms } from "./programs";
 import type { ShaderEnv } from "./shaders/common";
@@ -96,8 +96,8 @@ interface Resources {
   programs: ScenePrograms;
   particleBuffer: WebGLBuffer;
   particleVao: WebGLVertexArrayObject;
-  overlayBuffer: WebGLBuffer;
-  overlayVao: WebGLVertexArrayObject;
+  /** The hand skeleton and its buffers; see `overlay.ts`. */
+  overlay: HandOverlay;
   /** Empty VAO for the fullscreen passes, which fetch no attributes. */
   quadVao: WebGLVertexArrayObject;
 }
@@ -130,9 +130,6 @@ export class Renderer implements SceneRenderer {
   /** Adaptive multiplier on the budgeted scale; 1 until the governor lowers it. */
   private qualityScale = 1;
 
-  private readonly overlayScratch = new Float32Array(
-    OVERLAY_CAPACITY * OVERLAY_STRIDE,
-  );
   private readonly luma: LumaProbe;
 
   private readonly onResize = (): void => this.resize();
@@ -216,17 +213,9 @@ export class Renderer implements SceneRenderer {
     const bloom = new BloomChain(gl, env, caps.format);
 
     const particleBuffer = gl.createBuffer();
-    const overlayBuffer = gl.createBuffer();
     const particleVao = gl.createVertexArray();
-    const overlayVao = gl.createVertexArray();
     const quadVao = gl.createVertexArray();
-    if (
-      !particleBuffer ||
-      !overlayBuffer ||
-      !particleVao ||
-      !overlayVao ||
-      !quadVao
-    ) {
+    if (!particleBuffer || !particleVao || !quadVao) {
       throw new RendererError("could not allocate the vertex buffers");
     }
 
@@ -240,17 +229,6 @@ export class Renderer implements SceneRenderer {
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 4, gl.FLOAT, false, PARTICLE_STRIDE * 4, 0);
 
-    gl.bindVertexArray(overlayVao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, overlayBuffer);
-    gl.bufferData(
-      gl.ARRAY_BUFFER,
-      this.overlayScratch.byteLength,
-      gl.DYNAMIC_DRAW,
-    );
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, OVERLAY_STRIDE * 4, 0);
-    gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 1, gl.FLOAT, false, OVERLAY_STRIDE * 4, 8);
     gl.bindVertexArray(null);
 
     return {
@@ -260,8 +238,7 @@ export class Renderer implements SceneRenderer {
       programs: createPrograms(gl, env),
       particleBuffer,
       particleVao,
-      overlayBuffer,
-      overlayVao,
+      overlay: new HandOverlay(gl),
       quadVao,
     };
   }
@@ -275,9 +252,8 @@ export class Renderer implements SceneRenderer {
     res.bloom.dispose();
     res.sources.dispose();
     gl.deleteBuffer(res.particleBuffer);
-    gl.deleteBuffer(res.overlayBuffer);
     gl.deleteVertexArray(res.particleVao);
-    gl.deleteVertexArray(res.overlayVao);
+    res.overlay.dispose();
     gl.deleteVertexArray(res.quadVao);
     disposePrograms(res.programs);
   }
@@ -388,7 +364,14 @@ export class Renderer implements SceneRenderer {
     const style = STYLES[frame.mode];
     this.drawScene(res, frame, style, intensity, time);
     this.drawParticles(res, frame, style, intensity);
-    this.drawOverlay(res, frame, style);
+    if (style.overlay > 0 && frame.hands)
+      res.overlay.draw(
+        res.programs.overlay,
+        res.scene,
+        frame.hands,
+        style.overlay,
+        this.dpr * this.sceneScale,
+      );
     // The overlay left its own VAO bound; the ladder draws fullscreen strips.
     gl.bindVertexArray(res.quadVao);
     res.bloom.record(res.scene, style);
@@ -536,54 +519,6 @@ export class Renderer implements SceneRenderer {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
     gl.drawArrays(gl.POINTS, 0, count);
-    gl.disable(gl.BLEND);
-  }
-
-  private drawOverlay(
-    res: Resources,
-    frame: RenderFrame,
-    style: ModeStyle,
-  ): void {
-    if (style.overlay <= 0) return;
-    if (!frame.hands) return;
-    const mesh = buildHandMesh(frame.hands, this.overlayScratch);
-    const vertices = mesh.lineVertices + mesh.pointVertices;
-    if (vertices === 0) return;
-
-    const gl = this.gl;
-    gl.bindVertexArray(res.overlayVao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, res.overlayBuffer);
-    gl.bufferData(
-      gl.ARRAY_BUFFER,
-      this.overlayScratch.byteLength,
-      gl.DYNAMIC_DRAW,
-    );
-    gl.bufferSubData(
-      gl.ARRAY_BUFFER,
-      0,
-      this.overlayScratch,
-      0,
-      vertices * OVERLAY_STRIDE,
-    );
-
-    const p = res.programs.overlay;
-    p.use();
-    p.f1("u_alpha", style.overlay);
-    p.f3("u_tint", 0.55, 0.88, 1.0);
-
-    res.scene.bind();
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.ONE, gl.ONE);
-    if (mesh.lineVertices > 0) {
-      p.f1("u_round", 0);
-      p.f1("u_size", 1);
-      gl.drawArrays(gl.LINES, 0, mesh.lineVertices);
-    }
-    if (mesh.pointVertices > 0) {
-      p.f1("u_round", 1);
-      p.f1("u_size", 5 * this.dpr * this.sceneScale);
-      gl.drawArrays(gl.POINTS, mesh.lineVertices, mesh.pointVertices);
-    }
     gl.disable(gl.BLEND);
   }
 
