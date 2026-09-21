@@ -16,6 +16,7 @@
 import type { AetherEngine } from './wasm/aether';
 import { Camera, CameraError } from './camera';
 import { EngineViews } from './engine-views';
+import { FrameClock } from './frame-clock';
 import type { EngineTier } from './engine-loader';
 import { Hud } from './hud';
 import {
@@ -36,9 +37,6 @@ import type { PerceptionSource, RenderFrame, SceneRenderer, ViewMode } from './t
  * quality ladder treats as 100%.
  */
 const DEFAULT_PRESSURE_ITERS = 28;
-
-/** Rolling window for the fps readout. */
-const FPS_SMOOTHING = 0.9;
 
 export class App {
   private readonly engine: AetherEngine;
@@ -67,7 +65,8 @@ export class App {
 
   private running = false;
   private rafId = 0;
-  private lastFrameMs = 0;
+  /** The two deltas, the smoothed fps and the gap outside the callback. */
+  private readonly clock = new FrameClock();
   private lastCameraTime = -1;
   private lastCameraMs = 0;
   private cameraAvailable = false;
@@ -75,7 +74,6 @@ export class App {
   private mode: ViewMode = 'aether';
   private showCamera = true;
 
-  private fps = 0;
   private stepMs = 0;
   private renderMs = 0;
   /** Camera pump: grabbing the video frame and handing it to perception. */
@@ -84,16 +82,8 @@ export class App {
   private hudMs = 0;
   /** Everything the callback did, so the measured rows can be checked to sum. */
   private frameMs = 0;
-  /**
-   * The gap the callback did not spend: wall time between frames minus the work
-   * of the previous one. `step`/`render`/`infer` summing far below the frame
-   * period means the cost is here — GPU work the driver finishes after the GL
-   * calls return, compositing, or another task blocking the loop — and without
-   * this row that time is invisible and the HUD appears to contradict the frame
-   * rate it sits next to.
-   */
+  /** See `FrameClock.outside`. */
   private outsideMs = 0;
-  private frames = 0;
 
   constructor(
     engine: AetherEngine,
@@ -211,7 +201,7 @@ export class App {
 
     this.renderer.setVideo(this.cameraAvailable ? this.camera.video : null);
     this.running = true;
-    this.lastFrameMs = performance.now();
+    this.clock.reset(performance.now());
     this.rafId = requestAnimationFrame(this.frame);
   }
 
@@ -219,20 +209,14 @@ export class App {
     if (!this.running) return;
     this.rafId = requestAnimationFrame(this.frame);
 
-    // Two different quantities, and conflating them is how a frame-rate readout
-    // ends up unable to report the problem it exists to report. `simDt` is
-    // clamped so one long stall does not blow the integrator apart; `realDt` is
-    // what actually elapsed, and is the only honest input to an fps number.
-    const realDt = Math.max(1e-4, (nowMs - this.lastFrameMs) / 1000);
-    const simDt = Math.min(0.05, Math.max(1 / 480, realDt));
-    this.lastFrameMs = nowMs;
-    this.fps = this.fps * FPS_SMOOTHING + (1 / realDt) * (1 - FPS_SMOOTHING);
-    this.frames++;
+    // See `frame-clock.ts`: `simDt` is clamped for the integrator, `realDt` is
+    // what actually elapsed and is the only honest input to an fps number.
+    const { simDt } = this.clock.tick(nowMs);
 
     this.views.refresh();
 
     const frameStart = performance.now();
-    this.outsideMs = Math.max(0, realDt * 1000 - this.frameMs);
+    this.outsideMs = this.clock.outside(this.frameMs);
 
     this.pumpCamera(nowMs);
     this.perception.pump(nowMs);
@@ -253,11 +237,11 @@ export class App {
       this.engine.set_particles_alive(this.renderer.particlesAlive?.() ?? 0);
     }
 
-    this.governor.update(this.fps);
-    this.overdrive.update(stats, this.fps, this.stepMs);
+    this.governor.update(this.clock.fps);
+    this.overdrive.update(stats, this.clock.fps, this.stepMs);
     const hudStart = performance.now();
     this.hud.update({
-      fps: this.fps,
+      fps: this.clock.fps,
       stepMs: this.stepMs,
       renderMs: this.renderMs,
       inferenceMs: this.perception.inferenceMs,
@@ -307,7 +291,7 @@ export class App {
       debug: this.mode === 'debug' ? this.views.debug() : null,
       video: this.cameraAvailable ? this.camera.video : null,
       hands: stats[STAT.HANDS_PRESENT] > 0 ? this.perception.hands : null,
-      time: this.frames / 60,
+      time: this.clock.frames / 60,
       intensity,
       mode: this.mode,
       showCamera: this.showCamera && this.cameraAvailable,
@@ -343,8 +327,8 @@ export class App {
    */
   get diagnostics() {
     return {
-      frames: this.frames,
-      fps: this.fps,
+      frames: this.clock.frames,
+      fps: this.clock.fps,
       stepMs: this.stepMs,
       renderMs: this.renderMs,
       inferenceMs: this.perception.inferenceMs,
