@@ -1,0 +1,75 @@
+/* First-run hint --------------------------------------------------------- */
+
+/* Spans the viewport rather than sitting at `left: 50%`: an absolutely
+   positioned box only offset from the left gets a shrink-to-fit width of the
+   space remaining to the right, which silently wrapped the chip row in half. */
+.hud-hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: max(26px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  padding: 0 16px;
+  text-align: center;
+  opacity: 1;
+  transition:
+    opacity 1200ms ease,
+    transform 1200ms ease;
+}
+
+.hud-hint > * {
+  max-width: min(960px, 100%);
+}
+
+.hud-hint.is-gone {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.hud-hint > b {
+  font-size: 13px;
+  font-weight: 400;
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: var(--ink);
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.9);
+}
+
+.hud-hint .chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 5px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 4px;
+  background: rgba(7, 10, 18, 0.62);
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.chip svg {
+  width: 12px;
+  height: 12px;
+  opacity: 0.8;
+}
+
+.hint-keys {
+  font-size: 8.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
