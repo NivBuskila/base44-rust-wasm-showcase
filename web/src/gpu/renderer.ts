@@ -43,15 +43,12 @@ import type {
   RenderFrame,
   SceneRenderer,
 } from "../types";
+import { BloomChain } from "./bloom";
 import type { GpuContext } from "./device";
 import { recordGpuError } from "./error-log";
+import { LuminanceProbe } from "./probe";
 import { ParticleSim } from "./particle-sim";
-import { Readback } from "./readback";
-import {
-  BLOOM_DOWN_WGSL,
-  BLOOM_UNIFORM_FLOATS,
-  BLOOM_UP_WGSL,
-} from "./shaders/bloom";
+import { BLOOM_DOWN_WGSL, BLOOM_UP_WGSL } from "./shaders/bloom";
 import {
   BLIT_WGSL,
   COMPOSITE_UNIFORM_FLOATS,
@@ -64,78 +61,19 @@ import {
 } from "./shaders/overlay";
 import { DRAW_UNIFORM_FLOATS, PARTICLE_DRAW_WGSL } from "./shaders/particles";
 import { SCENE_UNIFORM_FLOATS, SCENE_WGSL } from "./shaders/scene";
+import type { FullscreenPass } from "./target";
+import { Target } from "./target";
 import { clamp, finite } from "./sim-uniform";
 
 /** Intermediate HDR format; guaranteed renderable and blendable in WebGPU. */
 const HDR_FORMAT: GPUTextureFormat = "rgba16float";
 
 const MAX_DPR = 2;
-const BLOOM_LEVELS = 5;
-const BLOOM_TENT = 1.1;
 const SCENE_PIXEL_BUDGET = 5_200_000;
 const MIN_SCENE_SCALE = 0.4;
 const PARTICLE_SIZE_REF_WIDTH = 1200;
 
-/** Side of the luminance probe; a 16x16 reduction of the finished frame. */
-const PROBE = 16;
-/** `copyTextureToBuffer` wants rows aligned to 256 bytes. */
-const PROBE_ROW_BYTES = 256;
-
-/** Mean Rec.709 luminance of the probe readback, `[0, 1]`, rows 256-aligned. */
-function meanLuminance(px: Uint8Array): number {
-  let total = 0;
-  for (let row = 0; row < PROBE; row++) {
-    const base = row * PROBE_ROW_BYTES;
-    for (let i = 0; i < PROBE; i++) {
-      const p = base + i * 4;
-      total += 0.2126 * px[p] + 0.7152 * px[p + 1] + 0.0722 * px[p + 2];
-    }
-  }
-  return total / (PROBE * PROBE) / 255;
-}
-
 export class GpuRendererError extends Error {}
-
-/** A colour target plus its size, resized in place. */
-class Target {
-  texture: GPUTexture | null = null;
-  view: GPUTextureView | null = null;
-  width = 0;
-  height = 0;
-
-  constructor(
-    private readonly device: GPUDevice,
-    private readonly format: GPUTextureFormat,
-    private readonly label: string,
-    private readonly extraUsage: number = 0,
-  ) {}
-
-  resize(w: number, h: number): boolean {
-    if (this.width === w && this.height === h && this.texture) return false;
-    this.texture?.destroy();
-    this.texture = this.device.createTexture({
-      label: this.label,
-      size: { width: w, height: h },
-      format: this.format,
-      usage:
-        GPUTextureUsage.RENDER_ATTACHMENT |
-        GPUTextureUsage.TEXTURE_BINDING |
-        this.extraUsage,
-    });
-    this.view = this.texture.createView();
-    this.width = w;
-    this.height = h;
-    return true;
-  }
-
-  dispose(): void {
-    this.texture?.destroy();
-    this.texture = null;
-    this.view = null;
-    this.width = 0;
-    this.height = 0;
-  }
-}
 
 export class GpuRenderer implements SceneRenderer {
   readonly backend: RenderBackend = "webgpu";
@@ -148,10 +86,9 @@ export class GpuRenderer implements SceneRenderer {
 
   // --- targets
   private readonly scene: Target;
-  private readonly bloom: Target[];
+  private readonly bloom: BloomChain;
   private readonly frameTarget: Target;
-  private readonly probeTarget: Target;
-  private bloomLevels = 1;
+  private readonly probe: LuminanceProbe;
 
   // --- textures and samplers
   private dyeTex: GPUTexture;
@@ -183,24 +120,18 @@ export class GpuRenderer implements SceneRenderer {
   private readonly drawUniform: GPUBuffer;
   private readonly overlayLineUniform: GPUBuffer;
   private readonly overlayPointUniform: GPUBuffer;
-  private readonly downUniforms: GPUBuffer[];
-  private readonly upUniforms: GPUBuffer[];
   private readonly overlayBuffer: GPUBuffer;
 
   /** The pool and its compute passes; see `particle-sim.ts`. */
   private readonly sim: ParticleSim;
   /** Pool generation the draw bind group was built against. */
   private drawnPoolVersion = -1;
-  private readonly probeRead: Readback;
 
   // --- bind groups (rebuilt when the resources behind them change)
   private sceneBind: GPUBindGroup | null = null;
   private compositeBind: GPUBindGroup | null = null;
   private blitSceneBind: GPUBindGroup | null = null;
   private blitDebugBind: GPUBindGroup | null = null;
-  private probeBind: GPUBindGroup | null = null;
-  private downBinds: GPUBindGroup[] = [];
-  private upBinds: GPUBindGroup[] = [];
   private overlayLineBind: GPUBindGroup | null = null;
   private overlayPointBind: GPUBindGroup | null = null;
   private drawBind: GPUBindGroup | null = null;
@@ -210,7 +141,6 @@ export class GpuRenderer implements SceneRenderer {
   private readonly compositeScratch = new Float32Array(12);
   private readonly drawScratch = new Float32Array(DRAW_UNIFORM_FLOATS);
   private readonly overlayScratchU = new Float32Array(8);
-  private readonly bloomScratch = new Float32Array(4);
   private readonly overlayVerts = new Float32Array(
     OVERLAY_CAPACITY * OVERLAY_STRIDE,
   );
@@ -222,7 +152,6 @@ export class GpuRenderer implements SceneRenderer {
   private qualityScale = 1;
   private frameIndex = 0;
   private video: HTMLVideoElement | null = null;
-  private luminance = 0;
   private disposed = false;
 
   private readonly onResize = (): void => this.resize();
@@ -252,17 +181,7 @@ export class GpuRenderer implements SceneRenderer {
 
     const d = this.device;
     this.scene = new Target(d, HDR_FORMAT, "scene");
-    this.bloom = Array.from(
-      { length: BLOOM_LEVELS },
-      (_, i) => new Target(d, HDR_FORMAT, `bloom${i}`),
-    );
     this.frameTarget = new Target(d, "rgba8unorm", "frame");
-    this.probeTarget = new Target(
-      d,
-      "rgba8unorm",
-      "probe",
-      GPUTextureUsage.COPY_SRC,
-    );
 
     this.clampSampler = d.createSampler({
       magFilter: "linear",
@@ -408,12 +327,6 @@ export class GpuRenderer implements SceneRenderer {
     // is submitted, so a second write would also change the first draw.
     this.overlayLineUniform = uniform(OVERLAY_UNIFORM_FLOATS, "overlay-lines-uniform");
     this.overlayPointUniform = uniform(OVERLAY_UNIFORM_FLOATS, "overlay-points-uniform");
-    this.downUniforms = Array.from({ length: BLOOM_LEVELS }, (_, i) =>
-      uniform(BLOOM_UNIFORM_FLOATS, `down${i}`),
-    );
-    this.upUniforms = Array.from({ length: BLOOM_LEVELS }, (_, i) =>
-      uniform(BLOOM_UNIFORM_FLOATS, `up${i}`),
-    );
 
     this.overlayBuffer = d.createBuffer({
       label: "overlay",
@@ -421,7 +334,14 @@ export class GpuRenderer implements SceneRenderer {
       usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
     this.sim = new ParticleSim(d);
-    this.probeRead = new Readback(d, "probe-read", PROBE_ROW_BYTES * PROBE);
+    this.bloom = new BloomChain(
+      d,
+      this.downPipe,
+      this.upPipe,
+      this.clampSampler,
+      HDR_FORMAT,
+    );
+    this.probe = new LuminanceProbe(d, this.probePipe, this.clampSampler);
 
     this.buildStaticBinds();
     window.addEventListener("resize", this.onResize);
@@ -501,9 +421,8 @@ export class GpuRenderer implements SceneRenderer {
     this.disposed = true;
     window.removeEventListener("resize", this.onResize);
     this.scene.dispose();
-    for (const level of this.bloom) level.dispose();
+    this.bloom.dispose();
     this.frameTarget.dispose();
-    this.probeTarget.dispose();
     for (const tex of [
       this.dyeTex,
       this.debugTex,
@@ -512,7 +431,7 @@ export class GpuRenderer implements SceneRenderer {
     ])
       tex.destroy();
     this.sim.dispose();
-    this.probeRead.dispose();
+    this.probe.dispose();
     this.video = null;
   }
 
@@ -549,23 +468,9 @@ export class GpuRenderer implements SceneRenderer {
     const sh = Math.max(1, Math.round(h * this.sceneScale));
 
     let dirty = this.scene.resize(sw, sh);
-    let lw = sw;
-    let lh = sh;
-    let levels = 0;
-    while (levels < BLOOM_LEVELS) {
-      const nw = Math.max(1, lw >> 1);
-      const nh = Math.max(1, lh >> 1);
-      // Level 0 always exists — the composite samples it — even when the
-      // canvas has not been laid out yet and is only a few pixels wide.
-      if (levels > 0 && (nw < 8 || nh < 8)) break;
-      dirty = this.bloom[levels].resize(nw, nh) || dirty;
-      lw = nw;
-      lh = nh;
-      levels++;
-    }
-    this.bloomLevels = Math.max(1, levels);
+    dirty = this.bloom.resize(sw, sh) || dirty;
     dirty = this.frameTarget.resize(w, h) || dirty;
-    dirty = this.probeTarget.resize(PROBE, PROBE) || dirty;
+    dirty = this.probe.resize() || dirty;
     if (dirty) this.buildTargetBinds();
   }
 
@@ -590,20 +495,10 @@ export class GpuRenderer implements SceneRenderer {
       return d.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries });
     };
 
-    this.downBinds = [];
-    this.upBinds = [];
-    for (let i = 0; i < this.bloomLevels; i++) {
-      const src = i === 0 ? this.scene : this.bloom[i - 1];
-      this.downBinds.push(
-        sampled(this.downPipe, [src.view!], this.downUniforms[i]),
-      );
-      this.upBinds.push(
-        sampled(this.upPipe, [this.bloom[i].view!], this.upUniforms[i]),
-      );
-    }
+    this.bloom.buildBinds(this.scene);
     this.compositeBind = sampled(
       this.compositePipe,
-      [this.scene.view!, this.bloom[0].view!, this.noiseTex.createView()],
+      [this.scene.view!, this.bloom.output, this.noiseTex.createView()],
       this.compositeUniform,
     );
     this.blitSceneBind = d.createBindGroup({
@@ -613,13 +508,7 @@ export class GpuRenderer implements SceneRenderer {
         { binding: 1, resource: this.clampSampler },
       ],
     });
-    this.probeBind = d.createBindGroup({
-      layout: this.probePipe.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: this.frameTarget.view! },
-        { binding: 1, resource: this.clampSampler },
-      ],
-    });
+    this.probe.buildBind(this.frameTarget.view!);
   }
 
   setVideo(video: HTMLVideoElement | null): void {
@@ -691,7 +580,7 @@ export class GpuRenderer implements SceneRenderer {
     if (drawn > 0)
       this.drawParticles(encoder, drawn, style, intensity, frame.sim!);
     this.drawOverlay(encoder, frame, style);
-    this.drawBloom(encoder, style);
+    this.bloom.record(encoder, this.pass, style, this.scene);
     this.drawComposite(encoder, frame, style, intensity);
     this.blit(encoder);
     this.device.queue.submit([encoder.finish()]);
@@ -699,13 +588,13 @@ export class GpuRenderer implements SceneRenderer {
   }
 
   /** One render pass over a target, drawing the fullscreen strip. */
-  private pass(
-    encoder: GPUCommandEncoder,
-    view: GPUTextureView,
-    pipe: GPURenderPipeline,
-    bind: GPUBindGroup,
-    load: GPULoadOp = "clear",
-  ): void {
+  private readonly pass: FullscreenPass = (
+    encoder,
+    view,
+    pipe,
+    bind,
+    load = "clear",
+  ): void => {
     const p = encoder.beginRenderPass({
       colorAttachments: [
         {
@@ -720,7 +609,7 @@ export class GpuRenderer implements SceneRenderer {
     p.setBindGroup(0, bind);
     p.draw(4);
     p.end();
-  }
+  };
 
   private drawDebug(encoder: GPUCommandEncoder, frame: RenderFrame): void {
     const view = this.context.getCurrentTexture().createView();
@@ -923,36 +812,6 @@ export class GpuRenderer implements SceneRenderer {
     p.end();
   }
 
-  private drawBloom(encoder: GPUCommandEncoder, style: ModeStyle): void {
-    const knee = Math.max(0.05, style.threshold * 0.7);
-    for (let i = 0; i < this.bloomLevels; i++) {
-      const src = i === 0 ? this.scene : this.bloom[i - 1];
-      const b = this.bloomScratch;
-      b[0] = 1 / src.width;
-      b[1] = 1 / src.height;
-      b[2] = i === 0 ? style.threshold : 0;
-      b[3] = knee;
-      this.device.queue.writeBuffer(this.downUniforms[i], 0, b);
-      this.pass(encoder, this.bloom[i].view!, this.downPipe, this.downBinds[i]);
-    }
-    for (let i = this.bloomLevels - 1; i > 0; i--) {
-      const src = this.bloom[i];
-      const b = this.bloomScratch;
-      b[0] = BLOOM_TENT / src.width;
-      b[1] = BLOOM_TENT / src.height;
-      b[2] = 1;
-      b[3] = 0;
-      this.device.queue.writeBuffer(this.upUniforms[i], 0, b);
-      this.pass(
-        encoder,
-        this.bloom[i - 1].view!,
-        this.upPipe,
-        this.upBinds[i],
-        "load",
-      );
-    }
-  }
-
   private drawComposite(
     encoder: GPUCommandEncoder,
     frame: RenderFrame,
@@ -996,19 +855,7 @@ export class GpuRenderer implements SceneRenderer {
       this.blitPipe,
       this.blitSceneBind!,
     );
-    // Skipped while the read is in flight: a copy into a busy staging buffer
-    // would cost the whole submission. See `readback.ts`.
-    if (!this.probeRead.idle) return;
-    this.pass(encoder, this.probeTarget.view!, this.probePipe, this.probeBind!);
-    encoder.copyTextureToBuffer(
-      { texture: this.probeTarget.texture! },
-      {
-        buffer: this.probeRead.buffer,
-        bytesPerRow: PROBE_ROW_BYTES,
-        rowsPerImage: PROBE,
-      },
-      { width: PROBE, height: PROBE },
-    );
+    this.probe.record(encoder, this.pass);
   }
 
   // ------------------------------------------------------------ inspection
@@ -1016,14 +863,12 @@ export class GpuRenderer implements SceneRenderer {
   /** Starts this frame's reads. Must run after the submit, never before it. */
   private readback(): void {
     this.sim.pollAlive();
-    this.probeRead.poll((bytes) => {
-      this.luminance = meanLuminance(new Uint8Array(bytes));
-    });
+    this.probe.poll();
   }
 
   /** Mean luminance of the last completed frame, `[0, 1]`. */
   sampleLuminance(): number {
-    return this.luminance;
+    return this.probe.luminance;
   }
 
   particlesAlive(): number {
