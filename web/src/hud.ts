@@ -27,31 +27,35 @@
  * never exceeds the clamp, so no value ever gets silently rewritten.
  */
 
-import { MAX_PARTICLES, STAT } from './constants';
-import type { EngineTier } from './engine-loader';
-import { handsPresent, statCells, warpView } from './hud-cells';
-import { ComboBook, comboState, duetState } from './hud-combos';
-import { FrameTimer } from './hud-frame-timer';
-import { hudAction } from './hud-keys';
-import { markup } from './hud-markup';
-import { Meter, finite, frameTone } from './hud-meter';
-import { PRESETS, type ParamPreset } from './hud-presets';
-import { presence, spellAt } from './hud-readouts';
-import { Sparkline } from './hud-spark';
-import { statusLine } from './hud-status';
-import { GestureTutorial } from './tutorial';
+import { MAX_PARTICLES, STAT } from "./constants";
+import type { EngineTier } from "./engine-loader";
+import { handsPresent, statCells, warpView } from "./hud-cells";
+import { ComboBook, comboState, duetState } from "./hud-combos";
+import { FrameTimer } from "./hud-frame-timer";
+import { hudAction } from "./hud-keys";
+import { markup } from "./hud-markup";
+import { Meter, finite, frameTone } from "./hud-meter";
+import { ParamControls } from "./hud-params";
+import { presence, spellAt } from "./hud-readouts";
+import { Sparkline } from "./hud-spark";
+import { statusLine } from "./hud-status";
+import { GestureTutorial } from "./tutorial";
 import {
   CELLS,
   GESTURES,
   METERS,
   MODES,
-  PARAMS,
   PARTICLE_DETENTS,
   countToDetent,
   detentToCount,
   thousands,
-} from './hud-spec';
-import type { HudCallbacks, HudStats, PerceptionStatus, ViewMode } from './types';
+} from "./hud-spec";
+import type {
+  HudCallbacks,
+  HudStats,
+  PerceptionStatus,
+  ViewMode,
+} from "./types";
 
 /**
  * DOM repaint period. A full paint measures ~0.10 ms in Chromium, so 10 Hz
@@ -90,7 +94,6 @@ export class Hud {
   private readonly camValue: HTMLElement;
   private readonly particleInput: HTMLInputElement;
   private readonly particleValue: HTMLElement;
-  private readonly presetBtns = new Map<string, HTMLButtonElement>();
   private readonly combos: ComboBook;
   private readonly tutorial: GestureTutorial;
 
@@ -107,34 +110,34 @@ export class Hud {
   private lastPaintMs = 0;
   private hintStartMs = 0;
   private hintDone = false;
-  private lastPercep = '';
-  private lastFpsTone = '';
+  private lastPercep = "";
+  private lastFpsTone = "";
   private lastAmbient: boolean | null = null;
 
   constructor(root: HTMLElement, callbacks: HudCallbacks) {
     this.root = root;
     this.cb = callbacks;
-    this.root.classList.add('hud-root', 'is-collapsed');
+    this.root.classList.add("hud-root", "is-collapsed");
     this.root.innerHTML = markup();
 
-    this.panel = this.q('.hud-panel');
-    this.body = this.q('.hud-body');
+    this.panel = this.q(".hud-panel");
+    this.body = this.q(".hud-body");
     this.collapseBtn = this.q('[data-act="collapse"]');
-    this.fpsEl = this.q('[data-fps]');
-    this.ambientEl = this.q('[data-ambient]');
-    this.engineBadge = this.q('[data-engine]');
-    this.spark = new Sparkline(this.q('canvas.hud-spark'));
-    this.warpValue = this.q('[data-warp-value]');
-    this.warpFill = this.q('[data-warp-fill]');
-    this.percepEl = this.q('.hud-percep');
-    this.percepHead = this.q('[data-percep-head]');
-    this.percepWhy = this.q('[data-percep-why]');
-    this.hintEl = this.q('.hud-hint');
-    this.helpEl = this.q('.hud-help');
+    this.fpsEl = this.q("[data-fps]");
+    this.ambientEl = this.q("[data-ambient]");
+    this.engineBadge = this.q("[data-engine]");
+    this.spark = new Sparkline(this.q("canvas.hud-spark"));
+    this.warpValue = this.q("[data-warp-value]");
+    this.warpFill = this.q("[data-warp-fill]");
+    this.percepEl = this.q(".hud-percep");
+    this.percepHead = this.q("[data-percep-head]");
+    this.percepWhy = this.q("[data-percep-why]");
+    this.hintEl = this.q(".hud-hint");
+    this.helpEl = this.q(".hud-help");
     this.camBtn = this.q('[data-act="camera"]');
-    this.camValue = this.q('[data-camera-value]');
-    this.particleInput = this.q('[data-particles]');
-    this.particleValue = this.q('[data-particles-value]');
+    this.camValue = this.q("[data-camera-value]");
+    this.particleInput = this.q("[data-particles]");
+    this.particleValue = this.q("[data-particles-value]");
     this.overdriveBtn = this.q('[data-act="overdrive"]');
 
     for (const m of METERS) {
@@ -147,9 +150,14 @@ export class Hud {
         ),
       );
     }
-    for (const c of CELLS) this.cells.set(c.id, this.q(`[data-cell="${c.id}"] b`));
-    for (const g of GESTURES) this.legendEls.set(g.spell, this.q(`[data-spell="${g.spell}"]`));
-    this.spellEls.push(this.q('[data-hand="0"] b'), this.q('[data-hand="1"] b'));
+    for (const c of CELLS)
+      this.cells.set(c.id, this.q(`[data-cell="${c.id}"] b`));
+    for (const g of GESTURES)
+      this.legendEls.set(g.spell, this.q(`[data-spell="${g.spell}"]`));
+    this.spellEls.push(
+      this.q('[data-hand="0"] b'),
+      this.q('[data-hand="1"] b'),
+    );
 
     // The status line lives outside the scrolling body — "why is tracking off"
     // must not be something you have to scroll to — so collapsing hides both.
@@ -164,7 +172,6 @@ export class Hud {
     });
     this.wireControls();
     this.wireKeys();
-
   }
 
   /**
@@ -189,7 +196,12 @@ export class Hud {
     if (s.duetBook) this.combos.setDuetBook(s.duetBook);
     this.combos.update(comboState(s.comboProgress), duetState(s.duetProgress));
     // Every frame too: its hold bar is the feedback that the pose is being read.
-    this.tutorial.update(s.spells ?? [], finite(s.stats?.[STAT.HANDS_PRESENT]), now, s.hands ?? null);
+    this.tutorial.update(
+      s.spells ?? [],
+      finite(s.stats?.[STAT.HANDS_PRESENT]),
+      now,
+      s.hands ?? null,
+    );
 
     if (now - this.lastPaintMs < PAINT_MS) return;
     this.lastPaintMs = now;
@@ -202,7 +214,10 @@ export class Hud {
     if (frameMs > 0.001) {
       this.spark.push(frameMs);
       const worstFps = 1000 / frameMs;
-      this.setText(this.fpsEl, worstFps >= 10 ? worstFps.toFixed(0) : worstFps.toFixed(1));
+      this.setText(
+        this.fpsEl,
+        worstFps >= 10 ? worstFps.toFixed(0) : worstFps.toFixed(1),
+      );
       const fpsTone = frameTone(frameMs);
       if (fpsTone !== this.lastFpsTone) {
         this.lastFpsTone = fpsTone;
@@ -234,10 +249,10 @@ export class Hud {
 
     const warp = warpView(st);
     this.setText(this.warpValue, warp.label);
-    if (this.warpFill.style.getPropertyValue('--v') !== warp.pct) {
-      this.warpFill.style.setProperty('--v', warp.pct);
+    if (this.warpFill.style.getPropertyValue("--v") !== warp.pct) {
+      this.warpFill.style.setProperty("--v", warp.pct);
     }
-    this.setData(this.warpFill, 'tone', warp.warping ? 'on' : 'off');
+    this.setData(this.warpFill, "tone", warp.warping ? "on" : "off");
 
     const held = presence(hands, s.spells);
     for (let i = 0; i < this.spellEls.length; i++) {
@@ -245,16 +260,23 @@ export class Hud {
       if (!el) continue;
       const spell = spellAt(s.spells, i);
       const present = held[i] === true;
-      this.setText(el, !present ? 'no hand' : spell);
+      this.setText(el, !present ? "no hand" : spell);
       const card = el.parentElement;
       if (card) {
-        this.setData(card, 'state', !present ? 'off' : spell === 'idle' ? 'idle' : 'cast');
+        this.setData(
+          card,
+          "state",
+          !present ? "off" : spell === "idle" ? "idle" : "cast",
+        );
       }
     }
 
     for (const [spell, el] of this.legendEls) {
-      const on = spell === 'warp' ? warp.warping : s.spells?.[0] === spell || s.spells?.[1] === spell;
-      this.setData(el, 'on', on ? '1' : '');
+      const on =
+        spell === "warp"
+          ? warp.warping
+          : s.spells?.[0] === spell || s.spells?.[1] === spell;
+      this.setData(el, "on", on ? "1" : "");
     }
 
     this.paintPerception(s.perception);
@@ -265,129 +287,108 @@ export class Hud {
    * once rather than re-derived on every `update`.
    */
   setEngineTier(tier: EngineTier): void {
-    const label = tier.name === 'threads' ? `${tier.threads} thr · simd` : '1 thr · simd';
-    this.cell('engine', label);
-    this.engineBadge.hidden = tier.name !== 'threads';
+    const label =
+      tier.name === "threads" ? `${tier.threads} thr · simd` : "1 thr · simd";
+    this.cell("engine", label);
+    this.engineBadge.hidden = tier.name !== "threads";
     this.setText(this.engineBadge, `${tier.threads} threads`);
     this.engineBadge.title = `Rust engine on ${tier.threads} worker threads (${tier.reason})`;
   }
 
   /** Detaches global listeners. Not used by `main.ts`; here for teardown. */
   dispose(): void {
-    window.removeEventListener('keydown', this.onKey);
+    window.removeEventListener("keydown", this.onKey);
     this.spark.dispose();
   }
 
   // ------------------------------------------------------------------ wiring
 
   private wireControls(): void {
-    this.collapseBtn.addEventListener('click', () => this.setCollapsed(!this.collapsed));
-    this.q('[data-act="help"]').addEventListener('click', () => this.setHelp(!this.helpOpen));
-    this.q('[data-act="tutorial"]').addEventListener('click', () => this.toggleTutorial());
-    this.q('[data-act="help-close"]').addEventListener('click', () => this.setHelp(false));
+    this.collapseBtn.addEventListener("click", () =>
+      this.setCollapsed(!this.collapsed),
+    );
+    this.q('[data-act="help"]').addEventListener("click", () =>
+      this.setHelp(!this.helpOpen),
+    );
+    this.q('[data-act="tutorial"]').addEventListener("click", () =>
+      this.toggleTutorial(),
+    );
+    this.q('[data-act="help-close"]').addEventListener("click", () =>
+      this.setHelp(false),
+    );
     // Clicking the backdrop dismisses; clicking the sheet must not.
-    this.helpEl.addEventListener('click', (e) => {
+    this.helpEl.addEventListener("click", (e) => {
       if (e.target === this.helpEl) this.setHelp(false);
     });
 
     for (const spec of MODES) {
       const btn = this.q<HTMLButtonElement>(`[data-mode="${spec.mode}"]`);
-      btn.addEventListener('click', () => this.setMode(spec.mode));
+      btn.addEventListener("click", () => this.setMode(spec.mode));
       this.modeBtns.push(btn);
     }
-    this.camBtn.addEventListener('click', () => this.setCamera(!this.cameraOn));
-    this.overdriveBtn.addEventListener('click', () => this.setOverdrive(!this.overdriveOn));
-    this.q('[data-act="reset"]').addEventListener('click', () => this.cb.onReset());
+    this.camBtn.addEventListener("click", () => this.setCamera(!this.cameraOn));
+    this.overdriveBtn.addEventListener("click", () =>
+      this.setOverdrive(!this.overdriveOn),
+    );
+    this.q('[data-act="reset"]').addEventListener("click", () =>
+      this.cb.onReset(),
+    );
 
     this.particleInput.value = String(countToDetent(120_000));
-    this.setText(this.particleValue, thousands(detentToCount(countToDetent(120_000))));
+    this.setText(
+      this.particleValue,
+      thousands(detentToCount(countToDetent(120_000))),
+    );
     // Live label on drag, commit on release: resizing the pool reallocates and
     // re-seeds up to 220k particles, so firing it per input event would stutter
     // the very frame rate this panel is reporting.
-    this.particleInput.addEventListener('input', () => {
-      this.setText(this.particleValue, thousands(detentToCount(this.particleInput.valueAsNumber)));
+    this.particleInput.addEventListener("input", () => {
+      this.setText(
+        this.particleValue,
+        thousands(detentToCount(this.particleInput.valueAsNumber)),
+      );
     });
-    this.particleInput.addEventListener('change', () => {
+    this.particleInput.addEventListener("change", () => {
       // Dragging the slider by hand leaves overdrive; it is a preset, not a lock.
       if (this.overdriveOn) this.setOverdrive(false, false);
       this.cb.onParticleCount(detentToCount(this.particleInput.valueAsNumber));
     });
 
-    for (const preset of PRESETS) {
-      const btn = this.q<HTMLButtonElement>(`[data-preset="${preset.id}"]`);
-      btn.addEventListener('click', () => this.applyPreset(preset));
-      this.presetBtns.set(preset.id, btn);
-    }
-
-    for (const p of PARAMS) {
-      const input = this.q<HTMLInputElement>(`[data-param="${p.key}"]`);
-      const value = this.q(`[data-param-value="${p.key}"]`);
-      input.addEventListener('input', () => {
-        const raw = input.valueAsNumber;
-        const v = Number.isFinite(raw) ? Math.min(p.max, Math.max(p.min, raw)) : p.value;
-        this.setText(value, p.fmt(v));
-        this.cb.onParam(p.key, v);
-        // Hand-tuning past a preset means the panel is no longer showing it.
-        this.markPreset(null);
-      });
-    }
-  }
-
-  /**
-   * Writes every parameter of a preset, including the ones it does not name —
-   * those fall back to the slider's own default, so the result is the same
-   * whatever was set before, rather than a mix of two presets.
-   */
-  private applyPreset(preset: ParamPreset): void {
-    for (const p of PARAMS) {
-      const v = preset.values[p.key] ?? p.value;
-      const input = this.q<HTMLInputElement>(`[data-param="${p.key}"]`);
-      input.valueAsNumber = v;
-      this.setText(this.q(`[data-param-value="${p.key}"]`), p.fmt(v));
-      this.cb.onParam(p.key, v);
-    }
-    this.markPreset(preset.id);
-  }
-
-  /** Lights the active preset button, or none of them after a manual edit. */
-  private markPreset(id: string | null): void {
-    for (const [key, btn] of this.presetBtns) {
-      btn.setAttribute('aria-pressed', String(key === id));
-    }
+    new ParamControls(this.root, (key, v) => this.cb.onParam(key, v));
   }
 
   private wireKeys(): void {
-    window.addEventListener('keydown', this.onKey);
+    window.addEventListener("keydown", this.onKey);
   }
 
   private readonly onKey = (e: KeyboardEvent): void => {
     const act = hudAction(e, this.helpOpen);
     if (!act) return;
     switch (act.kind) {
-      case 'mode':
+      case "mode":
         // No un-hiding here: the view change is visible in the canvas itself,
         // and someone who pressed H wants the screen clean.
         this.setMode(act.mode);
         break;
-      case 'camera':
+      case "camera":
         this.setCamera(!this.cameraOn);
         break;
-      case 'overdrive':
+      case "overdrive":
         this.setOverdrive(!this.overdriveOn);
         break;
-      case 'hideAll':
+      case "hideAll":
         this.setHiddenAll(!this.hiddenAll);
         break;
-      case 'reset':
+      case "reset":
         this.cb.onReset();
         break;
-      case 'tutorial':
+      case "tutorial":
         this.toggleTutorial();
         break;
-      case 'help':
+      case "help":
         this.setHelp(!this.helpOpen);
         break;
-      case 'closeHelp':
+      case "closeHelp":
         this.setHelp(false);
         break;
     }
@@ -398,15 +399,18 @@ export class Hud {
 
   private setMode(mode: ViewMode): void {
     for (const btn of this.modeBtns) {
-      btn.setAttribute('aria-pressed', btn.dataset.mode === mode ? 'true' : 'false');
+      btn.setAttribute(
+        "aria-pressed",
+        btn.dataset.mode === mode ? "true" : "false",
+      );
     }
     this.cb.onViewMode(mode);
   }
 
   private setCamera(on: boolean): void {
     this.cameraOn = on;
-    this.camBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
-    this.setText(this.camValue, on ? 'on' : 'off');
+    this.camBtn.setAttribute("aria-pressed", on ? "true" : "false");
+    this.setText(this.camValue, on ? "on" : "off");
     this.cb.onToggleCamera(on);
   }
 
@@ -417,25 +421,34 @@ export class Hud {
   private setOverdrive(on: boolean, restoreSlider = true): void {
     if (on === this.overdriveOn) return;
     this.overdriveOn = on;
-    this.overdriveBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    this.overdriveBtn.setAttribute("aria-pressed", on ? "true" : "false");
     if (on) {
       this.particlesBeforeOverdrive = this.particleInput.valueAsNumber;
       this.particleInput.value = String(PARTICLE_DETENTS);
       this.setText(this.particleValue, thousands(MAX_PARTICLES));
     } else if (restoreSlider) {
       this.particleInput.value = String(this.particlesBeforeOverdrive);
-      this.setText(this.particleValue, thousands(detentToCount(this.particlesBeforeOverdrive)));
+      this.setText(
+        this.particleValue,
+        thousands(detentToCount(this.particlesBeforeOverdrive)),
+      );
     }
     this.cb.onOverdrive(on);
   }
 
   private setCollapsed(collapsed: boolean): void {
     this.collapsed = collapsed;
-    this.root.classList.toggle('is-collapsed', collapsed);
+    this.root.classList.toggle("is-collapsed", collapsed);
     this.body.hidden = collapsed;
     this.percepEl.hidden = collapsed;
-    this.collapseBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
-    this.collapseBtn.setAttribute('aria-label', collapsed ? 'Expand the panel' : 'Collapse to fps');
+    this.collapseBtn.setAttribute(
+      "aria-expanded",
+      collapsed ? "false" : "true",
+    );
+    this.collapseBtn.setAttribute(
+      "aria-label",
+      collapsed ? "Expand the panel" : "Collapse to fps",
+    );
     if (!collapsed) this.spark.resize();
   }
 
@@ -445,14 +458,14 @@ export class Hud {
    */
   private setHiddenAll(hidden: boolean): void {
     this.hiddenAll = hidden;
-    this.root.classList.toggle('is-hidden', hidden);
-    this.panel.setAttribute('aria-hidden', hidden ? 'true' : 'false');
+    this.root.classList.toggle("is-hidden", hidden);
+    this.panel.setAttribute("aria-hidden", hidden ? "true" : "false");
   }
 
   private setHelp(open: boolean): void {
     this.helpOpen = open;
-    this.helpEl.classList.toggle('is-open', open);
-    this.helpEl.setAttribute('aria-hidden', open ? 'false' : 'true');
+    this.helpEl.classList.toggle("is-open", open);
+    this.helpEl.setAttribute("aria-hidden", open ? "false" : "true");
     if (open) this.q<HTMLButtonElement>('[data-act="help-close"]').focus();
   }
 
@@ -461,7 +474,7 @@ export class Hud {
     // Both sit at the bottom of the stage; the card supersedes the hint.
     if (this.tutorial.active && !this.hintDone) {
       this.hintDone = true;
-      this.hintEl.classList.add('is-gone');
+      this.hintEl.classList.add("is-gone");
     }
     if (this.tutorial.active && this.hiddenAll) this.setHiddenAll(false);
   }
@@ -470,14 +483,14 @@ export class Hud {
     if (this.hintDone) return;
     if (this.tutorial.active) {
       this.hintDone = true;
-      this.hintEl.classList.add('is-gone');
+      this.hintEl.classList.add("is-gone");
       return;
     }
-    const cast = s.spells?.[0] !== 'idle' || s.spells?.[1] !== 'idle';
+    const cast = s.spells?.[0] !== "idle" || s.spells?.[1] !== "idle";
     const seen = finite(s.stats?.[STAT.HANDS_PRESENT]) > 0;
     if (!cast && !seen && now - this.hintStartMs < HINT_MS) return;
     this.hintDone = true;
-    this.hintEl.classList.add('is-gone');
+    this.hintEl.classList.add("is-gone");
   }
 
   private paintPerception(p: PerceptionStatus): void {
@@ -519,4 +532,3 @@ export class Hud {
     return el as T;
   }
 }
-
