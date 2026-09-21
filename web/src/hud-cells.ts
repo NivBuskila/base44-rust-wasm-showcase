@@ -21,12 +21,12 @@ export interface WarpView {
 }
 
 /** Hands present, rounded off the engine's float count. */
-export function handsPresent(st: HudStats['stats']): number {
+export function handsPresent(st: HudStats['stats'] | undefined): number {
   return Math.round(finite(st?.[STAT.HANDS_PRESENT]));
 }
 
 /** Every cell's text, keyed by the `CELLS` id it belongs to. */
-export function statCells(st: HudStats['stats']): Record<string, string> {
+export function statCells(st: HudStats['stats'] | undefined): Record<string, string> {
   const maskOn = finite(st?.[STAT.MASK_PRESENT]) > 0.5;
   const hands = handsPresent(st);
   return {
@@ -45,7 +45,7 @@ export function statCells(st: HudStats['stats']): Record<string, string> {
  * The warp bar. Full travel is the engine's own 4x clamp, so 1x sits a quarter
  * along: left of the thumb is slow motion, right of it is fast.
  */
-export function warpView(st: HudStats['stats']): WarpView {
+export function warpView(st: HudStats['stats'] | undefined): WarpView {
   const timeScale = finite(st?.[STAT.TIME_SCALE]);
   return {
     label: `${timeScale.toFixed(2)}×`,
