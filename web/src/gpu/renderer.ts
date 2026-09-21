@@ -29,11 +29,6 @@
  */
 
 import { FLUID_H, FLUID_W } from "../constants";
-import {
-  OVERLAY_CAPACITY,
-  OVERLAY_STRIDE,
-  buildHandMesh,
-} from "../render/handmesh";
 import type { ModeStyle } from "../render/styles";
 import { STYLES } from "../render/styles";
 import type {
@@ -45,12 +40,12 @@ import type {
 import { BloomChain } from "./bloom";
 import type { GpuContext } from "./device";
 import { recordGpuError } from "./error-log";
+import { HandOverlay } from "./overlay";
 import { LuminanceProbe } from "./probe";
 import { ParticleSim } from "./particle-sim";
 import type { GpuPipelines } from "./pipelines";
 import { HDR_FORMAT, createPipelines } from "./pipelines";
 import { COMPOSITE_UNIFORM_FLOATS } from "./shaders/composite";
-import { OVERLAY_UNIFORM_FLOATS } from "./shaders/overlay";
 import { DRAW_UNIFORM_FLOATS } from "./shaders/particles";
 import { SCENE_UNIFORM_FLOATS } from "./shaders/scene";
 import { SceneSources } from "./sources";
@@ -92,9 +87,8 @@ export class GpuRenderer implements SceneRenderer {
   private readonly sceneUniform: GPUBuffer;
   private readonly compositeUniform: GPUBuffer;
   private readonly drawUniform: GPUBuffer;
-  private readonly overlayLineUniform: GPUBuffer;
-  private readonly overlayPointUniform: GPUBuffer;
-  private readonly overlayBuffer: GPUBuffer;
+  /** The hand skeleton and its buffers; see `overlay.ts`. */
+  private readonly overlay: HandOverlay;
 
   /** The pool and its compute passes; see `particle-sim.ts`. */
   private readonly sim: ParticleSim;
@@ -106,18 +100,12 @@ export class GpuRenderer implements SceneRenderer {
   private compositeBind: GPUBindGroup | null = null;
   private blitSceneBind: GPUBindGroup | null = null;
   private blitDebugBind: GPUBindGroup | null = null;
-  private overlayLineBind: GPUBindGroup | null = null;
-  private overlayPointBind: GPUBindGroup | null = null;
   private drawBind: GPUBindGroup | null = null;
 
   // --- scratch
   private readonly sceneScratch = new Float32Array(24);
   private readonly compositeScratch = new Float32Array(12);
   private readonly drawScratch = new Float32Array(DRAW_UNIFORM_FLOATS);
-  private readonly overlayScratchU = new Float32Array(8);
-  private readonly overlayVerts = new Float32Array(
-    OVERLAY_CAPACITY * OVERLAY_STRIDE,
-  );
 
   // --- frame state
   private dpr = 1;
@@ -173,22 +161,11 @@ export class GpuRenderer implements SceneRenderer {
       "composite-uniform",
     );
     this.drawUniform = uniform(DRAW_UNIFORM_FLOATS, "draw-uniform");
-    // Two buffers, not one: `queue.writeBuffer` lands before the whole encoder
-    // is submitted, so a second write would also change the first draw.
-    this.overlayLineUniform = uniform(
-      OVERLAY_UNIFORM_FLOATS,
-      "overlay-lines-uniform",
+    this.overlay = new HandOverlay(
+      d,
+      this.pipes.overlayLine,
+      this.pipes.overlayPoint,
     );
-    this.overlayPointUniform = uniform(
-      OVERLAY_UNIFORM_FLOATS,
-      "overlay-points-uniform",
-    );
-
-    this.overlayBuffer = d.createBuffer({
-      label: "overlay",
-      size: this.overlayVerts.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
     this.sim = new ParticleSim(d);
     this.bloom = new BloomChain(
       d,
@@ -233,14 +210,6 @@ export class GpuRenderer implements SceneRenderer {
         { binding: 1, resource: src.nearestSampler },
       ],
     });
-    this.overlayLineBind = d.createBindGroup({
-      layout: this.pipes.overlayLine.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: { buffer: this.overlayLineUniform } }],
-    });
-    this.overlayPointBind = d.createBindGroup({
-      layout: this.pipes.overlayPoint.getBindGroupLayout(0),
-      entries: [{ binding: 0, resource: { buffer: this.overlayPointUniform } }],
-    });
   }
 
   /**
@@ -272,6 +241,7 @@ export class GpuRenderer implements SceneRenderer {
     this.bloom.dispose();
     this.frameTarget.dispose();
     this.sources.dispose();
+    this.overlay.dispose();
     this.sim.dispose();
     this.probe.dispose();
     this.video = null;
@@ -391,7 +361,14 @@ export class GpuRenderer implements SceneRenderer {
     this.drawScene(encoder, frame, style, intensity, time);
     if (drawn > 0)
       this.drawParticles(encoder, drawn, style, intensity, frame.sim!);
-    this.drawOverlay(encoder, frame, style);
+    if (style.overlay > 0 && frame.hands)
+      this.overlay.record(
+        encoder,
+        this.scene,
+        frame.hands,
+        style.overlay,
+        this.dpr * this.sceneScale,
+      );
     this.bloom.record(encoder, this.pass, style, this.scene);
     this.drawComposite(encoder, frame, style, intensity);
     this.blit(encoder);
@@ -553,74 +530,6 @@ export class GpuRenderer implements SceneRenderer {
     p.setPipeline(this.pipes.particleDraw);
     p.setBindGroup(0, this.drawBind!);
     p.draw(6, count);
-    p.end();
-  }
-
-  private drawOverlay(
-    encoder: GPUCommandEncoder,
-    frame: RenderFrame,
-    style: ModeStyle,
-  ): void {
-    if (style.overlay <= 0 || !frame.hands) return;
-    const mesh = buildHandMesh(frame.hands, this.overlayVerts);
-    const vertices = mesh.lineVertices + mesh.pointVertices;
-    if (vertices === 0) return;
-    this.device.queue.writeBuffer(
-      this.overlayBuffer,
-      0,
-      this.overlayVerts,
-      0,
-      vertices * OVERLAY_STRIDE,
-    );
-
-    const u = this.overlayScratchU;
-    u[0] = style.overlay;
-    u[2] = this.scene.width;
-    u[3] = this.scene.height;
-    u[4] = 0.55;
-    u[5] = 0.88;
-    u[6] = 1.0;
-
-    const p = encoder.beginRenderPass({
-      label: "overlay",
-      colorAttachments: [
-        { view: this.scene.view!, loadOp: "load", storeOp: "store" },
-      ],
-    });
-    if (mesh.lineVertices > 0) {
-      u[1] = 1;
-      u[7] = 0;
-      this.device.queue.writeBuffer(this.overlayLineUniform, 0, u);
-      p.setPipeline(this.pipes.overlayLine);
-      p.setBindGroup(0, this.overlayLineBind!);
-      p.setVertexBuffer(0, this.overlayBuffer);
-      p.draw(mesh.lineVertices);
-    }
-    if (mesh.pointVertices > 0) {
-      // Joints need their own uniform write, so they go in a second pass: the
-      // line draw above is already recorded against the previous values.
-      p.end();
-      u[1] = 5 * this.dpr * this.sceneScale;
-      u[7] = 1;
-      this.device.queue.writeBuffer(this.overlayPointUniform, 0, u);
-      const q = encoder.beginRenderPass({
-        label: "overlay-joints",
-        colorAttachments: [
-          { view: this.scene.view!, loadOp: "load", storeOp: "store" },
-        ],
-      });
-      q.setPipeline(this.pipes.overlayPoint);
-      q.setBindGroup(0, this.overlayPointBind!);
-      q.setVertexBuffer(
-        0,
-        this.overlayBuffer,
-        mesh.lineVertices * OVERLAY_STRIDE * 4,
-        mesh.pointVertices * OVERLAY_STRIDE * 4,
-      );
-      q.draw(6, mesh.pointVertices);
-      q.end();
-      return;
-    }
     p.end();
   }
 
