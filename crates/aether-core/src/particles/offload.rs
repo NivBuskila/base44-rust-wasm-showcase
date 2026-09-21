@@ -25,6 +25,20 @@ pub const OP_IMPULSE: f32 = 3.0;
 pub const OP_DAMP: f32 = 4.0;
 pub const OP_GRIP: f32 = 5.0;
 
+/// Every kind with its name, in the order the WASM layout publishes them.
+///
+/// This table is what makes Rust the single source of the protocol: the browser
+/// reads it through `AetherEngine::particle_op_layout`, `constants.ts` asserts
+/// its own `PARTICLE_OP` against it at boot, and the WGSL replay constants are
+/// generated from that object rather than written out a third time.
+pub const OP_KINDS: [(&str, f32); 5] = [
+    ("BURST", OP_BURST),
+    ("RING", OP_RING),
+    ("IMPULSE", OP_IMPULSE),
+    ("DAMP", OP_DAMP),
+    ("GRIP", OP_GRIP),
+];
+
 /// A per-frame op log with a fixed backing store.
 pub struct OpLog {
     data: Vec<f32>,

@@ -31,13 +31,23 @@
  * whatever order the threads arrive. Both cap it at one frame plus one.
  */
 
+import { PARTICLE_OP } from '../../constants';
+
 export const PARTICLE_FLOATS = 8;
 export const PARTICLE_BYTES = PARTICLE_FLOATS * 4;
 export const STEP_WORKGROUP = 256;
 export const SIM_UNIFORM_FLOATS = 24;
 export const DRAW_UNIFORM_FLOATS = 8;
 
-/** Mirrors `PARTICLE_OP` in constants.ts; kept literal in the shader source. */
+/**
+ * The op kinds as WGSL constants, generated from `PARTICLE_OP` so the shader
+ * cannot hold a third copy of the protocol. `PARTICLE_OP` itself is checked
+ * against Rust's `OP_KINDS` at boot by `assertOpLayout`.
+ */
+export const OP_KINDS_WGSL = Object.entries(PARTICLE_OP)
+  .map(([name, value]) => `const OP_${name}: f32 = ${value.toFixed(1)};`)
+  .join('\n');
+
 export const PARTICLE_COMPUTE_WGSL = /* wgsl */ `
 struct Particle {
   x: f32, y: f32, vx: f32, vy: f32,
@@ -71,11 +81,7 @@ const LIFE_JITTER_HI: f32 = 1.4;
 const BURST_SCATTER: f32 = 1.5;
 const TAU: f32 = 6.283185307179586;
 
-const OP_BURST: f32 = 1.0;
-const OP_RING: f32 = 2.0;
-const OP_IMPULSE: f32 = 3.0;
-const OP_DAMP: f32 = 4.0;
-const OP_GRIP: f32 = 5.0;
+${OP_KINDS_WGSL}
 
 // ------------------------------------------------------------------ random
 
