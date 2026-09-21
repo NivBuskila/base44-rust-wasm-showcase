@@ -1,0 +1,205 @@
+/* Controls --------------------------------------------------------------- */
+
+.seg {
+  display: flex;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+/* Preset row: same segmented control, but it sits above the slider stack. */
+.seg.is-presets {
+  margin-bottom: 10px;
+}
+
+.seg-btn {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 6px 2px 7px;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--edge);
+  color: var(--dim);
+  font: inherit;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    color 140ms ease;
+}
+
+.seg-btn:last-child {
+  border-right: 0;
+}
+
+.seg-btn:hover {
+  background: var(--well);
+  color: var(--ink);
+}
+
+.seg-btn[aria-pressed='true'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.seg-key {
+  display: block;
+  font-size: 7.5px;
+  letter-spacing: 0.1em;
+  color: var(--faint);
+}
+
+.seg-btn[aria-pressed='true'] .seg-key {
+  color: rgba(53, 214, 255, 0.72);
+}
+
+.row-btn {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  margin-top: 7px;
+  padding: 6px 9px 7px;
+  background: rgba(7, 10, 18, 0.5);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  color: var(--dim);
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    color 140ms ease,
+    border-color 140ms ease;
+}
+
+.row-btn b {
+  font-weight: 400;
+  color: var(--faint);
+}
+
+.row-btn:hover {
+  color: var(--ink);
+  border-color: var(--edge-hi);
+  background: var(--well);
+}
+
+.row-btn[aria-pressed='true'] {
+  color: var(--ink);
+}
+
+.row-btn[aria-pressed='true'] b {
+  color: var(--accent);
+}
+
+.row-btn.is-action:hover {
+  border-color: rgba(255, 94, 168, 0.5);
+  color: var(--magenta);
+}
+
+.row-btn.is-action:hover b {
+  color: var(--magenta);
+}
+
+/* Sliders ---------------------------------------------------------------- */
+
+.p-row {
+  display: grid;
+  grid-template-columns: 62px 1fr 48px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.p-key {
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+}
+
+.p-val {
+  font-size: 9.5px;
+  text-align: right;
+  color: var(--ink);
+}
+
+input[type='range'] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 14px;
+  margin: 0;
+  background: transparent;
+  cursor: ew-resize;
+  pointer-events: auto;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  height: 2px;
+  border-radius: 1px;
+  background: var(--edge-hi);
+}
+
+input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 11px;
+  height: 11px;
+  margin-top: -4.5px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px rgba(4, 5, 10, 0.9);
+}
+
+input[type='range']::-moz-range-track {
+  height: 2px;
+  border-radius: 1px;
+  background: var(--edge-hi);
+}
+
+input[type='range']::-moz-range-thumb {
+  width: 11px;
+  height: 11px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.hud-adv {
+  padding: 0 13px 12px;
+  border-top: 1px solid var(--edge);
+}
+
+.hud-adv > summary {
+  padding: 10px 0 2px;
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--faint);
+  cursor: pointer;
+  list-style: none;
+}
+
+.hud-adv > summary::-webkit-details-marker {
+  display: none;
+}
+
+.hud-adv > summary::before {
+  content: '+ ';
+  color: var(--accent);
+}
+
+.hud-adv[open] > summary::before {
+  content: '− ';
+}
+
+.hud-adv > summary:hover {
+  color: var(--dim);
+}
+
