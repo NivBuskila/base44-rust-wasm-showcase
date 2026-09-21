@@ -27,7 +27,7 @@
  * never exceeds the clamp, so no value ever gets silently rewritten.
  */
 
-import { MAX_PARTICLES, STAT } from "./constants";
+import { STAT } from "./constants";
 import type { EngineTier } from "./engine-loader";
 import { handsPresent, statCells, warpView } from "./hud-cells";
 import { ComboBook, comboState, duetState } from "./hud-combos";
@@ -36,20 +36,12 @@ import { hudAction } from "./hud-keys";
 import { markup } from "./hud-markup";
 import { Meter, finite, frameTone } from "./hud-meter";
 import { ParamControls } from "./hud-params";
+import { PoolControl } from "./hud-pool";
 import { presence, spellAt } from "./hud-readouts";
 import { Sparkline } from "./hud-spark";
 import { statusLine } from "./hud-status";
 import { GestureTutorial } from "./tutorial";
-import {
-  CELLS,
-  GESTURES,
-  METERS,
-  MODES,
-  PARTICLE_DETENTS,
-  countToDetent,
-  detentToCount,
-  thousands,
-} from "./hud-spec";
+import { CELLS, GESTURES, METERS, MODES } from "./hud-spec";
 import type {
   HudCallbacks,
   HudStats,
@@ -92,18 +84,13 @@ export class Hud {
   private readonly modeBtns: HTMLButtonElement[] = [];
   private readonly camBtn: HTMLButtonElement;
   private readonly camValue: HTMLElement;
-  private readonly particleInput: HTMLInputElement;
-  private readonly particleValue: HTMLElement;
+  private readonly pool: PoolControl;
   private readonly combos: ComboBook;
   private readonly tutorial: GestureTutorial;
 
   private readonly frameTimer = new FrameTimer();
 
   private cameraOn = true;
-  private overdriveOn = false;
-  private readonly overdriveBtn: HTMLButtonElement;
-  /** Slider position to restore when overdrive is switched off. */
-  private particlesBeforeOverdrive = 0;
   private collapsed = true;
   private hiddenAll = false;
   private helpOpen = false;
@@ -136,9 +123,10 @@ export class Hud {
     this.helpEl = this.q(".hud-help");
     this.camBtn = this.q('[data-act="camera"]');
     this.camValue = this.q("[data-camera-value]");
-    this.particleInput = this.q("[data-particles]");
-    this.particleValue = this.q("[data-particles-value]");
-    this.overdriveBtn = this.q('[data-act="overdrive"]');
+    this.pool = new PoolControl(this.root, {
+      onParticleCount: (count) => this.cb.onParticleCount(count),
+      onOverdrive: (on) => this.cb.onOverdrive(on),
+    });
 
     for (const m of METERS) {
       this.meters.push(
@@ -327,32 +315,9 @@ export class Hud {
       this.modeBtns.push(btn);
     }
     this.camBtn.addEventListener("click", () => this.setCamera(!this.cameraOn));
-    this.overdriveBtn.addEventListener("click", () =>
-      this.setOverdrive(!this.overdriveOn),
-    );
     this.q('[data-act="reset"]').addEventListener("click", () =>
       this.cb.onReset(),
     );
-
-    this.particleInput.value = String(countToDetent(120_000));
-    this.setText(
-      this.particleValue,
-      thousands(detentToCount(countToDetent(120_000))),
-    );
-    // Live label on drag, commit on release: resizing the pool reallocates and
-    // re-seeds up to 220k particles, so firing it per input event would stutter
-    // the very frame rate this panel is reporting.
-    this.particleInput.addEventListener("input", () => {
-      this.setText(
-        this.particleValue,
-        thousands(detentToCount(this.particleInput.valueAsNumber)),
-      );
-    });
-    this.particleInput.addEventListener("change", () => {
-      // Dragging the slider by hand leaves overdrive; it is a preset, not a lock.
-      if (this.overdriveOn) this.setOverdrive(false, false);
-      this.cb.onParticleCount(detentToCount(this.particleInput.valueAsNumber));
-    });
 
     new ParamControls(this.root, (key, v) => this.cb.onParam(key, v));
   }
@@ -374,7 +339,7 @@ export class Hud {
         this.setCamera(!this.cameraOn);
         break;
       case "overdrive":
-        this.setOverdrive(!this.overdriveOn);
+        this.pool.toggleOverdrive();
         break;
       case "hideAll":
         this.setHiddenAll(!this.hiddenAll);
@@ -412,28 +377,6 @@ export class Hud {
     this.camBtn.setAttribute("aria-pressed", on ? "true" : "false");
     this.setText(this.camValue, on ? "on" : "off");
     this.cb.onToggleCamera(on);
-  }
-
-  /**
-   * Toggles the 1M-particle preset. `restoreSlider` is false when the user is
-   * the one moving the slider, so their new position is not overwritten.
-   */
-  private setOverdrive(on: boolean, restoreSlider = true): void {
-    if (on === this.overdriveOn) return;
-    this.overdriveOn = on;
-    this.overdriveBtn.setAttribute("aria-pressed", on ? "true" : "false");
-    if (on) {
-      this.particlesBeforeOverdrive = this.particleInput.valueAsNumber;
-      this.particleInput.value = String(PARTICLE_DETENTS);
-      this.setText(this.particleValue, thousands(MAX_PARTICLES));
-    } else if (restoreSlider) {
-      this.particleInput.value = String(this.particlesBeforeOverdrive);
-      this.setText(
-        this.particleValue,
-        thousands(detentToCount(this.particlesBeforeOverdrive)),
-      );
-    }
-    this.cb.onOverdrive(on);
   }
 
   private setCollapsed(collapsed: boolean): void {
