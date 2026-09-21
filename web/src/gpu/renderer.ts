@@ -37,7 +37,6 @@ import type {
   RenderFrame,
   SceneRenderer,
 } from "../types";
-import { BloomChain } from "./bloom";
 import type { GpuContext } from "./device";
 import { recordGpuError } from "./error-log";
 import { packCompositeUniform, packSceneUniform } from "./frame-uniforms";
@@ -48,6 +47,7 @@ import {
   particleSize,
   usesCamera,
 } from "../render/look";
+import { FrameChain } from "./frame-chain";
 import {
   MIN_SCENE_SCALE,
   bufferSize,
@@ -57,16 +57,14 @@ import {
   viewportScale,
 } from "../render/sizing";
 import { HandOverlay } from "./overlay";
-import { LuminanceProbe } from "./probe";
 import { ParticleSim } from "./particle-sim";
 import type { GpuPipelines } from "./pipelines";
-import { HDR_FORMAT, createPipelines } from "./pipelines";
+import { createPipelines } from "./pipelines";
 import { COMPOSITE_UNIFORM_FLOATS } from "./shaders/composite";
 import { DRAW_UNIFORM_FLOATS } from "./shaders/particles";
 import { SCENE_UNIFORM_FLOATS } from "./shaders/scene";
 import { SceneSources } from "./sources";
 import type { FullscreenPass } from "./target";
-import { Target } from "./target";
 import { clamp, finite } from "./sim-uniform";
 
 export class GpuRendererError extends Error {}
@@ -80,11 +78,8 @@ export class GpuRenderer implements SceneRenderer {
   private readonly format: GPUTextureFormat;
   readonly adapterLabel: string;
 
-  // --- targets
-  private readonly scene: Target;
-  private readonly bloom: BloomChain;
-  private readonly frameTarget: Target;
-  private readonly probe: LuminanceProbe;
+  /** Targets, post chain and the binds over them; see `frame-chain.ts`. */
+  private readonly chain: FrameChain;
 
   /** Input textures and samplers; see `sources.ts`. */
   private readonly sources: SceneSources;
@@ -108,8 +103,6 @@ export class GpuRenderer implements SceneRenderer {
 
   // --- bind groups (rebuilt when the resources behind them change)
   private sceneBind: GPUBindGroup | null = null;
-  private compositeBind: GPUBindGroup | null = null;
-  private blitSceneBind: GPUBindGroup | null = null;
   private blitDebugBind: GPUBindGroup | null = null;
   private drawBind: GPUBindGroup | null = null;
 
@@ -155,9 +148,6 @@ export class GpuRenderer implements SceneRenderer {
     };
 
     const d = this.device;
-    this.scene = new Target(d, HDR_FORMAT, "scene");
-    this.frameTarget = new Target(d, "rgba8unorm", "frame");
-
     this.sources = new SceneSources(d);
     this.pipes = createPipelines(d, this.format);
 
@@ -180,17 +170,11 @@ export class GpuRenderer implements SceneRenderer {
       this.pipes.overlayPoint,
     );
     this.sim = new ParticleSim(d);
-    this.bloom = new BloomChain(
+    this.chain = new FrameChain(
       d,
-      this.pipes.down,
-      this.pipes.up,
-      this.sources.clampSampler,
-      HDR_FORMAT,
-    );
-    this.probe = new LuminanceProbe(
-      d,
-      this.pipes.probe,
-      this.sources.clampSampler,
+      this.pipes,
+      this.sources,
+      this.compositeUniform,
     );
 
     this.buildStaticBinds();
@@ -250,13 +234,10 @@ export class GpuRenderer implements SceneRenderer {
     if (this.disposed) return;
     this.disposed = true;
     window.removeEventListener("resize", this.onResize);
-    this.scene.dispose();
-    this.bloom.dispose();
-    this.frameTarget.dispose();
+    this.chain.dispose();
     this.sources.dispose();
     this.overlay.dispose();
     this.sim.dispose();
-    this.probe.dispose();
     this.video = null;
   }
 
@@ -286,49 +267,7 @@ export class GpuRenderer implements SceneRenderer {
 
     this.sceneScale = sceneScale(w, h, { quality: this.qualityScale });
     const [sw, sh] = scaledSize(w, h, this.sceneScale);
-
-    let dirty = this.scene.resize(sw, sh);
-    dirty = this.bloom.resize(sw, sh) || dirty;
-    dirty = this.frameTarget.resize(w, h) || dirty;
-    dirty = this.probe.resize() || dirty;
-    if (dirty) this.buildTargetBinds();
-  }
-
-  /** Bind groups that reference a target view, so they die with a resize. */
-  private buildTargetBinds(): void {
-    const d = this.device;
-    const sampled = (
-      pipe: GPURenderPipeline,
-      views: GPUTextureView[],
-      uniformBuffer?: GPUBuffer,
-    ): GPUBindGroup => {
-      const entries: GPUBindGroupEntry[] = [];
-      let binding = 0;
-      if (uniformBuffer)
-        entries.push({
-          binding: binding++,
-          resource: { buffer: uniformBuffer },
-        });
-      for (const view of views)
-        entries.push({ binding: binding++, resource: view });
-      entries.push({ binding, resource: this.sources.clampSampler });
-      return d.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries });
-    };
-
-    this.bloom.buildBinds(this.scene);
-    this.compositeBind = sampled(
-      this.pipes.composite,
-      [this.scene.view!, this.bloom.output, this.sources.noiseTex.createView()],
-      this.compositeUniform,
-    );
-    this.blitSceneBind = d.createBindGroup({
-      layout: this.pipes.blit.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: this.frameTarget.view! },
-        { binding: 1, resource: this.sources.clampSampler },
-      ],
-    });
-    this.probe.buildBind(this.frameTarget.view!);
+    this.chain.resize(w, h, sw, sh);
   }
 
   setVideo(video: HTMLVideoElement | null): void {
@@ -372,14 +311,18 @@ export class GpuRenderer implements SceneRenderer {
     if (style.overlay > 0 && frame.hands)
       this.overlay.record(
         encoder,
-        this.scene,
+        this.chain.scene,
         frame.hands,
         style.overlay,
         this.dpr * this.sceneScale,
       );
-    this.bloom.record(encoder, this.pass, style, this.scene);
+    this.chain.recordBloom(encoder, this.pass, style);
     this.drawComposite(encoder, frame, style, intensity);
-    this.blit(encoder);
+    this.chain.recordBlit(
+      encoder,
+      this.pass,
+      this.context.getCurrentTexture().createView(),
+    );
     this.device.queue.submit([encoder.finish()]);
     this.readback();
   }
@@ -483,7 +426,12 @@ export class GpuRenderer implements SceneRenderer {
       time,
     });
     this.device.queue.writeBuffer(this.sceneUniform, 0, s);
-    this.pass(encoder, this.scene.view!, this.pipes.scene, this.sceneBind!);
+    this.pass(
+      encoder,
+      this.chain.scene.view!,
+      this.pipes.scene,
+      this.sceneBind!,
+    );
   }
 
   private drawParticles(
@@ -499,8 +447,8 @@ export class GpuRenderer implements SceneRenderer {
     d[1] = particleGain(style, count);
     d[2] = intensity;
     d[3] = 0;
-    d[4] = this.scene.width;
-    d[5] = this.scene.height;
+    d[4] = this.chain.scene.width;
+    d[5] = this.chain.scene.height;
     d[6] = Math.max(1, sim.gridW - 1);
     d[7] = Math.max(1, sim.gridH - 1);
     this.device.queue.writeBuffer(this.drawUniform, 0, d);
@@ -508,7 +456,7 @@ export class GpuRenderer implements SceneRenderer {
     const p = encoder.beginRenderPass({
       label: "particles",
       colorAttachments: [
-        { view: this.scene.view!, loadOp: "load", storeOp: "store" },
+        { view: this.chain.scene.view!, loadOp: "load", storeOp: "store" },
       ],
     });
     p.setPipeline(this.pipes.particleDraw);
@@ -531,23 +479,7 @@ export class GpuRenderer implements SceneRenderer {
       rush: frame.rush,
     });
     this.device.queue.writeBuffer(this.compositeUniform, 0, c);
-    this.pass(
-      encoder,
-      this.frameTarget.view!,
-      this.pipes.composite,
-      this.compositeBind!,
-    );
-  }
-
-  /** Frame texture to the canvas, plus the 16x16 luminance probe. */
-  private blit(encoder: GPUCommandEncoder): void {
-    this.pass(
-      encoder,
-      this.context.getCurrentTexture().createView(),
-      this.pipes.blit,
-      this.blitSceneBind!,
-    );
-    this.probe.record(encoder, this.pass);
+    this.chain.recordComposite(encoder, this.pass);
   }
 
   // ------------------------------------------------------------ inspection
@@ -555,12 +487,12 @@ export class GpuRenderer implements SceneRenderer {
   /** Starts this frame's reads. Must run after the submit, never before it. */
   private readback(): void {
     this.sim.pollAlive();
-    this.probe.poll();
+    this.chain.pollProbe();
   }
 
   /** Mean luminance of the last completed frame, `[0, 1]`. */
   sampleLuminance(): number {
-    return this.probe.luminance;
+    return this.chain.luminance;
   }
 
   particlesAlive(): number {
