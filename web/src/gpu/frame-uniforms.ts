@@ -2,50 +2,24 @@
  * The per-frame scene and composite uniform blocks, with no GPU in sight.
  *
  * Both blocks are positional: the WGSL structs in `shaders/scene.ts` and
- * `shaders/composite.ts` read every slot by index, and the numbers in them are
- * the look — the camera fit, the grade folds against intensity, the rush focus
- * that only applies while its power is positive. That arithmetic used to sit
- * inline between a texture upload and a render pass, where nothing could test
- * it; it is pure here, the way `sim-uniform.ts` is, and
- * `frame-uniforms.test.ts` pins the slot order and the folds.
- *
- * The WebGL2 chain grades from the same `render/styles.ts` table but packs its
- * own uniforms through GL calls, so this module is the WebGPU side only.
+ * `shaders/composite.ts` read every slot by index. The numbers themselves are
+ * the shared look (`render/look.ts`), so the two backends fold intensity and fit
+ * the camera identically; this module only decides which slot each one lands in.
+ * That packing used to sit inline between a texture upload and a render pass,
+ * where nothing could test it; `frame-uniforms.test.ts` pins the slot order now.
  */
 
+import { bloomAmount, exposureAmount, rushFocus } from "../render/look";
 import type { ModeStyle } from "../render/styles";
 import { COMPOSITE_UNIFORM_FLOATS } from "./shaders/composite";
 import { SCENE_UNIFORM_FLOATS } from "./shaders/scene";
-
-/** Whether a style shows the camera at all — no tint and no edge means no. */
-export function usesCamera(style: ModeStyle): boolean {
-  const sum = (c: readonly number[]): number => c[0] + c[1] + c[2];
-  return sum(style.camTint) > 0 || sum(style.camEdge) > 0;
-}
-
-/**
- * Aspect-preserving cover fit of the camera texture inside the canvas, as the
- * pair of scales the scene shader multiplies its camera uv by.
- */
-export function cameraFit(
-  canvasW: number,
-  canvasH: number,
-  videoW: number,
-  videoH: number,
-): [number, number] {
-  const canvasAspect = Math.max(1e-6, canvasW / Math.max(1, canvasH));
-  const videoAspect = videoH > 0 && videoW > 0 ? videoW / videoH : canvasAspect;
-  return videoAspect > canvasAspect
-    ? [canvasAspect / videoAspect, 1]
-    : [1, videoAspect / canvasAspect];
-}
 
 export interface SceneUniformInput {
   style: ModeStyle;
   /** Fluid grid size, and its reciprocal, as the shader samples the dye. */
   fluidW: number;
   fluidH: number;
-  /** Camera uv scales; see `cameraFit`. */
+  /** Camera uv scales; see `render/look.ts`'s `cameraFit`. */
   camScaleX: number;
   camScaleY: number;
   /** Allocated camera texture size, zero when there is none yet. */
@@ -91,7 +65,7 @@ export interface CompositeUniformInput {
   style: ModeStyle;
   intensity: number;
   frameIndex: number;
-  /** `[x, y, hue, power]` of the time-warp rush, when one is staged. */
+  /** `[x, y, progress, power]` of the time-warp rush, when one is staged. */
   rush: Float32Array | null | undefined;
 }
 
@@ -107,21 +81,17 @@ export function packCompositeUniform(
   if (c.length < COMPOSITE_UNIFORM_FLOATS)
     throw new Error("composite uniform scratch is too small");
   const s = i.style;
-  const rush = i.rush;
-  const power =
-    rush && rush.length >= 4 && Number.isFinite(rush[3])
-      ? Math.max(0, rush[3])
-      : 0;
-  c[0] = s.bloom * (0.72 + 0.75 * i.intensity);
-  c[1] = s.exposure * (s.grade > 0 ? 0.96 + 0.22 * i.intensity : 1);
+  const rush = rushFocus(i.rush, false);
+  c[0] = bloomAmount(s, i.intensity);
+  c[1] = exposureAmount(s, i.intensity);
   c[2] = s.aberration;
   c[3] = s.vignette;
   c[4] = s.grade;
   c[5] = i.frameIndex;
-  c[6] = power > 0 ? rush![2] : 0;
-  c[7] = power;
-  c[8] = power > 0 ? rush![0] : 0.5;
-  c[9] = power > 0 ? rush![1] : 0.5;
+  c[6] = rush.progress;
+  c[7] = rush.power;
+  c[8] = rush.x;
+  c[9] = rush.y;
   c[10] = 0;
   c[11] = 0;
 }
