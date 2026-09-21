@@ -8,6 +8,9 @@
 
 import { FULLSCREEN_VS } from './common';
 
+/** One vec4 for either direction. */
+export const BLOOM_UNIFORM_FLOATS = 4;
+
 export const BLOOM_DOWN_WGSL = /* wgsl */ `
 struct DownUniforms { p: vec4<f32> };
 @group(0) @binding(0) var<uniform> U: DownUniforms;
