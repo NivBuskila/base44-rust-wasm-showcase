@@ -15,28 +15,18 @@
 
 import type { AetherEngine } from './wasm/aether';
 import { Camera, CameraError } from './camera';
+import { DEFAULT_PRESSURE_ITERS, EnginePool } from './engine-pool';
 import { EngineViews } from './engine-views';
 import { FrameClock } from './frame-clock';
+import { FrameTimings } from './frame-timings';
 import type { EngineTier } from './engine-loader';
 import { Hud } from './hud';
-import {
-  DEFAULT_SPAWN_RATE,
-  OVERDRIVE_PARTICLES,
-  OVERDRIVE_SPAWN_RATE,
-  OverdriveBanner,
-} from './overdrive';
+import { OverdriveBanner } from './overdrive';
 import { PerceptionPump } from './perception-pump';
 import { PerformanceGovernor } from './performance-governor';
 import { QaRecorder, type QaSession } from './qa-recorder';
 import { STAT, assertOpLayout } from './constants';
 import type { PerceptionSource, RenderFrame, SceneRenderer, ViewMode } from './types';
-
-/**
- * `Params::default().pressure_iters` from `crates/aether-core/src/config.rs`.
- * The solver's iteration count is not HUD-exposed, so this is what the adaptive
- * quality ladder treats as 100%.
- */
-const DEFAULT_PRESSURE_ITERS = 28;
 
 export class App {
   private readonly engine: AetherEngine;
@@ -56,8 +46,8 @@ export class App {
    * this is the only trace a QA pass leaves behind.
    */
   private readonly qa = new QaRecorder();
-  /** Particle count to return to when overdrive is switched off. */
-  private particlesBeforeOverdrive = 0;
+  /** Every pool resize goes through here; see `engine-pool.ts`. */
+  private readonly pool: EnginePool;
   private readonly camera = new Camera();
   private readonly perception: PerceptionPump;
 
@@ -74,16 +64,8 @@ export class App {
   private mode: ViewMode = 'aether';
   private showCamera = true;
 
-  private stepMs = 0;
-  private renderMs = 0;
-  /** Camera pump: grabbing the video frame and handing it to perception. */
-  private cameraMs = 0;
-  /** HUD DOM update, which touches layout and is not free at 60 Hz. */
-  private hudMs = 0;
-  /** Everything the callback did, so the measured rows can be checked to sum. */
-  private frameMs = 0;
-  /** See `FrameClock.outside`. */
-  private outsideMs = 0;
+  /** What each stage of the callback cost; see `frame-timings.ts`. */
+  private readonly timings = new FrameTimings();
 
   constructor(
     engine: AetherEngine,
@@ -103,6 +85,7 @@ export class App {
       engine.set_gpu_particles(true);
     }
     this.views = new EngineViews(engine, memory);
+    this.pool = new EnginePool(engine, this.views, () => this.governor);
     this.perception = new PerceptionPump({
       engine,
       frame: () =>
@@ -115,13 +98,7 @@ export class App {
           console.warn(`[aether] unknown engine parameter: ${key}`);
         }
       },
-      onParticleCount: (n) => {
-        // Resizing the pool can reallocate, which detaches every view.
-        this.engine.set_particle_count(n);
-        this.views.rebuild();
-        // The user's number is the new 100% for the quality ladder.
-        this.governor.rebase(DEFAULT_PRESSURE_ITERS, n);
-      },
+      onParticleCount: (n) => this.pool.setCount(n),
       onOverdrive: (on) => this.setOverdrive(on),
       onViewMode: (mode) => {
         this.mode = mode;
@@ -130,20 +107,14 @@ export class App {
         this.showCamera = on;
       },
       onPractice: (on) => this.engine.set_practice(on),
-      onReset: () => {
-        this.engine.reset();
-        this.views.rebuild();
-      },
+      onReset: () => this.pool.reset(),
     });
     this.governor = new PerformanceGovernor(
       {
         setPressureIters: (iters) => {
           this.engine.set_param('pressure_iters', iters);
         },
-        setParticleCount: (count) => {
-          this.engine.set_particle_count(count);
-          this.views.rebuild();
-        },
+        setParticleCount: (count) => this.pool.resize(count),
         setRenderScale: (scale) => this.renderer.setQualityScale(scale),
       },
       DEFAULT_PRESSURE_ITERS,
@@ -215,21 +186,17 @@ export class App {
 
     this.views.refresh();
 
-    const frameStart = performance.now();
-    this.outsideMs = this.clock.outside(this.frameMs);
+    const t = this.timings;
+    t.begin(this.clock.outside(t.frameMs));
 
-    this.pumpCamera(nowMs);
-    this.perception.pump(nowMs);
-    this.cameraMs = performance.now() - frameStart;
-
-    const stepStart = performance.now();
-    this.engine.step(simDt);
-    this.stepMs = performance.now() - stepStart;
+    t.measure('cameraMs', () => {
+      this.pumpCamera(nowMs);
+      this.perception.pump(nowMs);
+    });
+    t.measure('stepMs', () => this.engine.step(simDt));
 
     const stats = this.engine.stats();
-    const renderStart = performance.now();
-    this.renderer.render(this.buildFrame(stats));
-    this.renderMs = performance.now() - renderStart;
+    t.measure('renderMs', () => this.renderer.render(this.buildFrame(stats)));
 
     // The GPU owns the pool, so its own count is the only true one. It lags a
     // frame behind the readback, which the HUD's stats row can live with.
@@ -238,24 +205,24 @@ export class App {
     }
 
     this.governor.update(this.clock.fps);
-    this.overdrive.update(stats, this.clock.fps, this.stepMs);
-    const hudStart = performance.now();
-    this.hud.update({
-      fps: this.clock.fps,
-      stepMs: this.stepMs,
-      renderMs: this.renderMs,
-      inferenceMs: this.perception.inferenceMs,
-      stats,
-      spells: [this.engine.spell_name(0), this.engine.spell_name(1)],
-      comboBook: this.comboBook,
-      comboProgress: this.engine.combo_progress(),
-      duetBook: this.duetBook,
-      duetProgress: this.engine.duet_progress(),
-      hands: stats[STAT.HANDS_PRESENT] > 0 ? this.perception.hands : null,
-      perception: this.perception.status,
-    });
-    this.hudMs = performance.now() - hudStart;
-    this.frameMs = performance.now() - frameStart;
+    this.overdrive.update(stats, this.clock.fps, t.stepMs);
+    t.measure('hudMs', () =>
+      this.hud.update({
+        fps: this.clock.fps,
+        stepMs: t.stepMs,
+        renderMs: t.renderMs,
+        inferenceMs: this.perception.inferenceMs,
+        stats,
+        spells: [this.engine.spell_name(0), this.engine.spell_name(1)],
+        comboBook: this.comboBook,
+        comboProgress: this.engine.combo_progress(),
+        duetBook: this.duetBook,
+        duetProgress: this.engine.duet_progress(),
+        hands: stats[STAT.HANDS_PRESENT] > 0 ? this.perception.hands : null,
+        perception: this.perception.status,
+      }),
+    );
+    t.end();
 
     // Last in the frame: the recorder reads the values this frame just produced,
     // and it rate-limits itself to 2 Hz internally.
@@ -329,14 +296,9 @@ export class App {
     return {
       frames: this.clock.frames,
       fps: this.clock.fps,
-      stepMs: this.stepMs,
-      renderMs: this.renderMs,
       inferenceMs: this.perception.inferenceMs,
-      /** Camera pump, inclusive of the bitmap decode charged to `inferenceMs`. */
-      cameraMs: this.cameraMs,
-      hudMs: this.hudMs,
-      frameMs: this.frameMs,
-      outsideMs: this.outsideMs,
+      // `cameraMs` is inclusive of the bitmap decode charged to `inferenceMs`.
+      ...this.timings.rows,
       cameraAvailable: this.cameraAvailable,
       perception: this.perception.status,
       stats: Array.from(this.engine.stats()),
@@ -379,30 +341,13 @@ export class App {
    * that the next frame still works.
    */
   setParticleCount(n: number): void {
-    this.engine.set_particle_count(n);
-    this.views.rebuild();
+    this.pool.resize(n);
   }
 
-  /**
-   * Overdrive: the full 1M pool plus a spawn rate that fills it. Off restores
-   * the pool size the user had and the default spawn rate. Reallocation
-   * detaches views, hence the rebuild.
-   */
+  /** Overdrive: the full pool and a spawn rate that fills it. */
   setOverdrive(on: boolean): void {
     if (on === this.overdrive.active) return;
-    if (on) {
-      this.particlesBeforeOverdrive = this.engine.particle_count();
-      this.engine.set_particle_count(OVERDRIVE_PARTICLES);
-      this.engine.set_param('spawn_rate', OVERDRIVE_SPAWN_RATE);
-    } else {
-      this.engine.set_particle_count(this.particlesBeforeOverdrive);
-      this.engine.set_param('spawn_rate', DEFAULT_SPAWN_RATE);
-    }
-    this.views.rebuild();
-    // Overdrive is a ceiling demo: quality must not be pulled out from under it,
-    // and switching back restores the pool the user had, which is the new base.
-    this.governor.setPaused(on);
-    if (!on) this.governor.rebase(DEFAULT_PRESSURE_ITERS, this.engine.particle_count());
+    this.pool.setOverdrive(on);
     this.overdrive.setActive(on);
   }
 

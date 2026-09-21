@@ -25,62 +25,25 @@
  *   supports.
  */
 
-import { FLUID_H, FLUID_W } from "../constants";
 import type { RenderBackend, RenderFrame, SceneRenderer } from "../types";
-import type { ModeStyle } from "./styles";
 import { STYLES } from "./styles";
-import { BloomChain } from "./bloom";
-import {
-  RenderTarget,
-  RendererError,
-  isSoftwareRasteriser,
-  probeHdr,
-} from "./gl";
-import {
-  aspectOf,
-  bloomAmount,
-  cameraFit,
-  exposureAmount,
-  particleGain,
-  particleSize,
-  rushFocus,
-  usesCamera,
-} from "./look";
+import { drawCompositePass, drawParticlePass } from "./composite-pass";
+import { RendererError } from "./gl";
 import { LumaProbe } from "./luma-probe";
-import { ParticleStream } from "./particle-stream";
+import type { Resources } from "./resources";
+import { createResources, releaseResources } from "./resources";
+import { drawDebugPass, drawScenePass } from "./scene-pass";
 import {
   MIN_SCENE_SCALE,
   SCENE_PIXEL_BUDGET,
-  SOFTWARE_PIXEL_BUDGET,
   bufferSize,
   deviceScale,
   scaledSize,
   sceneScale,
   viewportScale,
 } from "./sizing";
-import { HandOverlay } from "./overlay";
-import type { ScenePrograms } from "./programs";
-import { createPrograms, disposePrograms } from "./programs";
-import type { ShaderEnv } from "./shaders/common";
-import { SceneSources } from "./sources";
 
 export { RendererError } from "./gl";
-
-/** Everything that dies with the GL context and is rebuilt on restore. */
-interface Resources {
-  scene: RenderTarget;
-  bloom: BloomChain;
-  /** The input textures and their uploads; see `sources.ts`. */
-  sources: SceneSources;
-  /** Every linked program; see `programs.ts`. */
-  programs: ScenePrograms;
-  /** The pool's streamed vertex buffer; see `particle-stream.ts`. */
-  particles: ParticleStream;
-  /** The hand skeleton and its buffers; see `overlay.ts`. */
-  overlay: HandOverlay;
-  /** Empty VAO for the fullscreen passes, which fetch no attributes. */
-  quadVao: WebGLVertexArrayObject;
-}
 
 const clamp = (v: number, lo: number, hi: number): number =>
   v < lo ? lo : v > hi ? hi : v;
@@ -124,9 +87,10 @@ export class Renderer implements SceneRenderer {
     // Every GL object died with the context, so the wrappers holding them are
     // stale: rebuild rather than reuse, and re-probe the formats because a
     // restored context can be a different (often software) implementation.
-    this.releaseResources();
+    this.release();
     try {
-      this.res = this.createResources();
+      this.res = createResources(this.gl, this.forceSdr);
+      this.pixelBudget = this.res.pixelBudget;
       this.lostContext = false;
       console.info("[aether] WebGL context restored");
     } catch (err) {
@@ -168,58 +132,18 @@ export class Renderer implements SceneRenderer {
     window.addEventListener("resize", this.onResize);
 
     this.luma = new LumaProbe(gl, canvas);
-    this.res = this.createResources();
+    this.res = createResources(gl, this.forceSdr);
+    this.pixelBudget = this.res.pixelBudget;
     this.resize();
   }
 
   // ------------------------------------------------------------- resources
 
-  private createResources(): Resources {
-    const gl = this.gl;
-    const caps = probeHdr(gl, this.forceSdr);
-    const env: ShaderEnv = { float: caps.float, range: caps.range };
-    if (!caps.float) {
-      console.info(
-        "[aether] float render targets unavailable; HDR chain on 8-bit targets",
-      );
-    }
-    // Probed here rather than in the constructor because a restored context is
-    // often a software one: a GPU reset commonly falls back to SwiftShader.
-    this.pixelBudget = isSoftwareRasteriser(gl)
-      ? SOFTWARE_PIXEL_BUDGET
-      : SCENE_PIXEL_BUDGET;
-
-    const scene = new RenderTarget(gl, caps.format);
-    const bloom = new BloomChain(gl, env, caps.format);
-
-    const quadVao = gl.createVertexArray();
-    if (!quadVao) {
-      throw new RendererError("could not allocate the vertex buffers");
-    }
-
-    return {
-      scene,
-      bloom,
-      sources: new SceneSources(gl),
-      programs: createPrograms(gl, env),
-      particles: new ParticleStream(gl),
-      overlay: new HandOverlay(gl),
-      quadVao,
-    };
-  }
-
-  private releaseResources(): void {
+  private release(): void {
     const res = this.res;
     if (!res) return;
-    const gl = this.gl;
     this.res = null;
-    res.scene.dispose();
-    res.bloom.dispose();
-    res.sources.dispose();
-    res.particles.dispose();
-    res.overlay.dispose();
-    gl.deleteVertexArray(res.quadVao);
-    disposePrograms(res.programs);
+    releaseResources(this.gl, res);
   }
 
   /** Releases every GL object this renderer owns and detaches its listeners. */
@@ -227,7 +151,7 @@ export class Renderer implements SceneRenderer {
     this.canvas.removeEventListener("webglcontextlost", this.onLost);
     this.canvas.removeEventListener("webglcontextrestored", this.onRestored);
     window.removeEventListener("resize", this.onResize);
-    this.releaseResources();
+    this.release();
     this.video = null;
     this.lostContext = true;
   }
@@ -304,13 +228,38 @@ export class Renderer implements SceneRenderer {
     gl.bindVertexArray(res.quadVao);
 
     if (frame.mode === "debug") {
-      this.drawDebug(res, frame);
+      drawDebugPass(
+        gl,
+        res.programs,
+        res.sources,
+        frame,
+        this.canvas.width,
+        this.canvas.height,
+      );
       return;
     }
 
     const style = STYLES[frame.mode];
-    this.drawScene(res, frame, style, intensity, time);
-    this.drawParticles(res, frame, style, intensity);
+    drawScenePass(
+      gl,
+      res.programs,
+      res.sources,
+      res.scene,
+      frame,
+      style,
+      intensity,
+      time,
+      this.canvas.width,
+      this.canvas.height,
+      this.video,
+    );
+    drawParticlePass(
+      res,
+      frame,
+      style,
+      intensity,
+      this.dpr * this.sceneScale * this.viewScale,
+    );
     if (style.overlay > 0 && frame.hands)
       res.overlay.draw(
         res.programs.overlay,
@@ -322,139 +271,16 @@ export class Renderer implements SceneRenderer {
     // The overlay left its own VAO bound; the ladder draws fullscreen strips.
     gl.bindVertexArray(res.quadVao);
     res.bloom.record(res.scene, style);
-    this.drawComposite(res, frame, style, intensity);
-  }
-
-  /** Raw obstacle/flow texture, straight to the screen with no grading. */
-  private drawDebug(res: Resources, frame: RenderFrame): void {
-    const gl = this.gl;
-    const source =
-      frame.debug && res.sources.uploadGrid(res.sources.debugTex, frame.debug)
-        ? res.sources.debugTex
-        : null;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    if (!source) {
-      // `frame.debug` is null whenever the engine has nothing to show. Say so
-      // with a flat field rather than leaving the last frame on screen.
-      gl.clearColor(0.03, 0.035, 0.05, 1);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      return;
-    }
-    res.programs.blit.use();
-    res.programs.blit.tex("u_src", 0, source);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  }
-
-  private drawScene(
-    res: Resources,
-    frame: RenderFrame,
-    style: ModeStyle,
-    intensity: number,
-    time: number,
-  ): void {
-    const gl = this.gl;
-    const p = res.programs.scene;
-
-    res.sources.uploadGrid(res.sources.dyeTex, frame.dye);
-    // The camera mode is a stronger statement than the camera toggle: the user
-    // asked to look at the feed, so `showCamera` only gates the aether view.
-    //
-    // `camUsed` is not a style choice, it is the identity: `particles` tints
-    // both the body and the rim to black, so running the layer there costs a
-    // full-frame `texSubImage2D` plus five fetches per pixel to add exactly
-    // zero. On a software rasteriser that was a quarter of the frame.
-    const wantCamera =
-      usesCamera(style) &&
-      (frame.mode === "camera" || frame.mode === "blend" || frame.showCamera);
-    const hasVideo =
-      wantCamera && res.sources.uploadVideo(frame.video ?? this.video);
-
-    res.scene.bind();
-    p.use();
-    p.tex("u_dye", 0, res.sources.dyeTex);
-    p.tex("u_video", 1, res.sources.videoTex);
-    p.tex("u_noise", 2, res.sources.noiseTex);
-    p.f2("u_dyeSize", FLUID_W, FLUID_H);
-    p.f2("u_dyeTexel", 1 / FLUID_W, 1 / FLUID_H);
-    p.f1("u_dyeAmount", style.dye);
-    p.f1("u_bgAmount", style.bg);
-    p.f1("u_intensity", intensity);
-    p.f1("u_time", time);
-    p.f1("u_hasVideo", hasVideo ? 1 : 0);
-    p.f3("u_camTint", style.camTint[0], style.camTint[1], style.camTint[2]);
-    p.f3("u_camEdge", style.camEdge[0], style.camEdge[1], style.camEdge[2]);
-    p.f1("u_camToe", style.camToe);
-    p.f1("u_camRaw", style.camRaw);
-    p.f2(
-      "u_videoTexel",
-      1 / Math.max(1, res.sources.videoTexW),
-      1 / Math.max(1, res.sources.videoTexH),
+    drawCompositePass(
+      gl,
+      res,
+      frame,
+      style,
+      intensity,
+      this.frameIndex,
+      this.canvas.width,
+      this.canvas.height,
     );
-
-    const [camScaleX, camScaleY] = cameraFit(
-      aspectOf(this.canvas.width, this.canvas.height, 1),
-      res.sources.videoAspect,
-    );
-    p.f2("u_camScale", camScaleX, camScaleY);
-
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-  }
-
-  private drawParticles(
-    res: Resources,
-    frame: RenderFrame,
-    style: ModeStyle,
-    intensity: number,
-  ): void {
-    if (style.particles <= 0) return;
-    const count = ParticleStream.countFor(frame.particles, frame.particleCount);
-    if (count === 0) return;
-    res.particles.upload(frame.particles, count);
-
-    const p = res.programs.particles;
-    p.use();
-    p.f1("u_gain", particleGain(style, count));
-    const px = this.dpr * this.sceneScale * this.viewScale;
-    p.f1("u_size", particleSize(px, count));
-    p.f1("u_intensity", intensity);
-
-    res.scene.bind();
-    res.particles.draw(count);
-  }
-
-  private drawComposite(
-    res: Resources,
-    frame: RenderFrame,
-    style: ModeStyle,
-    intensity: number,
-  ): void {
-    const gl = this.gl;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-
-    const p = res.programs.composite;
-    p.use();
-    p.tex("u_scene", 0, res.scene.texture);
-    p.tex("u_bloom", 1, res.bloom.output);
-    p.tex("u_noise", 2, res.sources.noiseTex);
-    // Motion drives the glow, not the exposure: pushing exposure with movement
-    // makes the whole frame pump, while pushing bloom makes the bright parts
-    // bloom harder, which is what "a burst of movement blazes" should feel like.
-    p.f1("u_bloomAmount", bloomAmount(style, intensity));
-    p.f1("u_exposure", exposureAmount(style, intensity));
-    p.f1("u_aberration", style.aberration);
-    p.f1("u_vignette", style.vignette);
-    p.f1("u_grade", style.grade);
-    p.f1("u_frame", this.frameIndex);
-    // The engine's origin is in the dye grid's convention (y down); this pass
-    // samples the scene target, which holds that image flipped, so the y has to
-    // be flipped with it or the rush would dolly in on the mirror of the palm.
-    const rush = rushFocus(frame.rush, true);
-    p.f2("u_rushAt", rush.x, rush.y);
-    p.f1("u_rushProgress", rush.progress);
-    p.f1("u_rushPower", rush.power);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
   // ------------------------------------------------------------ inspection
