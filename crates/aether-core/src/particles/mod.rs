@@ -152,7 +152,7 @@ pub mod offload;
 mod tests;
 
 use lane::*;
-pub use offload::{OpLog, MAX_OPS, OP_STRIDE};
+pub use offload::{OpLog, MAX_OPS, OP_KINDS, OP_STRIDE};
 
 impl Particles {
     pub fn new(capacity: usize, seed: u64) -> Self {
