@@ -30,9 +30,11 @@
 import { MAX_PARTICLES, STAT } from './constants';
 import type { EngineTier } from './engine-loader';
 import { ComboBook, comboState, duetState } from './hud-combos';
+import { FrameTimer } from './hud-frame-timer';
 import { markup } from './hud-markup';
 import { Meter, finite, frameTone } from './hud-meter';
 import { PRESETS, type ParamPreset } from './hud-presets';
+import { fmtSmall, presence, spellAt } from './hud-readouts';
 import { Sparkline } from './hud-spark';
 import { GestureTutorial } from './tutorial';
 import {
@@ -56,54 +58,8 @@ import type { HudCallbacks, HudStats, PerceptionStatus, ViewMode } from './types
  */
 const PAINT_MS = 100;
 
-/**
- * Longer than this between two `update` calls is the tab having been
- * backgrounded, not a slow frame; charting it would peg the sparkline for nine
- * seconds over something the user never saw.
- */
-const FRAME_GAP_MAX_MS = 500;
-
-/**
- * `update` calls before `stats.fps` is believable. It is an EMA seeded at zero
- * in `main.ts`, so it reads ~6 fps on the first frame of a 60 Hz session; by 20
- * frames it is within ~12% of the truth. It is only ever the fallback for when
- * no `update` interval was measurable at all.
- */
-const FPS_WARMUP_FRAMES = 20;
-
 /** How long the "show your hands" hint lingers when nothing is detected. */
 const HINT_MS = 12_000;
-
-/** A latched spell name, or `idle` for anything the engine did not send. */
-function spellAt(spells: HudStats['spells'] | undefined, slot: number): string {
-  const s = spells?.[slot];
-  return typeof s === 'string' && s.length > 0 ? s : 'idle';
-}
-
-/**
- * Which hand slots hold a hand, from the only two things the engine reports:
- * a *count* and the per-slot latched spell.
- *
- * The count alone is not enough, because the slots are independent — a single
- * right hand lands in slot 1 with slot 0 empty (`packHands` in `perception.ts`
- * keys the slot off handedness). Treating `count > slot` as presence therefore
- * reads a lone right hand as "hand i idle, hand ii absent", which is both cards
- * wrong at exactly the moment one is casting. A non-idle spell pins a slot down:
- * `spells.rs` forces `Spell::Idle` for any slot whose hand is missing, so a named
- * spell can only come from a hand that is there.
- *
- * One case stays genuinely ambiguous: one hand present, nothing latched. Nothing
- * in `HudStats` says which slot it is, so slot 0 is assumed.
- */
-function presence(hands: number, spells: HudStats['spells'] | undefined): [boolean, boolean] {
-  const cast0 = spellAt(spells, 0) !== 'idle';
-  const cast1 = spellAt(spells, 1) !== 'idle';
-  if (cast0 && cast1) return [true, true];
-  if (hands <= 0) return [false, false];
-  if (hands >= 2) return [true, true];
-  if (cast1 && !cast0) return [false, true];
-  return [true, false];
-}
 
 export class Hud {
   private readonly root: HTMLElement;
@@ -136,10 +92,7 @@ export class Hud {
   private readonly combos: ComboBook;
   private readonly tutorial: GestureTutorial;
 
-  private framePeak = 0;
-  private lastUpdateMs = 0;
-  /** `update` calls so far, capped at {@link FPS_WARMUP_FRAMES}. */
-  private updates = 0;
+  private readonly frameTimer = new FrameTimer();
 
   private cameraOn = true;
   private overdriveOn = false;
@@ -220,16 +173,7 @@ export class Hud {
    */
   update(s: HudStats): void {
     const now = performance.now();
-    const gap = this.lastUpdateMs > 0 ? now - this.lastUpdateMs : 0;
-    this.lastUpdateMs = now;
-
-    // `update` runs exactly once per rendered frame, so the interval between
-    // calls *is* the frame period — and unlike `stats.fps` it is not floored by
-    // the loop's own 50 ms dt clamp, which reports a hard stall as a tidy
-    // 20 fps. A gap over half a second is the tab having been away, not a slow
-    // frame, so it is dropped rather than spiking the history.
-    if (gap > 0 && gap <= FRAME_GAP_MAX_MS && gap > this.framePeak) this.framePeak = gap;
-    if (this.updates < FPS_WARMUP_FRAMES) this.updates++;
+    this.frameTimer.sample(now);
     this.meters[0]?.sample(s.stepMs);
     this.meters[1]?.sample(s.renderMs);
     this.meters[2]?.sample(s.inferenceMs);
@@ -249,22 +193,10 @@ export class Hud {
     this.lastPaintMs = now;
 
     // The worst frame in the window, not the average: one bad frame in ten is
-    // what a user actually notices. When nothing was measurable — every gap in
-    // this window was long enough to look like a backgrounded tab, which is
-    // what a cold start looks like — fall back to the loop's own average. The
-    // number, the tone and the sparkline all read this single value, so they
-    // can never disagree.
-    const loopMs = finite(s.fps) > 0.001 ? Math.min(1000, 1000 / finite(s.fps)) : 0;
-    // `stats.fps` is only an honest fallback once the loop's own smoothing has
-    // warmed up: it is an EMA seeded at zero, so the first frame of a session
-    // reports ~6 fps at a true 60 Hz. Charting that invents a 166 ms frame that
-    // never happened, and because the sparkline scales to the worst sample in
-    // its window, that phantom flattens the next nine seconds of real history
-    // into two pixels. With nothing measured and nothing trustworthy to fall
-    // back on, the chip keeps its placeholder instead of guessing.
-    const frameMs =
-      this.framePeak > 0.001 ? this.framePeak : this.updates >= FPS_WARMUP_FRAMES ? loopMs : 0;
-    this.framePeak = 0;
+    // what a user actually notices. The number, the tone and the sparkline all
+    // read this single value, so they can never disagree. See
+    // `hud-frame-timer.ts` for why an unmeasurable window reports nothing.
+    const frameMs = this.frameTimer.read(finite(s.fps));
     if (frameMs > 0.001) {
       this.spark.push(frameMs);
       const worstFps = 1000 / frameMs;
@@ -616,13 +548,5 @@ export class Hud {
     if (!el) throw new Error(`hud: missing element ${sel}`);
     return el as T;
   }
-}
-
-/** `0.00042` -> `4.2e-4`; keeps the divergence column from reading `0.0000`. */
-function fmtSmall(v: number): string {
-  const a = Math.abs(v);
-  if (a === 0) return '0';
-  if (a < 0.001) return v.toExponential(1).replace('e-', 'e−');
-  return v.toFixed(4);
 }
 
