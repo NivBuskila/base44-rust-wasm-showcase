@@ -25,7 +25,7 @@
  *   supports.
  */
 
-import { FLUID_H, FLUID_W, MAX_PARTICLES, PARTICLE_STRIDE } from "../constants";
+import { FLUID_H, FLUID_W } from "../constants";
 import type { RenderBackend, RenderFrame, SceneRenderer } from "../types";
 import type { ModeStyle } from "./styles";
 import { STYLES } from "./styles";
@@ -47,6 +47,7 @@ import {
   usesCamera,
 } from "./look";
 import { LumaProbe } from "./luma-probe";
+import { ParticleStream } from "./particle-stream";
 import {
   MIN_SCENE_SCALE,
   SCENE_PIXEL_BUDGET,
@@ -65,16 +66,6 @@ import { SceneSources } from "./sources";
 
 export { RendererError } from "./gl";
 
-/**
- * Particle buffer sizes are rounded up to this many particles.
- *
- * The buffer is re-specified every frame to orphan it, and a size that changed
- * every frame would make the driver allocate a differently sized block each
- * time. Bucketing keeps the allocation stable across frames while still
- * tracking a pool the user shrank from 220k to 2k.
- */
-const PARTICLE_BUCKET = 32768;
-
 /** Everything that dies with the GL context and is rebuilt on restore. */
 interface Resources {
   scene: RenderTarget;
@@ -83,8 +74,8 @@ interface Resources {
   sources: SceneSources;
   /** Every linked program; see `programs.ts`. */
   programs: ScenePrograms;
-  particleBuffer: WebGLBuffer;
-  particleVao: WebGLVertexArrayObject;
+  /** The pool's streamed vertex buffer; see `particle-stream.ts`. */
+  particles: ParticleStream;
   /** The hand skeleton and its buffers; see `overlay.ts`. */
   overlay: HandOverlay;
   /** Empty VAO for the fullscreen passes, which fetch no attributes. */
@@ -201,32 +192,17 @@ export class Renderer implements SceneRenderer {
     const scene = new RenderTarget(gl, caps.format);
     const bloom = new BloomChain(gl, env, caps.format);
 
-    const particleBuffer = gl.createBuffer();
-    const particleVao = gl.createVertexArray();
     const quadVao = gl.createVertexArray();
-    if (!particleBuffer || !particleVao || !quadVao) {
+    if (!quadVao) {
       throw new RendererError("could not allocate the vertex buffers");
     }
-
-    gl.bindVertexArray(particleVao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, particleBuffer);
-    gl.bufferData(
-      gl.ARRAY_BUFFER,
-      PARTICLE_BUCKET * PARTICLE_STRIDE * 4,
-      gl.DYNAMIC_DRAW,
-    );
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 4, gl.FLOAT, false, PARTICLE_STRIDE * 4, 0);
-
-    gl.bindVertexArray(null);
 
     return {
       scene,
       bloom,
       sources: new SceneSources(gl),
       programs: createPrograms(gl, env),
-      particleBuffer,
-      particleVao,
+      particles: new ParticleStream(gl),
       overlay: new HandOverlay(gl),
       quadVao,
     };
@@ -240,8 +216,7 @@ export class Renderer implements SceneRenderer {
     res.scene.dispose();
     res.bloom.dispose();
     res.sources.dispose();
-    gl.deleteBuffer(res.particleBuffer);
-    gl.deleteVertexArray(res.particleVao);
+    res.particles.dispose();
     res.overlay.dispose();
     gl.deleteVertexArray(res.quadVao);
     disposePrograms(res.programs);
@@ -433,36 +408,9 @@ export class Renderer implements SceneRenderer {
     intensity: number,
   ): void {
     if (style.particles <= 0) return;
-    const gl = this.gl;
-    const available = Math.floor(frame.particles.length / PARTICLE_STRIDE);
-    const requested = Number.isFinite(frame.particleCount)
-      ? Math.floor(frame.particleCount)
-      : 0;
-    const count = Math.min(Math.max(0, requested), available, MAX_PARTICLES);
+    const count = ParticleStream.countFor(frame.particles, frame.particleCount);
     if (count === 0) return;
-
-    gl.bindVertexArray(res.particleVao);
-    gl.bindBuffer(gl.ARRAY_BUFFER, res.particleBuffer);
-    // Orphan, then refill. Re-specifying the whole buffer tells the driver the
-    // old contents are dead, so this upload never blocks on the GPU still
-    // reading last frame's data — at 220k particles that stall is a dropped
-    // frame every frame.
-    const bucket = Math.min(
-      MAX_PARTICLES,
-      Math.ceil(count / PARTICLE_BUCKET) * PARTICLE_BUCKET,
-    );
-    gl.bufferData(
-      gl.ARRAY_BUFFER,
-      bucket * PARTICLE_STRIDE * 4,
-      gl.DYNAMIC_DRAW,
-    );
-    gl.bufferSubData(
-      gl.ARRAY_BUFFER,
-      0,
-      frame.particles,
-      0,
-      count * PARTICLE_STRIDE,
-    );
+    res.particles.upload(frame.particles, count);
 
     const p = res.programs.particles;
     p.use();
@@ -472,10 +420,7 @@ export class Renderer implements SceneRenderer {
     p.f1("u_intensity", intensity);
 
     res.scene.bind();
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.ONE, gl.ONE);
-    gl.drawArrays(gl.POINTS, 0, count);
-    gl.disable(gl.BLEND);
+    res.particles.draw(count);
   }
 
   private drawComposite(
