@@ -48,6 +48,14 @@ import {
   particleSize,
   usesCamera,
 } from "../render/look";
+import {
+  MIN_SCENE_SCALE,
+  bufferSize,
+  deviceScale,
+  scaledSize,
+  sceneScale,
+  viewportScale,
+} from "../render/sizing";
 import { HandOverlay } from "./overlay";
 import { LuminanceProbe } from "./probe";
 import { ParticleSim } from "./particle-sim";
@@ -60,11 +68,6 @@ import { SceneSources } from "./sources";
 import type { FullscreenPass } from "./target";
 import { Target } from "./target";
 import { clamp, finite } from "./sim-uniform";
-
-const MAX_DPR = 2;
-const SCENE_PIXEL_BUDGET = 5_200_000;
-const MIN_SCENE_SCALE = 0.4;
-const PARTICLE_SIZE_REF_WIDTH = 1200;
 
 export class GpuRendererError extends Error {}
 
@@ -269,25 +272,20 @@ export class GpuRenderer implements SceneRenderer {
   /** Matches the canvas and every target to the CSS size and DPR. */
   resize(): void {
     if (this.disposed) return;
-    this.dpr = Math.min(MAX_DPR, window.devicePixelRatio || 1);
-    const w = Math.max(1, Math.round(this.canvas.clientWidth * this.dpr));
-    const h = Math.max(1, Math.round(this.canvas.clientHeight * this.dpr));
+    this.dpr = deviceScale(window.devicePixelRatio);
+    const [w, h] = bufferSize(
+      this.canvas.clientWidth,
+      this.canvas.clientHeight,
+      this.dpr,
+    );
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;
     }
-    this.viewScale = clamp(
-      this.canvas.clientWidth / PARTICLE_SIZE_REF_WIDTH,
-      0.45,
-      1,
-    );
+    this.viewScale = viewportScale(this.canvas.clientWidth);
 
-    const pixels = w * h;
-    const budgeted =
-      pixels > SCENE_PIXEL_BUDGET ? Math.sqrt(SCENE_PIXEL_BUDGET / pixels) : 1;
-    this.sceneScale = clamp(budgeted * this.qualityScale, MIN_SCENE_SCALE, 1);
-    const sw = Math.max(1, Math.round(w * this.sceneScale));
-    const sh = Math.max(1, Math.round(h * this.sceneScale));
+    this.sceneScale = sceneScale(w, h, { quality: this.qualityScale });
+    const [sw, sh] = scaledSize(w, h, this.sceneScale);
 
     let dirty = this.scene.resize(sw, sh);
     dirty = this.bloom.resize(sw, sh) || dirty;

@@ -47,6 +47,16 @@ import {
   usesCamera,
 } from "./look";
 import { LumaProbe } from "./luma-probe";
+import {
+  MIN_SCENE_SCALE,
+  SCENE_PIXEL_BUDGET,
+  SOFTWARE_PIXEL_BUDGET,
+  bufferSize,
+  deviceScale,
+  scaledSize,
+  sceneScale,
+  viewportScale,
+} from "./sizing";
 import { HandOverlay } from "./overlay";
 import type { ScenePrograms } from "./programs";
 import { createPrograms, disposePrograms } from "./programs";
@@ -54,37 +64,6 @@ import type { ShaderEnv } from "./shaders/common";
 import { SceneSources } from "./sources";
 
 export { RendererError } from "./gl";
-
-/**
- * Device pixel ratio ceiling. Beyond 2 the fill cost buys nothing visible for a
- * field this soft, and it halves the frame rate on phones.
- */
-const MAX_DPR = 2;
-
-/**
- * Ceiling on the scene and bloom pixel count, per frame.
- *
- * The chain is fill-bound: roughly twenty texture fetches per output pixel.
- * That is nothing at 1080p on a GPU and ruinous at 5K on a retina panel with
- * the DPR cap doubling it again, so the scene and the bloom are drawn at
- * whatever fraction keeps them under this budget and the composite scales them
- * back up. The composite itself always runs at full canvas resolution, so the
- * grade, the vignette and the dither stay per-pixel and the result does not
- * read as an upscale.
- *
- * 5.2 Mpx leaves 1440p at DPR 2 untouched and pulls 5K retina back to ~0.6.
- * A CPU rasteriser gets a much tighter budget — but one still above 1280x720,
- * because that is the headless test resolution and the screenshots taken there
- * are a deliverable, not just a smoke check.
- */
-const SCENE_PIXEL_BUDGET = 5_200_000;
-const SOFTWARE_PIXEL_BUDGET = 1_600_000;
-
-/** Floor on the internal scale; below this the softening is obvious. */
-const MIN_SCENE_SCALE = 0.4;
-
-/** Viewport width, in CSS pixels, that particle size is calibrated against. */
-const PARTICLE_SIZE_REF_WIDTH = 1200;
 
 /**
  * Particle buffer sizes are rounded up to this many particles.
@@ -295,45 +274,28 @@ export class Renderer implements SceneRenderer {
 
   /** Matches the drawing buffer and every target to the CSS size and DPR. */
   resize(): void {
-    // Ceiling only, no floor. `devicePixelRatio` drops below 1 whenever the
-    // page is zoomed out (0.5 at 50% zoom), and flooring it at 1 there
-    // allocates four times the pixels the browser asked for — the opposite of
-    // what the user requested — and breaks the drawing-buffer size the app's
-    // own DPR test asserts. `|| 1` still covers a 0 or undefined ratio.
-    this.dpr = Math.min(MAX_DPR, window.devicePixelRatio || 1);
-    const w = Math.max(1, Math.round(this.canvas.clientWidth * this.dpr));
-    const h = Math.max(1, Math.round(this.canvas.clientHeight * this.dpr));
+    this.dpr = deviceScale(window.devicePixelRatio);
+    const [w, h] = bufferSize(
+      this.canvas.clientWidth,
+      this.canvas.clientHeight,
+      this.dpr,
+    );
     if (this.canvas.width !== w || this.canvas.height !== h) {
       this.canvas.width = w;
       this.canvas.height = h;
     }
 
-    // A dot sized in CSS pixels is a dot three times larger *relative to the
-    // frame* on a 390-wide phone than on a desktop window, which is why the
-    // dust reads as coarse confetti there. Size follows the viewport instead,
-    // normalised to a typical desktop width, so the grain looks the same
-    // fraction of the picture on every screen.
-    this.viewScale = clamp(
-      this.canvas.clientWidth / PARTICLE_SIZE_REF_WIDTH,
-      0.45,
-      1,
-    );
+    this.viewScale = viewportScale(this.canvas.clientWidth);
 
     const res = this.res;
     if (!res) return;
 
-    const pixels = w * h;
-    const budgeted =
-      pixels > this.pixelBudget ? Math.sqrt(this.pixelBudget / pixels) : 1;
-    // `?rscale=` is a diagnostic pin and outranks both the budget and the
-    // governor, so someone comparing resolutions gets the one they asked for.
-    this.sceneScale = clamp(
-      this.pinnedScale ?? budgeted * this.qualityScale,
-      MIN_SCENE_SCALE,
-      1,
-    );
-    const sw = Math.max(1, Math.round(w * this.sceneScale));
-    const sh = Math.max(1, Math.round(h * this.sceneScale));
+    this.sceneScale = sceneScale(w, h, {
+      budget: this.pixelBudget,
+      quality: this.qualityScale,
+      pinned: this.pinnedScale,
+    });
+    const [sw, sh] = scaledSize(w, h, this.sceneScale);
     res.scene.resize(sw, sh);
     res.bloom.resize(sw, sh);
   }
