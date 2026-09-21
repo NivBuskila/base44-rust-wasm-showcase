@@ -25,23 +25,25 @@
  *   supports.
  */
 
-import { FLUID_H, FLUID_W, MAX_PARTICLES, PARTICLE_STRIDE } from '../constants';
-import type { RenderBackend, RenderFrame, SceneRenderer } from '../types';
-import type { ModeStyle } from './styles';
-import { STYLES } from './styles';
-import { BloomChain } from './bloom';
-import { Program, RenderTarget, RendererError, createTexture, isSoftwareRasteriser, probeHdr } from './gl';
-import { LumaProbe } from './luma-probe';
-import { OVERLAY_CAPACITY, OVERLAY_STRIDE, buildHandMesh } from './handmesh';
-import { NOISE_SIZE, buildNoiseTile } from './noise';
-import { FULLSCREEN_VERT, buildShader } from './shaders/common';
-import type { ShaderEnv } from './shaders/common';
-import { BLIT_FRAG, COMPOSITE_FRAG } from './shaders/composite';
-import { OVERLAY_FRAG, OVERLAY_VERT } from './shaders/overlay';
-import { PARTICLE_FRAG, PARTICLE_VERT } from './shaders/particles';
-import { SCENE_FRAG } from './shaders/scene';
+import { FLUID_H, FLUID_W, MAX_PARTICLES, PARTICLE_STRIDE } from "../constants";
+import type { RenderBackend, RenderFrame, SceneRenderer } from "../types";
+import type { ModeStyle } from "./styles";
+import { STYLES } from "./styles";
+import { BloomChain } from "./bloom";
+import {
+  RenderTarget,
+  RendererError,
+  isSoftwareRasteriser,
+  probeHdr,
+} from "./gl";
+import { LumaProbe } from "./luma-probe";
+import { OVERLAY_CAPACITY, OVERLAY_STRIDE, buildHandMesh } from "./handmesh";
+import type { ScenePrograms } from "./programs";
+import { createPrograms, disposePrograms } from "./programs";
+import type { ShaderEnv } from "./shaders/common";
+import { SceneSources } from "./sources";
 
-export { RendererError } from './gl';
+export { RendererError } from "./gl";
 
 /**
  * Device pixel ratio ceiling. Beyond 2 the fill cost buys nothing visible for a
@@ -88,27 +90,23 @@ const PARTICLE_BUCKET = 32768;
 interface Resources {
   scene: RenderTarget;
   bloom: BloomChain;
-  dyeTex: WebGLTexture;
-  debugTex: WebGLTexture;
-  videoTex: WebGLTexture;
-  noiseTex: WebGLTexture;
+  /** The input textures and their uploads; see `sources.ts`. */
+  sources: SceneSources;
+  /** Every linked program; see `programs.ts`. */
+  programs: ScenePrograms;
   particleBuffer: WebGLBuffer;
   particleVao: WebGLVertexArrayObject;
   overlayBuffer: WebGLBuffer;
   overlayVao: WebGLVertexArrayObject;
   /** Empty VAO for the fullscreen passes, which fetch no attributes. */
   quadVao: WebGLVertexArrayObject;
-  scenePass: Program;
-  particlePass: Program;
-  compositePass: Program;
-  overlayPass: Program;
-  blitPass: Program;
 }
 
-const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
+const clamp = (v: number, lo: number, hi: number): number =>
+  v < lo ? lo : v > hi ? hi : v;
 
 export class Renderer implements SceneRenderer {
-  readonly backend: RenderBackend = 'webgl2';
+  readonly backend: RenderBackend = "webgl2";
 
   private readonly canvas: HTMLCanvasElement;
   private readonly gl: WebGL2RenderingContext;
@@ -132,13 +130,9 @@ export class Renderer implements SceneRenderer {
   /** Adaptive multiplier on the budgeted scale; 1 until the governor lowers it. */
   private qualityScale = 1;
 
-  /** Video texture allocation state; `0` means "not allocated yet". */
-  private videoTexW = 0;
-  private videoTexH = 0;
-  /** Last uploaded video timestamp, so a 30 Hz feed is not re-uploaded at 60. */
-  private videoTime = -1;
-
-  private readonly overlayScratch = new Float32Array(OVERLAY_CAPACITY * OVERLAY_STRIDE);
+  private readonly overlayScratch = new Float32Array(
+    OVERLAY_CAPACITY * OVERLAY_STRIDE,
+  );
   private readonly luma: LumaProbe;
 
   private readonly onResize = (): void => this.resize();
@@ -147,28 +141,28 @@ export class Renderer implements SceneRenderer {
     // and a lost context becomes permanent.
     e.preventDefault();
     this.lostContext = true;
-    console.warn('[aether] WebGL context lost; waiting for restore');
+    console.warn("[aether] WebGL context lost; waiting for restore");
   };
   private readonly onRestored = (): void => {
     // Every GL object died with the context, so the wrappers holding them are
     // stale: rebuild rather than reuse, and re-probe the formats because a
     // restored context can be a different (often software) implementation.
     this.releaseResources();
-    this.videoTexW = 0;
-    this.videoTexH = 0;
-    this.videoTime = -1;
     try {
       this.res = this.createResources();
       this.lostContext = false;
-      console.info('[aether] WebGL context restored');
+      console.info("[aether] WebGL context restored");
     } catch (err) {
-      console.error('[aether] could not rebuild the renderer after context restore', err);
+      console.error(
+        "[aether] could not rebuild the renderer after context restore",
+        err,
+      );
     }
   };
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
-    const gl = canvas.getContext('webgl2', {
+    const gl = canvas.getContext("webgl2", {
       alpha: false,
       antialias: false,
       depth: false,
@@ -176,21 +170,25 @@ export class Renderer implements SceneRenderer {
       // Needed so `sampleLuminance` and Playwright screenshots can read the
       // framebuffer after the frame is drawn.
       preserveDrawingBuffer: true,
-      powerPreference: 'high-performance',
+      powerPreference: "high-performance",
     });
-    if (!gl) throw new RendererError('WebGL2 is unavailable in this browser.');
+    if (!gl) throw new RendererError("WebGL2 is unavailable in this browser.");
     this.gl = gl;
     // Two diagnostic overrides, both off in normal use: `?sdr8` forces the
     // 8-bit intermediate path and `?rscale=` pins the internal resolution, so
     // the fallbacks can be looked at without the hardware that triggers them.
-    const query = typeof location !== 'undefined' ? new URLSearchParams(location.search) : null;
-    this.forceSdr = query?.has('sdr8') ?? false;
-    const pinned = Number(query?.get('rscale') ?? NaN);
-    this.pinnedScale = Number.isFinite(pinned) && pinned > 0 ? clamp(pinned, 0.25, 1) : null;
+    const query =
+      typeof location !== "undefined"
+        ? new URLSearchParams(location.search)
+        : null;
+    this.forceSdr = query?.has("sdr8") ?? false;
+    const pinned = Number(query?.get("rscale") ?? NaN);
+    this.pinnedScale =
+      Number.isFinite(pinned) && pinned > 0 ? clamp(pinned, 0.25, 1) : null;
 
-    canvas.addEventListener('webglcontextlost', this.onLost);
-    canvas.addEventListener('webglcontextrestored', this.onRestored);
-    window.addEventListener('resize', this.onResize);
+    canvas.addEventListener("webglcontextlost", this.onLost);
+    canvas.addEventListener("webglcontextrestored", this.onRestored);
+    window.addEventListener("resize", this.onResize);
 
     this.luma = new LumaProbe(gl, canvas);
     this.res = this.createResources();
@@ -204,57 +202,51 @@ export class Renderer implements SceneRenderer {
     const caps = probeHdr(gl, this.forceSdr);
     const env: ShaderEnv = { float: caps.float, range: caps.range };
     if (!caps.float) {
-      console.info('[aether] float render targets unavailable; HDR chain on 8-bit targets');
+      console.info(
+        "[aether] float render targets unavailable; HDR chain on 8-bit targets",
+      );
     }
     // Probed here rather than in the constructor because a restored context is
     // often a software one: a GPU reset commonly falls back to SwiftShader.
-    this.pixelBudget = isSoftwareRasteriser(gl) ? SOFTWARE_PIXEL_BUDGET : SCENE_PIXEL_BUDGET;
-
-    const vert = buildShader(FULLSCREEN_VERT, env);
-    const program = (v: string, f: string, label: string): Program =>
-      new Program(gl, buildShader(v, env), buildShader(f, env), label);
+    this.pixelBudget = isSoftwareRasteriser(gl)
+      ? SOFTWARE_PIXEL_BUDGET
+      : SCENE_PIXEL_BUDGET;
 
     const scene = new RenderTarget(gl, caps.format);
     const bloom = new BloomChain(gl, env, caps.format);
-
-    const rgba8 = { internal: gl.RGBA8, format: gl.RGBA, type: gl.UNSIGNED_BYTE };
-    const dyeTex = createTexture(gl, FLUID_W, FLUID_H, rgba8, gl.LINEAR);
-    // NEAREST for the debug view on purpose: it is meant to show the raw
-    // 256x144 cells, and interpolating them would hide exactly what it is for.
-    const debugTex = createTexture(gl, FLUID_W, FLUID_H, rgba8, gl.NEAREST);
-    const videoTex = createTexture(gl, 2, 2, rgba8, gl.LINEAR);
-    const noiseTex = createTexture(gl, NOISE_SIZE, NOISE_SIZE, rgba8, gl.LINEAR, gl.REPEAT);
-    gl.bindTexture(gl.TEXTURE_2D, noiseTex);
-    gl.texSubImage2D(
-      gl.TEXTURE_2D,
-      0,
-      0,
-      0,
-      NOISE_SIZE,
-      NOISE_SIZE,
-      gl.RGBA,
-      gl.UNSIGNED_BYTE,
-      buildNoiseTile(),
-    );
 
     const particleBuffer = gl.createBuffer();
     const overlayBuffer = gl.createBuffer();
     const particleVao = gl.createVertexArray();
     const overlayVao = gl.createVertexArray();
     const quadVao = gl.createVertexArray();
-    if (!particleBuffer || !overlayBuffer || !particleVao || !overlayVao || !quadVao) {
-      throw new RendererError('could not allocate the vertex buffers');
+    if (
+      !particleBuffer ||
+      !overlayBuffer ||
+      !particleVao ||
+      !overlayVao ||
+      !quadVao
+    ) {
+      throw new RendererError("could not allocate the vertex buffers");
     }
 
     gl.bindVertexArray(particleVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, particleBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, PARTICLE_BUCKET * PARTICLE_STRIDE * 4, gl.DYNAMIC_DRAW);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      PARTICLE_BUCKET * PARTICLE_STRIDE * 4,
+      gl.DYNAMIC_DRAW,
+    );
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 4, gl.FLOAT, false, PARTICLE_STRIDE * 4, 0);
 
     gl.bindVertexArray(overlayVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, overlayBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, this.overlayScratch.byteLength, gl.DYNAMIC_DRAW);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      this.overlayScratch.byteLength,
+      gl.DYNAMIC_DRAW,
+    );
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, OVERLAY_STRIDE * 4, 0);
     gl.enableVertexAttribArray(1);
@@ -264,20 +256,13 @@ export class Renderer implements SceneRenderer {
     return {
       scene,
       bloom,
-      dyeTex,
-      debugTex,
-      videoTex,
-      noiseTex,
+      sources: new SceneSources(gl),
+      programs: createPrograms(gl, env),
       particleBuffer,
       particleVao,
       overlayBuffer,
       overlayVao,
       quadVao,
-      scenePass: new Program(gl, vert, buildShader(SCENE_FRAG, env), 'scene'),
-      particlePass: program(PARTICLE_VERT, PARTICLE_FRAG, 'particles'),
-      compositePass: new Program(gl, vert, buildShader(COMPOSITE_FRAG, env), 'composite'),
-      overlayPass: program(OVERLAY_VERT, OVERLAY_FRAG, 'overlay'),
-      blitPass: new Program(gl, vert, buildShader(BLIT_FRAG, env), 'blit'),
     };
   }
 
@@ -288,28 +273,20 @@ export class Renderer implements SceneRenderer {
     this.res = null;
     res.scene.dispose();
     res.bloom.dispose();
-    for (const tex of [res.dyeTex, res.debugTex, res.videoTex, res.noiseTex]) gl.deleteTexture(tex);
+    res.sources.dispose();
     gl.deleteBuffer(res.particleBuffer);
     gl.deleteBuffer(res.overlayBuffer);
     gl.deleteVertexArray(res.particleVao);
     gl.deleteVertexArray(res.overlayVao);
     gl.deleteVertexArray(res.quadVao);
-    for (const p of [
-      res.scenePass,
-      res.particlePass,
-      res.compositePass,
-      res.overlayPass,
-      res.blitPass,
-    ]) {
-      p.dispose();
-    }
+    disposePrograms(res.programs);
   }
 
   /** Releases every GL object this renderer owns and detaches its listeners. */
   dispose(): void {
-    this.canvas.removeEventListener('webglcontextlost', this.onLost);
-    this.canvas.removeEventListener('webglcontextrestored', this.onRestored);
-    window.removeEventListener('resize', this.onResize);
+    this.canvas.removeEventListener("webglcontextlost", this.onLost);
+    this.canvas.removeEventListener("webglcontextrestored", this.onRestored);
+    window.removeEventListener("resize", this.onResize);
     this.releaseResources();
     this.video = null;
     this.lostContext = true;
@@ -350,13 +327,18 @@ export class Renderer implements SceneRenderer {
     // dust reads as coarse confetti there. Size follows the viewport instead,
     // normalised to a typical desktop width, so the grain looks the same
     // fraction of the picture on every screen.
-    this.viewScale = clamp(this.canvas.clientWidth / PARTICLE_SIZE_REF_WIDTH, 0.45, 1);
+    this.viewScale = clamp(
+      this.canvas.clientWidth / PARTICLE_SIZE_REF_WIDTH,
+      0.45,
+      1,
+    );
 
     const res = this.res;
     if (!res) return;
 
     const pixels = w * h;
-    const budgeted = pixels > this.pixelBudget ? Math.sqrt(this.pixelBudget / pixels) : 1;
+    const budgeted =
+      pixels > this.pixelBudget ? Math.sqrt(this.pixelBudget / pixels) : 1;
     // `?rscale=` is a diagnostic pin and outranks both the budget and the
     // governor, so someone comparing resolutions gets the one they asked for.
     this.sceneScale = clamp(
@@ -372,75 +354,11 @@ export class Renderer implements SceneRenderer {
 
   setVideo(video: HTMLVideoElement | null): void {
     this.video = video;
-    this.videoTime = -1;
+    this.res?.sources.resetVideo();
   }
 
   get hasVideo(): boolean {
     return this.video !== null;
-  }
-
-  // ---------------------------------------------------------------- uploads
-
-  /**
-   * True when the video texture holds a usable frame.
-   *
-   * `readyState < 2` is the case that matters: a camera element exists from the
-   * moment `getUserMedia` resolves but has no decoded frame for a while after,
-   * and uploading one of those is either a no-op or a throw depending on the
-   * browser.
-   */
-  private uploadVideo(res: Resources, v: HTMLVideoElement | null): boolean {
-    if (!v || v.readyState < 2 || v.videoWidth === 0 || v.videoHeight === 0) return false;
-    const gl = this.gl;
-    gl.activeTexture(gl.TEXTURE0);
-
-    if (this.videoTexW !== v.videoWidth || this.videoTexH !== v.videoHeight) {
-      // Only reallocation path for the video texture: the camera's resolution
-      // is fixed for the life of a stream, so this runs once.
-      gl.bindTexture(gl.TEXTURE_2D, res.videoTex);
-      gl.texImage2D(
-        gl.TEXTURE_2D,
-        0,
-        gl.RGBA8,
-        v.videoWidth,
-        v.videoHeight,
-        0,
-        gl.RGBA,
-        gl.UNSIGNED_BYTE,
-        null,
-      );
-      this.videoTexW = v.videoWidth;
-      this.videoTexH = v.videoHeight;
-      this.videoTime = -1;
-    }
-
-    if (v.currentTime !== this.videoTime) {
-      gl.bindTexture(gl.TEXTURE_2D, res.videoTex);
-      try {
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, v);
-      } catch {
-        // A frame that is not decodable yet, or a cross-origin stream. Keep
-        // whatever was uploaded last rather than dropping the camera layer.
-        return this.videoTime >= 0;
-      }
-      this.videoTime = v.currentTime;
-    }
-    return true;
-  }
-
-  /**
-   * Uploads one `FLUID_W * FLUID_H` RGBA8 grid. A short buffer means the view
-   * over WASM memory was detached by a reallocation this frame — skip the
-   * upload and keep the previous contents rather than throwing out of the
-   * render loop.
-   */
-  private uploadGrid(tex: WebGLTexture, data: Uint8Array): boolean {
-    if (data.length < FLUID_W * FLUID_H * 4) return false;
-    const gl = this.gl;
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, FLUID_W, FLUID_H, gl.RGBA, gl.UNSIGNED_BYTE, data);
-    return true;
   }
 
   // ----------------------------------------------------------------- frame
@@ -453,14 +371,16 @@ export class Renderer implements SceneRenderer {
 
     this.resize();
     this.frameIndex = (this.frameIndex + 1) % 1024;
-    const intensity = Number.isFinite(frame.intensity) ? clamp(frame.intensity, 0, 1) : 0;
+    const intensity = Number.isFinite(frame.intensity)
+      ? clamp(frame.intensity, 0, 1)
+      : 0;
     const time = Number.isFinite(frame.time) ? frame.time : 0;
 
     gl.disable(gl.BLEND);
     gl.disable(gl.DEPTH_TEST);
     gl.bindVertexArray(res.quadVao);
 
-    if (frame.mode === 'debug') {
+    if (frame.mode === "debug") {
       this.drawDebug(res, frame);
       return;
     }
@@ -478,7 +398,10 @@ export class Renderer implements SceneRenderer {
   /** Raw obstacle/flow texture, straight to the screen with no grading. */
   private drawDebug(res: Resources, frame: RenderFrame): void {
     const gl = this.gl;
-    const source = frame.debug && this.uploadGrid(res.debugTex, frame.debug) ? res.debugTex : null;
+    const source =
+      frame.debug && res.sources.uploadGrid(res.sources.debugTex, frame.debug)
+        ? res.sources.debugTex
+        : null;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     if (!source) {
@@ -488,8 +411,8 @@ export class Renderer implements SceneRenderer {
       gl.clear(gl.COLOR_BUFFER_BIT);
       return;
     }
-    res.blitPass.use();
-    res.blitPass.tex('u_src', 0, source);
+    res.programs.blit.use();
+    res.programs.blit.tex("u_src", 0, source);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
@@ -501,9 +424,9 @@ export class Renderer implements SceneRenderer {
     time: number,
   ): void {
     const gl = this.gl;
-    const p = res.scenePass;
+    const p = res.programs.scene;
 
-    this.uploadGrid(res.dyeTex, frame.dye);
+    res.sources.uploadGrid(res.sources.dyeTex, frame.dye);
     // The camera mode is a stronger statement than the camera toggle: the user
     // asked to look at the feed, so `showCamera` only gates the aether view.
     //
@@ -514,36 +437,43 @@ export class Renderer implements SceneRenderer {
     const camUsed =
       style.camTint[0] + style.camTint[1] + style.camTint[2] > 0 ||
       style.camEdge[0] + style.camEdge[1] + style.camEdge[2] > 0;
-    const wantCamera = camUsed && (frame.mode === 'camera' || frame.mode === 'blend' || frame.showCamera);
-    const hasVideo = wantCamera && this.uploadVideo(res, frame.video ?? this.video);
+    const wantCamera =
+      camUsed &&
+      (frame.mode === "camera" || frame.mode === "blend" || frame.showCamera);
+    const hasVideo =
+      wantCamera && res.sources.uploadVideo(frame.video ?? this.video);
 
     res.scene.bind();
     p.use();
-    p.tex('u_dye', 0, res.dyeTex);
-    p.tex('u_video', 1, res.videoTex);
-    p.tex('u_noise', 2, res.noiseTex);
-    p.f2('u_dyeSize', FLUID_W, FLUID_H);
-    p.f2('u_dyeTexel', 1 / FLUID_W, 1 / FLUID_H);
-    p.f1('u_dyeAmount', style.dye);
-    p.f1('u_bgAmount', style.bg);
-    p.f1('u_intensity', intensity);
-    p.f1('u_time', time);
-    p.f1('u_hasVideo', hasVideo ? 1 : 0);
-    p.f3('u_camTint', style.camTint[0], style.camTint[1], style.camTint[2]);
-    p.f3('u_camEdge', style.camEdge[0], style.camEdge[1], style.camEdge[2]);
-    p.f1('u_camToe', style.camToe);
-    p.f1('u_camRaw', style.camRaw);
-    p.f2('u_videoTexel', 1 / Math.max(1, this.videoTexW), 1 / Math.max(1, this.videoTexH));
+    p.tex("u_dye", 0, res.sources.dyeTex);
+    p.tex("u_video", 1, res.sources.videoTex);
+    p.tex("u_noise", 2, res.sources.noiseTex);
+    p.f2("u_dyeSize", FLUID_W, FLUID_H);
+    p.f2("u_dyeTexel", 1 / FLUID_W, 1 / FLUID_H);
+    p.f1("u_dyeAmount", style.dye);
+    p.f1("u_bgAmount", style.bg);
+    p.f1("u_intensity", intensity);
+    p.f1("u_time", time);
+    p.f1("u_hasVideo", hasVideo ? 1 : 0);
+    p.f3("u_camTint", style.camTint[0], style.camTint[1], style.camTint[2]);
+    p.f3("u_camEdge", style.camEdge[0], style.camEdge[1], style.camEdge[2]);
+    p.f1("u_camToe", style.camToe);
+    p.f1("u_camRaw", style.camRaw);
+    p.f2(
+      "u_videoTexel",
+      1 / Math.max(1, res.sources.videoTexW),
+      1 / Math.max(1, res.sources.videoTexH),
+    );
 
     // Cover fit: crop the long axis so the feed fills the canvas at its own
     // aspect ratio. Letterboxing would put black bars inside the simulation,
     // and stretching would make gestures land off their landmarks.
     const canvasAspect = this.canvas.width / Math.max(1, this.canvas.height);
-    const videoAspect = this.videoTexW / Math.max(1, this.videoTexH);
+    const videoAspect = res.sources.videoAspect;
     if (videoAspect > canvasAspect) {
-      p.f2('u_camScale', canvasAspect / videoAspect, 1);
+      p.f2("u_camScale", canvasAspect / videoAspect, 1);
     } else {
-      p.f2('u_camScale', 1, videoAspect / canvasAspect);
+      p.f2("u_camScale", 1, videoAspect / canvasAspect);
     }
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -558,7 +488,9 @@ export class Renderer implements SceneRenderer {
     if (style.particles <= 0) return;
     const gl = this.gl;
     const available = Math.floor(frame.particles.length / PARTICLE_STRIDE);
-    const requested = Number.isFinite(frame.particleCount) ? Math.floor(frame.particleCount) : 0;
+    const requested = Number.isFinite(frame.particleCount)
+      ? Math.floor(frame.particleCount)
+      : 0;
     const count = Math.min(Math.max(0, requested), available, MAX_PARTICLES);
     if (count === 0) return;
 
@@ -572,23 +504,33 @@ export class Renderer implements SceneRenderer {
       MAX_PARTICLES,
       Math.ceil(count / PARTICLE_BUCKET) * PARTICLE_BUCKET,
     );
-    gl.bufferData(gl.ARRAY_BUFFER, bucket * PARTICLE_STRIDE * 4, gl.DYNAMIC_DRAW);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, frame.particles, 0, count * PARTICLE_STRIDE);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      bucket * PARTICLE_STRIDE * 4,
+      gl.DYNAMIC_DRAW,
+    );
+    gl.bufferSubData(
+      gl.ARRAY_BUFFER,
+      0,
+      frame.particles,
+      0,
+      count * PARTICLE_STRIDE,
+    );
 
-    const p = res.particlePass;
+    const p = res.programs.particles;
     p.use();
     // Energy normalisation: the pool is user-adjustable from 2k to 220k, and
     // without this the 220k setting is a white screen and the 2k setting is
     // nearly invisible. Total emitted light stays roughly constant instead.
     // The floor sits low enough that the 1M overdrive pool reads as dense
     // dust rather than a saturated sheet.
-    p.f1('u_gain', style.particles * clamp(90_000 / count, 0.1, 2.0));
+    p.f1("u_gain", style.particles * clamp(90_000 / count, 0.1, 2.0));
     // Point size follows the target, not the canvas: the scene can be drawn
     // below canvas resolution, and a size in canvas pixels would then make the
     // dust swell into blobs when the composite scales it back up.
     const px = this.dpr * this.sceneScale * this.viewScale;
-    p.f1('u_size', px * (3.1 + (1.35 - 3.1) * clamp(count / 200_000, 0, 1)));
-    p.f1('u_intensity', intensity);
+    p.f1("u_size", px * (3.1 + (1.35 - 3.1) * clamp(count / 200_000, 0, 1)));
+    p.f1("u_intensity", intensity);
 
     res.scene.bind();
     gl.enable(gl.BLEND);
@@ -597,7 +539,11 @@ export class Renderer implements SceneRenderer {
     gl.disable(gl.BLEND);
   }
 
-  private drawOverlay(res: Resources, frame: RenderFrame, style: ModeStyle): void {
+  private drawOverlay(
+    res: Resources,
+    frame: RenderFrame,
+    style: ModeStyle,
+  ): void {
     if (style.overlay <= 0) return;
     if (!frame.hands) return;
     const mesh = buildHandMesh(frame.hands, this.overlayScratch);
@@ -607,25 +553,35 @@ export class Renderer implements SceneRenderer {
     const gl = this.gl;
     gl.bindVertexArray(res.overlayVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, res.overlayBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, this.overlayScratch.byteLength, gl.DYNAMIC_DRAW);
-    gl.bufferSubData(gl.ARRAY_BUFFER, 0, this.overlayScratch, 0, vertices * OVERLAY_STRIDE);
+    gl.bufferData(
+      gl.ARRAY_BUFFER,
+      this.overlayScratch.byteLength,
+      gl.DYNAMIC_DRAW,
+    );
+    gl.bufferSubData(
+      gl.ARRAY_BUFFER,
+      0,
+      this.overlayScratch,
+      0,
+      vertices * OVERLAY_STRIDE,
+    );
 
-    const p = res.overlayPass;
+    const p = res.programs.overlay;
     p.use();
-    p.f1('u_alpha', style.overlay);
-    p.f3('u_tint', 0.55, 0.88, 1.0);
+    p.f1("u_alpha", style.overlay);
+    p.f3("u_tint", 0.55, 0.88, 1.0);
 
     res.scene.bind();
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
     if (mesh.lineVertices > 0) {
-      p.f1('u_round', 0);
-      p.f1('u_size', 1);
+      p.f1("u_round", 0);
+      p.f1("u_size", 1);
       gl.drawArrays(gl.LINES, 0, mesh.lineVertices);
     }
     if (mesh.pointVertices > 0) {
-      p.f1('u_round', 1);
-      p.f1('u_size', 5 * this.dpr * this.sceneScale);
+      p.f1("u_round", 1);
+      p.f1("u_size", 5 * this.dpr * this.sceneScale);
       gl.drawArrays(gl.POINTS, mesh.lineVertices, mesh.pointVertices);
     }
     gl.disable(gl.BLEND);
@@ -641,29 +597,39 @@ export class Renderer implements SceneRenderer {
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
 
-    const p = res.compositePass;
+    const p = res.programs.composite;
     p.use();
-    p.tex('u_scene', 0, res.scene.texture);
-    p.tex('u_bloom', 1, res.bloom.output);
-    p.tex('u_noise', 2, res.noiseTex);
+    p.tex("u_scene", 0, res.scene.texture);
+    p.tex("u_bloom", 1, res.bloom.output);
+    p.tex("u_noise", 2, res.sources.noiseTex);
     // Motion drives the glow, not the exposure: pushing exposure with movement
     // makes the whole frame pump, while pushing bloom makes the bright parts
     // bloom harder, which is what "a burst of movement blazes" should feel like.
-    p.f1('u_bloomAmount', style.bloom * (0.72 + 0.75 * intensity));
+    p.f1("u_bloomAmount", style.bloom * (0.72 + 0.75 * intensity));
     // The camera view is ungraded and must not breathe with motion.
-    p.f1('u_exposure', style.exposure * (style.grade > 0 ? 0.96 + 0.22 * intensity : 1));
-    p.f1('u_aberration', style.aberration);
-    p.f1('u_vignette', style.vignette);
-    p.f1('u_grade', style.grade);
-    p.f1('u_frame', this.frameIndex);
+    p.f1(
+      "u_exposure",
+      style.exposure * (style.grade > 0 ? 0.96 + 0.22 * intensity : 1),
+    );
+    p.f1("u_aberration", style.aberration);
+    p.f1("u_vignette", style.vignette);
+    p.f1("u_grade", style.grade);
+    p.f1("u_frame", this.frameIndex);
     // The engine's origin is in the dye grid's convention (y down); this pass
     // samples the scene target, which holds that image flipped, so the y has to
     // be flipped with it or the rush would dolly in on the mirror of the palm.
     const rush = frame.rush;
-    const power = rush && rush.length >= 4 && Number.isFinite(rush[3]) ? Math.max(0, rush[3]) : 0;
-    p.f2('u_rushAt', power > 0 ? rush![0] : 0.5, power > 0 ? 1 - rush![1] : 0.5);
-    p.f1('u_rushProgress', power > 0 ? rush![2] : 0);
-    p.f1('u_rushPower', power);
+    const power =
+      rush && rush.length >= 4 && Number.isFinite(rush[3])
+        ? Math.max(0, rush[3])
+        : 0;
+    p.f2(
+      "u_rushAt",
+      power > 0 ? rush![0] : 0.5,
+      power > 0 ? 1 - rush![1] : 0.5,
+    );
+    p.f1("u_rushProgress", power > 0 ? rush![2] : 0);
+    p.f1("u_rushPower", power);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
