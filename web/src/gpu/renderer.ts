@@ -28,7 +28,6 @@
  * worth.
  */
 
-import { FLUID_H, FLUID_W } from "../constants";
 import type { ModeStyle } from "../render/styles";
 import { STYLES } from "../render/styles";
 import type {
@@ -39,14 +38,7 @@ import type {
 } from "../types";
 import type { GpuContext } from "./device";
 import { recordGpuError } from "./error-log";
-import { packCompositeUniform, packSceneUniform } from "./frame-uniforms";
-import {
-  aspectOf,
-  cameraFit,
-  particleGain,
-  particleSize,
-  usesCamera,
-} from "../render/look";
+import { packCompositeUniform } from "./frame-uniforms";
 import { FrameChain } from "./frame-chain";
 import {
   MIN_SCENE_SCALE,
@@ -57,12 +49,12 @@ import {
   viewportScale,
 } from "../render/sizing";
 import { HandOverlay } from "./overlay";
+import { ParticlePass } from "./particle-pass";
 import { ParticleSim } from "./particle-sim";
 import type { GpuPipelines } from "./pipelines";
 import { createPipelines } from "./pipelines";
+import { ScenePass } from "./scene-pass";
 import { COMPOSITE_UNIFORM_FLOATS } from "./shaders/composite";
-import { DRAW_UNIFORM_FLOATS } from "./shaders/particles";
-import { SCENE_UNIFORM_FLOATS } from "./shaders/scene";
 import { SceneSources } from "./sources";
 import type { FullscreenPass } from "./target";
 import { clamp, finite } from "./sim-uniform";
@@ -83,35 +75,26 @@ export class GpuRenderer implements SceneRenderer {
 
   /** Input textures and samplers; see `sources.ts`. */
   private readonly sources: SceneSources;
-  /** Camera-texture generation the static bind groups were built against. */
-  private boundSourceVersion = 0;
+  /** The scene draw, its uniform and the debug blit; see `scene-pass.ts`. */
+  private readonly scenePass: ScenePass;
 
   /** Every render pipeline; see `pipelines.ts`. */
   private readonly pipes: GpuPipelines;
 
   // --- uniforms and buffers
-  private readonly sceneUniform: GPUBuffer;
   private readonly compositeUniform: GPUBuffer;
-  private readonly drawUniform: GPUBuffer;
   /** The hand skeleton and its buffers; see `overlay.ts`. */
   private readonly overlay: HandOverlay;
 
   /** The pool and its compute passes; see `particle-sim.ts`. */
   private readonly sim: ParticleSim;
-  /** Pool generation the draw bind group was built against. */
-  private drawnPoolVersion = -1;
-
-  // --- bind groups (rebuilt when the resources behind them change)
-  private sceneBind: GPUBindGroup | null = null;
-  private blitDebugBind: GPUBindGroup | null = null;
-  private drawBind: GPUBindGroup | null = null;
+  /** The instanced draw over the pool; see `particle-pass.ts`. */
+  private readonly particles: ParticlePass;
 
   // --- scratch
-  private readonly sceneScratch = new Float32Array(SCENE_UNIFORM_FLOATS);
   private readonly compositeScratch = new Float32Array(
     COMPOSITE_UNIFORM_FLOATS,
   );
-  private readonly drawScratch = new Float32Array(DRAW_UNIFORM_FLOATS);
 
   // --- frame state
   private dpr = 1;
@@ -151,25 +134,19 @@ export class GpuRenderer implements SceneRenderer {
     this.sources = new SceneSources(d);
     this.pipes = createPipelines(d, this.format);
 
-    // --- buffers
-    const uniform = (floats: number, label: string): GPUBuffer =>
-      d.createBuffer({
-        label,
-        size: floats * 4,
-        usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-      });
-    this.sceneUniform = uniform(SCENE_UNIFORM_FLOATS, "scene-uniform");
-    this.compositeUniform = uniform(
-      COMPOSITE_UNIFORM_FLOATS,
-      "composite-uniform",
-    );
-    this.drawUniform = uniform(DRAW_UNIFORM_FLOATS, "draw-uniform");
+    this.compositeUniform = d.createBuffer({
+      label: "composite-uniform",
+      size: COMPOSITE_UNIFORM_FLOATS * 4,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
     this.overlay = new HandOverlay(
       d,
       this.pipes.overlayLine,
       this.pipes.overlayPoint,
     );
     this.sim = new ParticleSim(d);
+    this.particles = new ParticlePass(d, this.pipes, this.sim);
+    this.scenePass = new ScenePass(d, this.pipes, this.sources);
     this.chain = new FrameChain(
       d,
       this.pipes,
@@ -177,57 +154,8 @@ export class GpuRenderer implements SceneRenderer {
       this.compositeUniform,
     );
 
-    this.buildStaticBinds();
     window.addEventListener("resize", this.onResize);
     this.resize();
-  }
-
-  // ------------------------------------------------------------- resources
-
-  /** Bind groups over resources that outlive a resize. */
-  private buildStaticBinds(): void {
-    const d = this.device;
-    const src = this.sources;
-    this.boundSourceVersion = src.version;
-    this.sceneBind = d.createBindGroup({
-      layout: this.pipes.scene.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: { buffer: this.sceneUniform } },
-        { binding: 1, resource: src.dyeTex.createView() },
-        { binding: 2, resource: src.videoTex.createView() },
-        { binding: 3, resource: src.noiseTex.createView() },
-        { binding: 4, resource: src.clampSampler },
-        { binding: 5, resource: src.repeatSampler },
-      ],
-    });
-    this.blitDebugBind = d.createBindGroup({
-      layout: this.pipes.blit.getBindGroupLayout(0),
-      entries: [
-        { binding: 0, resource: src.debugTex.createView() },
-        { binding: 1, resource: src.nearestSampler },
-      ],
-    });
-  }
-
-  /**
-   * Keeps the instanced draw's bind group pointing at the live pool. The pool
-   * belongs to `ParticleSim` and is reallocated when it grows, so the version it
-   * reports — not a size comparison here — is what invalidates this.
-   */
-  private ensureDrawBind(): boolean {
-    const pool = this.sim.pool;
-    if (!pool) return false;
-    if (this.drawnPoolVersion !== this.sim.poolVersion) {
-      this.drawnPoolVersion = this.sim.poolVersion;
-      this.drawBind = this.device.createBindGroup({
-        layout: this.pipes.particleDraw.getBindGroupLayout(0),
-        entries: [
-          { binding: 0, resource: { buffer: this.drawUniform } },
-          { binding: 1, resource: { buffer: pool } },
-        ],
-      });
-    }
-    return this.drawBind !== null;
   }
 
   dispose(): void {
@@ -275,17 +203,6 @@ export class GpuRenderer implements SceneRenderer {
     this.sources.resetVideo();
   }
 
-  /**
-   * Uploads this frame's camera texture, rebuilding the bind groups over it
-   * when the stream's resolution changed the texture underneath them.
-   */
-  private uploadVideo(v: HTMLVideoElement | null): boolean {
-    const ok = this.sources.uploadVideo(v);
-    if (this.boundSourceVersion !== this.sources.version)
-      this.buildStaticBinds();
-    return ok;
-  }
-
   // ----------------------------------------------------------------- frame
 
   render(frame: RenderFrame): void {
@@ -298,16 +215,40 @@ export class GpuRenderer implements SceneRenderer {
     const encoder = this.device.createCommandEncoder();
 
     if (frame.mode === "debug") {
-      this.drawDebug(encoder, frame);
+      this.scenePass.recordDebug(
+        encoder,
+        this.pass,
+        this.context.getCurrentTexture().createView(),
+        frame,
+      );
       this.device.queue.submit([encoder.finish()]);
       return;
     }
 
     const style = STYLES[frame.mode];
     const drawn = frame.sim ? this.stepParticles(encoder, frame.sim, style) : 0;
-    this.drawScene(encoder, frame, style, intensity, time);
+    this.scenePass.record(
+      encoder,
+      this.pass,
+      this.chain.scene.view!,
+      frame,
+      style,
+      intensity,
+      time,
+      this.canvas.width,
+      this.canvas.height,
+      this.video,
+    );
     if (drawn > 0)
-      this.drawParticles(encoder, drawn, style, intensity, frame.sim!);
+      this.particles.record(
+        encoder,
+        this.chain.scene,
+        drawn,
+        style,
+        intensity,
+        frame.sim!,
+        this.dpr * this.sceneScale * this.viewScale,
+      );
     if (style.overlay > 0 && frame.hands)
       this.overlay.record(
         encoder,
@@ -351,28 +292,6 @@ export class GpuRenderer implements SceneRenderer {
     p.end();
   };
 
-  private drawDebug(encoder: GPUCommandEncoder, frame: RenderFrame): void {
-    const view = this.context.getCurrentTexture().createView();
-    const ok = frame.debug
-      ? this.sources.uploadGrid(this.sources.debugTex, frame.debug)
-      : false;
-    if (!ok) {
-      const p = encoder.beginRenderPass({
-        colorAttachments: [
-          {
-            view,
-            loadOp: "clear",
-            storeOp: "store",
-            clearValue: { r: 0.03, g: 0.035, b: 0.05, a: 1 },
-          },
-        ],
-      });
-      p.end();
-      return;
-    }
-    this.pass(encoder, view, this.pipes.blit, this.blitDebugBind!);
-  }
-
   // ------------------------------------------------------------ simulation
 
   /**
@@ -386,84 +305,11 @@ export class GpuRenderer implements SceneRenderer {
     style: ModeStyle,
   ): number {
     const stepped = this.sim.step(encoder, sim, this.frameIndex);
-    if (stepped === 0 || !this.ensureDrawBind()) return 0;
+    if (stepped === 0 || !this.particles.ensureBind()) return 0;
     return style.particles > 0 ? stepped : 0;
   }
 
   // ---------------------------------------------------------------- passes
-
-  private drawScene(
-    encoder: GPUCommandEncoder,
-    frame: RenderFrame,
-    style: ModeStyle,
-    intensity: number,
-    time: number,
-  ): void {
-    this.sources.uploadGrid(this.sources.dyeTex, frame.dye);
-    const wantCamera =
-      usesCamera(style) &&
-      (frame.mode === "camera" || frame.mode === "blend" || frame.showCamera);
-    const v = frame.video ?? this.video;
-    const hasVideo = wantCamera && this.uploadVideo(v);
-
-    const canvasAspect = aspectOf(this.canvas.width, this.canvas.height, 1);
-    const [camScaleX, camScaleY] = cameraFit(
-      canvasAspect,
-      hasVideo && v ? aspectOf(v.videoWidth, v.videoHeight, 0) : 0,
-    );
-
-    const s = this.sceneScratch;
-    packSceneUniform(s, {
-      style,
-      fluidW: FLUID_W,
-      fluidH: FLUID_H,
-      camScaleX,
-      camScaleY,
-      videoTexW: this.sources.videoTexW,
-      videoTexH: this.sources.videoTexH,
-      hasVideo,
-      intensity,
-      time,
-    });
-    this.device.queue.writeBuffer(this.sceneUniform, 0, s);
-    this.pass(
-      encoder,
-      this.chain.scene.view!,
-      this.pipes.scene,
-      this.sceneBind!,
-    );
-  }
-
-  private drawParticles(
-    encoder: GPUCommandEncoder,
-    count: number,
-    style: ModeStyle,
-    intensity: number,
-    sim: GpuSimFrame,
-  ): void {
-    const d = this.drawScratch;
-    const px = this.dpr * this.sceneScale * this.viewScale;
-    d[0] = particleSize(px, count);
-    d[1] = particleGain(style, count);
-    d[2] = intensity;
-    d[3] = 0;
-    d[4] = this.chain.scene.width;
-    d[5] = this.chain.scene.height;
-    d[6] = Math.max(1, sim.gridW - 1);
-    d[7] = Math.max(1, sim.gridH - 1);
-    this.device.queue.writeBuffer(this.drawUniform, 0, d);
-
-    const p = encoder.beginRenderPass({
-      label: "particles",
-      colorAttachments: [
-        { view: this.chain.scene.view!, loadOp: "load", storeOp: "store" },
-      ],
-    });
-    p.setPipeline(this.pipes.particleDraw);
-    p.setBindGroup(0, this.drawBind!);
-    p.draw(6, count);
-    p.end();
-  }
 
   private drawComposite(
     encoder: GPUCommandEncoder,

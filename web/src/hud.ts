@@ -29,25 +29,16 @@
 
 import { STAT } from "./constants";
 import type { EngineTier } from "./engine-loader";
-import { handsPresent, statCells, warpView } from "./hud-cells";
 import { ComboBook, comboState, duetState } from "./hud-combos";
-import { FrameTimer } from "./hud-frame-timer";
 import { hudAction } from "./hud-keys";
 import { markup } from "./hud-markup";
-import { Meter, finite, frameTone } from "./hud-meter";
+import { finite } from "./hud-meter";
 import { ParamControls } from "./hud-params";
 import { PoolControl } from "./hud-pool";
-import { Sparkline } from "./hud-spark";
-import { SpellReadout } from "./hud-spells";
-import { statusLine } from "./hud-status";
+import { Telemetry } from "./hud-telemetry";
 import { GestureTutorial } from "./tutorial";
-import { CELLS, METERS, MODES } from "./hud-spec";
-import type {
-  HudCallbacks,
-  HudStats,
-  PerceptionStatus,
-  ViewMode,
-} from "./types";
+import { MODES } from "./hud-spec";
+import type { HudCallbacks, HudStats, ViewMode } from "./types";
 
 /**
  * DOM repaint period. A full paint measures ~0.10 ms in Chromium, so 10 Hz
@@ -66,18 +57,8 @@ export class Hud {
   private readonly panel: HTMLElement;
   private readonly body: HTMLElement;
   private readonly collapseBtn: HTMLButtonElement;
-  private readonly fpsEl: HTMLElement;
-  private readonly ambientEl: HTMLElement;
-  private readonly engineBadge: HTMLElement;
-  private readonly meters: Meter[] = [];
-  private readonly spark: Sparkline;
-  private readonly cells = new Map<string, HTMLElement>();
-  private readonly spells: SpellReadout;
-  private readonly warpValue: HTMLElement;
-  private readonly warpFill: HTMLElement;
-  private readonly percepEl: HTMLElement;
-  private readonly percepHead: HTMLElement;
-  private readonly percepWhy: HTMLElement;
+  /** Every readout in the panel; see `hud-telemetry.ts`. */
+  private readonly telemetry: Telemetry;
   private readonly hintEl: HTMLElement;
   private readonly helpEl: HTMLElement;
   private readonly modeBtns: HTMLButtonElement[] = [];
@@ -87,8 +68,6 @@ export class Hud {
   private readonly combos: ComboBook;
   private readonly tutorial: GestureTutorial;
 
-  private readonly frameTimer = new FrameTimer();
-
   private cameraOn = true;
   private collapsed = true;
   private hiddenAll = false;
@@ -96,9 +75,6 @@ export class Hud {
   private lastPaintMs = 0;
   private hintStartMs = 0;
   private hintDone = false;
-  private lastPercep = "";
-  private lastFpsTone = "";
-  private lastAmbient: boolean | null = null;
 
   constructor(root: HTMLElement, callbacks: HudCallbacks) {
     this.root = root;
@@ -109,15 +85,7 @@ export class Hud {
     this.panel = this.q(".hud-panel");
     this.body = this.q(".hud-body");
     this.collapseBtn = this.q('[data-act="collapse"]');
-    this.fpsEl = this.q("[data-fps]");
-    this.ambientEl = this.q("[data-ambient]");
-    this.engineBadge = this.q("[data-engine]");
-    this.spark = new Sparkline(this.q("canvas.hud-spark"));
-    this.warpValue = this.q("[data-warp-value]");
-    this.warpFill = this.q("[data-warp-fill]");
-    this.percepEl = this.q(".hud-percep");
-    this.percepHead = this.q("[data-percep-head]");
-    this.percepWhy = this.q("[data-percep-why]");
+    this.telemetry = new Telemetry(this.root);
     this.hintEl = this.q(".hud-hint");
     this.helpEl = this.q(".hud-help");
     this.camBtn = this.q('[data-act="camera"]');
@@ -127,24 +95,10 @@ export class Hud {
       onOverdrive: (on) => this.cb.onOverdrive(on),
     });
 
-    for (const m of METERS) {
-      this.meters.push(
-        new Meter(
-          this.q(`[data-meter="${m.id}"] .trk-fill`),
-          this.q(`[data-meter="${m.id}"] .m-val`),
-          m.budget,
-          m.digits,
-        ),
-      );
-    }
-    for (const c of CELLS)
-      this.cells.set(c.id, this.q(`[data-cell="${c.id}"] b`));
-    this.spells = new SpellReadout(this.root);
-
     // The status line lives outside the scrolling body — "why is tracking off"
     // must not be something you have to scroll to — so collapsing hides both.
     this.body.hidden = true;
-    this.percepEl.hidden = true;
+    this.telemetry.percepEl.hidden = true;
     // Outside the panel on purpose: sequence progress has to stay visible when
     // the panel is collapsed, which is how most of a session is spent.
     this.combos = new ComboBook(this.root);
@@ -164,10 +118,7 @@ export class Hud {
    */
   update(s: HudStats): void {
     const now = performance.now();
-    this.frameTimer.sample(now);
-    this.meters[0]?.sample(s.stepMs);
-    this.meters[1]?.sample(s.renderMs);
-    this.meters[2]?.sample(s.inferenceMs);
+    this.telemetry.sample(s, now);
 
     if (this.hintStartMs === 0) this.hintStartMs = now;
 
@@ -188,76 +139,29 @@ export class Hud {
     if (now - this.lastPaintMs < PAINT_MS) return;
     this.lastPaintMs = now;
 
-    // The worst frame in the window, not the average: one bad frame in ten is
-    // what a user actually notices. The number, the tone and the sparkline all
-    // read this single value, so they can never disagree. See
-    // `hud-frame-timer.ts` for why an unmeasurable window reports nothing.
-    const frameMs = this.frameTimer.read(finite(s.fps));
-    if (frameMs > 0.001) {
-      this.spark.push(frameMs);
-      const worstFps = 1000 / frameMs;
-      this.setText(
-        this.fpsEl,
-        worstFps >= 10 ? worstFps.toFixed(0) : worstFps.toFixed(1),
-      );
-      const fpsTone = frameTone(frameMs);
-      if (fpsTone !== this.lastFpsTone) {
-        this.lastFpsTone = fpsTone;
-        this.fpsEl.dataset.tone = fpsTone;
-      }
-    }
-
-    const st = s.stats;
-    const ambient = finite(st?.[STAT.AMBIENT]) > 0.5;
-    if (ambient !== this.lastAmbient) {
-      this.lastAmbient = ambient;
-      this.ambientEl.hidden = !ambient;
-    }
+    this.telemetry.paintHeader(s);
     this.tickHint(s, now);
 
     if (this.hiddenAll || this.collapsed) {
       // Still drain the peak-holds: expanding the panel after a minute must not
       // show the spike from whenever it happened to be collapsed. The sparkline
       // history keeps filling, so the moment it opens it has real context.
-      for (const m of this.meters) m.drain();
+      this.telemetry.drain();
       return;
     }
 
-    for (const m of this.meters) m.paint();
-    this.spark.draw();
-
-    const hands = handsPresent(st);
-    for (const [id, text] of Object.entries(statCells(st))) this.cell(id, text);
-
-    const warp = warpView(st);
-    this.setText(this.warpValue, warp.label);
-    if (this.warpFill.style.getPropertyValue("--v") !== warp.pct) {
-      this.warpFill.style.setProperty("--v", warp.pct);
-    }
-    this.setData(this.warpFill, "tone", warp.warping ? "on" : "off");
-
-    this.spells.paint(hands, s.spells, warp.warping);
-
-    this.paintPerception(s.perception);
+    this.telemetry.paintBody(s);
   }
 
-  /**
-   * Shows which engine build is running. Static for the session, so it is set
-   * once rather than re-derived on every `update`.
-   */
+  /** Shows which engine build is running; static for the session. */
   setEngineTier(tier: EngineTier): void {
-    const label =
-      tier.name === "threads" ? `${tier.threads} thr · simd` : "1 thr · simd";
-    this.cell("engine", label);
-    this.engineBadge.hidden = tier.name !== "threads";
-    this.setText(this.engineBadge, `${tier.threads} threads`);
-    this.engineBadge.title = `Rust engine on ${tier.threads} worker threads (${tier.reason})`;
+    this.telemetry.setEngineTier(tier);
   }
 
   /** Detaches global listeners. Not used by `main.ts`; here for teardown. */
   dispose(): void {
     window.removeEventListener("keydown", this.onKey);
-    this.spark.dispose();
+    this.telemetry.dispose();
   }
 
   // ------------------------------------------------------------------ wiring
@@ -346,7 +250,8 @@ export class Hud {
   private setCamera(on: boolean): void {
     this.cameraOn = on;
     this.camBtn.setAttribute("aria-pressed", on ? "true" : "false");
-    this.setText(this.camValue, on ? "on" : "off");
+    const label = on ? "on" : "off";
+    if (this.camValue.textContent !== label) this.camValue.textContent = label;
     this.cb.onToggleCamera(on);
   }
 
@@ -354,7 +259,7 @@ export class Hud {
     this.collapsed = collapsed;
     this.root.classList.toggle("is-collapsed", collapsed);
     this.body.hidden = collapsed;
-    this.percepEl.hidden = collapsed;
+    this.telemetry.percepEl.hidden = collapsed;
     this.collapseBtn.setAttribute(
       "aria-expanded",
       collapsed ? "false" : "true",
@@ -363,7 +268,7 @@ export class Hud {
       "aria-label",
       collapsed ? "Expand the panel" : "Collapse to fps",
     );
-    if (!collapsed) this.spark.resize();
+    if (!collapsed) this.telemetry.resizeSpark();
   }
 
   /**
@@ -405,38 +310,6 @@ export class Hud {
     if (!cast && !seen && now - this.hintStartMs < HINT_MS) return;
     this.hintDone = true;
     this.hintEl.classList.add("is-gone");
-  }
-
-  private paintPerception(p: PerceptionStatus): void {
-    const { head, why, tone } = statusLine(p);
-    // The status changes almost never; a string compare is cheaper than three
-    // DOM writes at 10 Hz.
-    const sig = `${tone}|${head}|${why}`;
-    if (sig === this.lastPercep) return;
-    this.lastPercep = sig;
-    this.percepEl.dataset.tone = tone;
-    this.percepHead.textContent = head;
-    this.percepWhy.textContent = why;
-  }
-
-  // ---------------------------------------------------------------- painting
-
-  private cell(id: string, text: string): void {
-    const el = this.cells.get(id);
-    if (el) this.setText(el, text);
-  }
-
-  private setText(el: HTMLElement, text: string): void {
-    if (el.textContent !== text) el.textContent = text;
-  }
-
-  /**
-   * Both of these read before they write. An unconditional write is a style
-   * invalidation on that element, and at 10 Hz across ~20 nodes that is real
-   * work for nothing: almost every field is unchanged between paints.
-   */
-  private setData(el: HTMLElement, key: string, value: string): void {
-    if (el.dataset[key] !== value) el.dataset[key] = value;
   }
 
   /** The markup is ours and one line old; a miss here is a bug in this file. */
