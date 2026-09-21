@@ -10,7 +10,7 @@
  *
  * This file owns the *session*: loading the graphs, running them, and the
  * duty-cycle limiter. The result-shaping half (mirroring, sticky slots, the
- * packed buffers, the mask downscale) is `perception/packing.ts`, and asset
+ * packed buffers, the mask downscale) is `perception/packing/`, and asset
  * resolution is `perception/assets.ts`.
  *
  * One thing about the call site is worth stating up front: **`process` is
