@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { STYLES } from "../render/styles";
-import {
-  cameraFit,
-  packCompositeUniform,
-  packSceneUniform,
-  usesCamera,
-} from "./frame-uniforms";
+import { packCompositeUniform, packSceneUniform } from "./frame-uniforms";
 import { COMPOSITE_UNIFORM_FLOATS } from "./shaders/composite";
 import { SCENE_UNIFORM_FLOATS } from "./shaders/scene";
 
@@ -121,24 +116,6 @@ describe("packSceneUniform", () => {
   });
 });
 
-describe("cameraFit", () => {
-  it("shrinks the wider axis of a landscape stream in a square canvas", () => {
-    const [x, y] = cameraFit(600, 600, 640, 480);
-    expect(x).toBeCloseTo(600 / 600 / (640 / 480), 6);
-    expect(y).toBe(1);
-  });
-
-  it("shrinks the height when the canvas is wider than the stream", () => {
-    const [x, y] = cameraFit(1600, 600, 640, 480);
-    expect(x).toBe(1);
-    expect(y).toBeCloseTo(640 / 480 / (1600 / 600), 6);
-  });
-
-  it("falls back to no scaling without a stream size", () => {
-    expect(cameraFit(1600, 600, 0, 0)).toEqual([1, 1]);
-  });
-});
-
 describe("packCompositeUniform", () => {
   it("writes the slots the WGSL Composite struct reads", () => {
     const c = composite(null);
@@ -175,19 +152,5 @@ describe("packCompositeUniform", () => {
     const c = composite(new Float32Array([0.2, 0.3, 0.7, Number.NaN]));
     expect(c[COMP.rushPower]).toBe(0);
     expect(c[COMP.rushX]).toBe(0.5);
-  });
-});
-
-describe("usesCamera", () => {
-  it("is false for a style with no camera tint or edge", () => {
-    expect(
-      usesCamera({ ...style, camTint: [0, 0, 0], camEdge: [0, 0, 0] }),
-    ).toBe(false);
-  });
-
-  it("is true as soon as either contributes", () => {
-    expect(
-      usesCamera({ ...style, camTint: [0, 0, 0], camEdge: [0, 0.2, 0] }),
-    ).toBe(true);
   });
 });
