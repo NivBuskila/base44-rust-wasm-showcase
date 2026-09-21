@@ -29,6 +29,12 @@
 //! Effects are never applied here. [`crate::spells`] owns every write to the
 //! fluid and the particles; this module only decides *that* something fired.
 
+mod book;
+#[cfg(test)]
+mod tests;
+
+pub use book::{ComboDef, ComboEffect, ComboStep, COMBOS};
+
 use crate::config::HANDS;
 use crate::gesture::{GestureTracker, Spell};
 
@@ -41,73 +47,6 @@ pub const SHOW_TIME: f32 = 1.1;
 /// Upper bound on [`COMBOS`], so the per-hand lane state stays a fixed array
 /// instead of a heap allocation on a path that runs every frame.
 const MAX_COMBOS: usize = 4;
-
-/// One element of a sequence: a spell, and how long it must be held.
-///
-/// `hold` of 0 means "as soon as it commits"; a positive hold on a final step is
-/// what makes a charged combo feel like winding up rather than a twitch.
-#[derive(Clone, Copy, Debug)]
-pub struct ComboStep {
-    pub spell: Spell,
-    pub hold: f32,
-}
-
-impl ComboStep {
-    const fn new(spell: Spell, hold: f32) -> Self {
-        Self { spell, hold }
-    }
-}
-
-/// What a completed sequence does, resolved by [`crate::spells`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ComboEffect {
-    /// A bright expanding ring: the easy, always-lands combo.
-    Nova,
-    /// A wide swirling storm around the hand.
-    Tempest,
-    /// The charged one: a huge shell, a hard outward kick and a heat flash.
-    Supernova,
-}
-
-/// A castable sequence.
-#[derive(Clone, Copy, Debug)]
-pub struct ComboDef {
-    /// Stable identifier, also the HUD label.
-    pub name: &'static str,
-    pub steps: &'static [ComboStep],
-    pub effect: ComboEffect,
-}
-
-/// The spellbook. Three entries on purpose: two steps are learnable by watching
-/// someone else do it, four are not, and a caster who cannot remember the
-/// sequence never reaches the part where the recognition is impressive.
-pub static COMBOS: &[ComboDef] = &[
-    ComboDef {
-        name: "nova",
-        steps: &[
-            ComboStep::new(Spell::Attract, 0.1),
-            ComboStep::new(Spell::Repel, 0.05),
-        ],
-        effect: ComboEffect::Nova,
-    },
-    ComboDef {
-        name: "tempest",
-        steps: &[
-            ComboStep::new(Spell::Repel, 0.1),
-            ComboStep::new(Spell::Vortex, 0.12),
-        ],
-        effect: ComboEffect::Tempest,
-    },
-    ComboDef {
-        name: "supernova",
-        steps: &[
-            ComboStep::new(Spell::Attract, 0.08),
-            ComboStep::new(Spell::Freeze, 0.12),
-            ComboStep::new(Spell::Attract, 0.3),
-        ],
-        effect: ComboEffect::Supernova,
-    },
-];
 
 /// A sequence that completed this step.
 #[derive(Clone, Copy, Debug)]
@@ -336,137 +275,5 @@ impl ComboTracker {
             }
         }
         best
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::gesture::{synth, GestureConfig};
-
-    const DT: f32 = 1.0 / 60.0;
-
-    /// A live pair of trackers, driven the way the engine drives them: the
-    /// gesture tracker keeps its history across gesture changes, which is what
-    /// makes the latching delay part of the test rather than something the test
-    /// steps around.
-    struct Caster {
-        gestures: GestureTracker,
-        combos: ComboTracker,
-    }
-
-    impl Caster {
-        fn new() -> Self {
-            Self {
-                gestures: GestureTracker::new(GestureConfig::default()),
-                combos: ComboTracker::new(),
-            }
-        }
-
-        /// Performs `gesture` for `seconds`, returning the first combo that
-        /// fired during it.
-        fn perform(&mut self, gesture: i32, seconds: f32) -> Option<ComboHit> {
-            let mut buf = synth::buffer();
-            let hand = synth::Hand::at(0.5, 0.5).gesture(gesture);
-            synth::write(&mut buf, 0, &hand);
-            let mut hit: Option<ComboHit> = None;
-            for _ in 0..(seconds / DT).ceil() as usize {
-                self.gestures.update_hands(&buf, DT);
-                self.gestures.update_two_hand(DT);
-                for h in self.combos.update(&self.gestures, DT).into_iter().flatten() {
-                    hit = hit.or(Some(h));
-                }
-            }
-            hit
-        }
-    }
-
-    #[test]
-    fn a_full_sequence_fires_once_and_needs_recasting() {
-        let mut c = Caster::new();
-        assert!(c.perform(synth::CLOSED_FIST, 0.6).is_none());
-        let hit = c.perform(synth::OPEN_PALM, 0.6).expect("nova did not fire");
-        assert_eq!(hit.effect, ComboEffect::Nova);
-        // Staying on the last gesture must not machine-gun the effect.
-        assert!(
-            c.perform(synth::OPEN_PALM, 1.0).is_none(),
-            "combo fired again without a fresh cast"
-        );
-    }
-
-    #[test]
-    fn the_charged_sequence_needs_its_hold() {
-        let mut c = Caster::new();
-        c.perform(synth::CLOSED_FIST, 0.5);
-        c.perform(synth::VICTORY, 0.6);
-        // The final fist has to be *held*; a twitch is not a cast. It still has
-        // to latch first, so this window is short but not zero.
-        assert!(c.perform(synth::CLOSED_FIST, 0.2).is_none());
-        let hit = c
-            .perform(synth::CLOSED_FIST, 1.2)
-            .expect("supernova did not fire");
-        assert_eq!(hit.effect, ComboEffect::Supernova);
-    }
-
-    #[test]
-    fn a_brief_wrong_gesture_does_not_break_a_sequence() {
-        let mut c = Caster::new();
-        c.perform(synth::CLOSED_FIST, 0.6);
-        // A few frames of something else: a hand turning edge-on, not intent.
-        c.perform(synth::THUMB_UP, 0.08);
-        assert!(
-            c.perform(synth::OPEN_PALM, 0.6).is_some(),
-            "noise cancelled a valid sequence"
-        );
-    }
-
-    #[test]
-    fn a_held_wrong_gesture_cancels_and_so_does_a_long_pause() {
-        let mut c = Caster::new();
-        c.perform(synth::CLOSED_FIST, 0.6);
-        c.perform(synth::THUMB_UP, 1.0);
-        assert!(
-            c.perform(synth::OPEN_PALM, 0.6).is_none(),
-            "a held wrong spell did not cancel"
-        );
-
-        let mut c = Caster::new();
-        c.perform(synth::CLOSED_FIST, 0.6);
-        c.perform(synth::NONE, STEP_WINDOW + 0.5);
-        assert!(
-            c.perform(synth::OPEN_PALM, 0.6).is_none(),
-            "the timeout did not cancel"
-        );
-    }
-
-    #[test]
-    fn progress_reports_the_furthest_candidate_and_the_last_hit() {
-        let mut c = Caster::new();
-        c.perform(synth::CLOSED_FIST, 0.6);
-        let p = c.combos.progress();
-        assert_ne!(p.combo, usize::MAX, "nothing reported as in progress");
-        assert_eq!(p.matched, 1);
-
-        c.perform(synth::OPEN_PALM, 0.6);
-        assert_eq!(
-            c.combos.progress().fired,
-            0,
-            "the fired combo is not being shown"
-        );
-    }
-
-    #[test]
-    fn an_absent_hand_and_a_wild_dt_are_both_survivable() {
-        let mut c = Caster::new();
-        c.perform(synth::CLOSED_FIST, 0.6);
-        let empty = synth::buffer();
-        for _ in 0..30 {
-            c.gestures.update_hands(&empty, DT);
-            c.combos.update(&c.gestures, f32::NAN);
-        }
-        assert!(
-            c.perform(synth::OPEN_PALM, 0.6).is_none(),
-            "a sequence survived the hand disappearing"
-        );
     }
 }
