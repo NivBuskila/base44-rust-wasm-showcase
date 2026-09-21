@@ -34,7 +34,6 @@ import {
   OVERLAY_STRIDE,
   buildHandMesh,
 } from "../render/handmesh";
-import { NOISE_SIZE, buildNoiseTile } from "../render/noise";
 import type { ModeStyle } from "../render/styles";
 import { STYLES } from "../render/styles";
 import type {
@@ -48,25 +47,16 @@ import type { GpuContext } from "./device";
 import { recordGpuError } from "./error-log";
 import { LuminanceProbe } from "./probe";
 import { ParticleSim } from "./particle-sim";
-import { BLOOM_DOWN_WGSL, BLOOM_UP_WGSL } from "./shaders/bloom";
-import {
-  BLIT_WGSL,
-  COMPOSITE_UNIFORM_FLOATS,
-  COMPOSITE_WGSL,
-} from "./shaders/composite";
-import {
-  OVERLAY_LINES_WGSL,
-  OVERLAY_POINTS_WGSL,
-  OVERLAY_UNIFORM_FLOATS,
-} from "./shaders/overlay";
-import { DRAW_UNIFORM_FLOATS, PARTICLE_DRAW_WGSL } from "./shaders/particles";
-import { SCENE_UNIFORM_FLOATS, SCENE_WGSL } from "./shaders/scene";
+import type { GpuPipelines } from "./pipelines";
+import { HDR_FORMAT, createPipelines } from "./pipelines";
+import { COMPOSITE_UNIFORM_FLOATS } from "./shaders/composite";
+import { OVERLAY_UNIFORM_FLOATS } from "./shaders/overlay";
+import { DRAW_UNIFORM_FLOATS } from "./shaders/particles";
+import { SCENE_UNIFORM_FLOATS } from "./shaders/scene";
+import { SceneSources } from "./sources";
 import type { FullscreenPass } from "./target";
 import { Target } from "./target";
 import { clamp, finite } from "./sim-uniform";
-
-/** Intermediate HDR format; guaranteed renderable and blendable in WebGPU. */
-const HDR_FORMAT: GPUTextureFormat = "rgba16float";
 
 const MAX_DPR = 2;
 const SCENE_PIXEL_BUDGET = 5_200_000;
@@ -90,29 +80,13 @@ export class GpuRenderer implements SceneRenderer {
   private readonly frameTarget: Target;
   private readonly probe: LuminanceProbe;
 
-  // --- textures and samplers
-  private dyeTex: GPUTexture;
-  private debugTex: GPUTexture;
-  private noiseTex: GPUTexture;
-  private videoTex: GPUTexture;
-  private videoTexW = 0;
-  private videoTexH = 0;
-  private videoTime = -1;
-  private readonly clampSampler: GPUSampler;
-  private readonly repeatSampler: GPUSampler;
-  private readonly nearestSampler: GPUSampler;
+  /** Input textures and samplers; see `sources.ts`. */
+  private readonly sources: SceneSources;
+  /** Camera-texture generation the static bind groups were built against. */
+  private boundSourceVersion = 0;
 
-  // --- pipelines
-  private readonly scenePipe: GPURenderPipeline;
-  private readonly particleDrawPipe: GPURenderPipeline;
-  private readonly overlayLinePipe: GPURenderPipeline;
-  private readonly overlayPointPipe: GPURenderPipeline;
-  private readonly downPipe: GPURenderPipeline;
-  private readonly upPipe: GPURenderPipeline;
-  private readonly compositePipe: GPURenderPipeline;
-  private readonly blitPipe: GPURenderPipeline;
-  /** Same blit, but into the `rgba8unorm` probe: the canvas is often BGRA. */
-  private readonly probePipe: GPURenderPipeline;
+  /** Every render pipeline; see `pipelines.ts`. */
+  private readonly pipes: GpuPipelines;
 
   // --- uniforms and buffers
   private readonly sceneUniform: GPUBuffer;
@@ -183,135 +157,8 @@ export class GpuRenderer implements SceneRenderer {
     this.scene = new Target(d, HDR_FORMAT, "scene");
     this.frameTarget = new Target(d, "rgba8unorm", "frame");
 
-    this.clampSampler = d.createSampler({
-      magFilter: "linear",
-      minFilter: "linear",
-    });
-    this.repeatSampler = d.createSampler({
-      magFilter: "linear",
-      minFilter: "linear",
-      addressModeU: "repeat",
-      addressModeV: "repeat",
-    });
-    this.nearestSampler = d.createSampler({
-      magFilter: "nearest",
-      minFilter: "nearest",
-    });
-
-    const grid = (label: string): GPUTexture =>
-      d.createTexture({
-        label,
-        size: { width: FLUID_W, height: FLUID_H },
-        format: "rgba8unorm",
-        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-      });
-    this.dyeTex = grid("dye");
-    this.debugTex = grid("debug");
-    this.noiseTex = d.createTexture({
-      label: "noise",
-      size: { width: NOISE_SIZE, height: NOISE_SIZE },
-      format: "rgba8unorm",
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-    });
-    d.queue.writeTexture(
-      { texture: this.noiseTex },
-      buildNoiseTile() as unknown as GPUAllowSharedBufferSource,
-      { bytesPerRow: NOISE_SIZE * 4 },
-      { width: NOISE_SIZE, height: NOISE_SIZE },
-    );
-    this.videoTex = this.createVideoTexture(2, 2);
-
-    // --- pipelines
-    const module = (code: string, label: string): GPUShaderModule =>
-      d.createShaderModule({ code, label });
-    const fullscreen = (
-      code: string,
-      label: string,
-      format: GPUTextureFormat,
-      blend?: GPUBlendState,
-    ): GPURenderPipeline => {
-      const m = module(code, label);
-      return d.createRenderPipeline({
-        label,
-        layout: "auto",
-        vertex: { module: m, entryPoint: "vs_main" },
-        fragment: {
-          module: m,
-          entryPoint: "fs_main",
-          targets: [{ format, blend }],
-        },
-        primitive: { topology: "triangle-strip" },
-      });
-    };
-    const additive: GPUBlendState = {
-      color: { srcFactor: "one", dstFactor: "one", operation: "add" },
-      alpha: { srcFactor: "one", dstFactor: "one", operation: "add" },
-    };
-
-    this.scenePipe = fullscreen(SCENE_WGSL, "scene", HDR_FORMAT);
-    this.downPipe = fullscreen(BLOOM_DOWN_WGSL, "bloom-down", HDR_FORMAT);
-    this.upPipe = fullscreen(BLOOM_UP_WGSL, "bloom-up", HDR_FORMAT, additive);
-    this.compositePipe = fullscreen(COMPOSITE_WGSL, "composite", "rgba8unorm");
-    this.blitPipe = fullscreen(BLIT_WGSL, "blit", this.format);
-    this.probePipe = fullscreen(BLIT_WGSL, "probe-blit", "rgba8unorm");
-
-    const drawModule = module(PARTICLE_DRAW_WGSL, "particles-draw");
-    this.particleDrawPipe = d.createRenderPipeline({
-      label: "particles-draw",
-      layout: "auto",
-      vertex: { module: drawModule, entryPoint: "vs_main" },
-      fragment: {
-        module: drawModule,
-        entryPoint: "fs_main",
-        targets: [{ format: HDR_FORMAT, blend: additive }],
-      },
-      primitive: { topology: "triangle-list" },
-    });
-
-    const overlayVertexLayout: GPUVertexBufferLayout[] = [
-      {
-        arrayStride: OVERLAY_STRIDE * 4,
-        attributes: [
-          { shaderLocation: 0, offset: 0, format: "float32x2" },
-          { shaderLocation: 1, offset: 8, format: "float32" },
-        ],
-      },
-    ];
-    const overlayPipe = (
-      code: string,
-      label: string,
-      topology: GPUPrimitiveTopology,
-      stepMode: GPUVertexStepMode,
-    ): GPURenderPipeline => {
-      const m = module(code, label);
-      return d.createRenderPipeline({
-        label,
-        layout: "auto",
-        vertex: {
-          module: m,
-          entryPoint: "vs_main",
-          buffers: [{ ...overlayVertexLayout[0], stepMode }],
-        },
-        fragment: {
-          module: m,
-          entryPoint: "fs_main",
-          targets: [{ format: HDR_FORMAT, blend: additive }],
-        },
-        primitive: { topology },
-      });
-    };
-    this.overlayLinePipe = overlayPipe(
-      OVERLAY_LINES_WGSL,
-      "overlay-lines",
-      "line-list",
-      "vertex",
-    );
-    this.overlayPointPipe = overlayPipe(
-      OVERLAY_POINTS_WGSL,
-      "overlay-points",
-      "triangle-list",
-      "instance",
-    );
+    this.sources = new SceneSources(d);
+    this.pipes = createPipelines(d, this.format);
 
     // --- buffers
     const uniform = (floats: number, label: string): GPUBuffer =>
@@ -321,12 +168,21 @@ export class GpuRenderer implements SceneRenderer {
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
     this.sceneUniform = uniform(SCENE_UNIFORM_FLOATS, "scene-uniform");
-    this.compositeUniform = uniform(COMPOSITE_UNIFORM_FLOATS, "composite-uniform");
+    this.compositeUniform = uniform(
+      COMPOSITE_UNIFORM_FLOATS,
+      "composite-uniform",
+    );
     this.drawUniform = uniform(DRAW_UNIFORM_FLOATS, "draw-uniform");
     // Two buffers, not one: `queue.writeBuffer` lands before the whole encoder
     // is submitted, so a second write would also change the first draw.
-    this.overlayLineUniform = uniform(OVERLAY_UNIFORM_FLOATS, "overlay-lines-uniform");
-    this.overlayPointUniform = uniform(OVERLAY_UNIFORM_FLOATS, "overlay-points-uniform");
+    this.overlayLineUniform = uniform(
+      OVERLAY_UNIFORM_FLOATS,
+      "overlay-lines-uniform",
+    );
+    this.overlayPointUniform = uniform(
+      OVERLAY_UNIFORM_FLOATS,
+      "overlay-points-uniform",
+    );
 
     this.overlayBuffer = d.createBuffer({
       label: "overlay",
@@ -336,12 +192,16 @@ export class GpuRenderer implements SceneRenderer {
     this.sim = new ParticleSim(d);
     this.bloom = new BloomChain(
       d,
-      this.downPipe,
-      this.upPipe,
-      this.clampSampler,
+      this.pipes.down,
+      this.pipes.up,
+      this.sources.clampSampler,
       HDR_FORMAT,
     );
-    this.probe = new LuminanceProbe(d, this.probePipe, this.clampSampler);
+    this.probe = new LuminanceProbe(
+      d,
+      this.pipes.probe,
+      this.sources.clampSampler,
+    );
 
     this.buildStaticBinds();
     window.addEventListener("resize", this.onResize);
@@ -350,47 +210,35 @@ export class GpuRenderer implements SceneRenderer {
 
   // ------------------------------------------------------------- resources
 
-  private createVideoTexture(w: number, h: number): GPUTexture {
-    this.videoTexW = w;
-    this.videoTexH = h;
-    return this.device.createTexture({
-      label: "video",
-      size: { width: w, height: h },
-      format: "rgba8unorm",
-      usage:
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.COPY_DST |
-        GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-  }
-
   /** Bind groups over resources that outlive a resize. */
   private buildStaticBinds(): void {
     const d = this.device;
+    const src = this.sources;
+    this.boundSourceVersion = src.version;
     this.sceneBind = d.createBindGroup({
-      layout: this.scenePipe.getBindGroupLayout(0),
+      layout: this.pipes.scene.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: { buffer: this.sceneUniform } },
-        { binding: 1, resource: this.dyeTex.createView() },
-        { binding: 2, resource: this.videoTex.createView() },
-        { binding: 3, resource: this.noiseTex.createView() },
-        { binding: 4, resource: this.clampSampler },
-        { binding: 5, resource: this.repeatSampler },
+        { binding: 1, resource: src.dyeTex.createView() },
+        { binding: 2, resource: src.videoTex.createView() },
+        { binding: 3, resource: src.noiseTex.createView() },
+        { binding: 4, resource: src.clampSampler },
+        { binding: 5, resource: src.repeatSampler },
       ],
     });
     this.blitDebugBind = d.createBindGroup({
-      layout: this.blitPipe.getBindGroupLayout(0),
+      layout: this.pipes.blit.getBindGroupLayout(0),
       entries: [
-        { binding: 0, resource: this.debugTex.createView() },
-        { binding: 1, resource: this.nearestSampler },
+        { binding: 0, resource: src.debugTex.createView() },
+        { binding: 1, resource: src.nearestSampler },
       ],
     });
     this.overlayLineBind = d.createBindGroup({
-      layout: this.overlayLinePipe.getBindGroupLayout(0),
+      layout: this.pipes.overlayLine.getBindGroupLayout(0),
       entries: [{ binding: 0, resource: { buffer: this.overlayLineUniform } }],
     });
     this.overlayPointBind = d.createBindGroup({
-      layout: this.overlayPointPipe.getBindGroupLayout(0),
+      layout: this.pipes.overlayPoint.getBindGroupLayout(0),
       entries: [{ binding: 0, resource: { buffer: this.overlayPointUniform } }],
     });
   }
@@ -406,7 +254,7 @@ export class GpuRenderer implements SceneRenderer {
     if (this.drawnPoolVersion !== this.sim.poolVersion) {
       this.drawnPoolVersion = this.sim.poolVersion;
       this.drawBind = this.device.createBindGroup({
-        layout: this.particleDrawPipe.getBindGroupLayout(0),
+        layout: this.pipes.particleDraw.getBindGroupLayout(0),
         entries: [
           { binding: 0, resource: { buffer: this.drawUniform } },
           { binding: 1, resource: { buffer: pool } },
@@ -423,13 +271,7 @@ export class GpuRenderer implements SceneRenderer {
     this.scene.dispose();
     this.bloom.dispose();
     this.frameTarget.dispose();
-    for (const tex of [
-      this.dyeTex,
-      this.debugTex,
-      this.noiseTex,
-      this.videoTex,
-    ])
-      tex.destroy();
+    this.sources.dispose();
     this.sim.dispose();
     this.probe.dispose();
     this.video = null;
@@ -491,21 +333,21 @@ export class GpuRenderer implements SceneRenderer {
         });
       for (const view of views)
         entries.push({ binding: binding++, resource: view });
-      entries.push({ binding, resource: this.clampSampler });
+      entries.push({ binding, resource: this.sources.clampSampler });
       return d.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries });
     };
 
     this.bloom.buildBinds(this.scene);
     this.compositeBind = sampled(
-      this.compositePipe,
-      [this.scene.view!, this.bloom.output, this.noiseTex.createView()],
+      this.pipes.composite,
+      [this.scene.view!, this.bloom.output, this.sources.noiseTex.createView()],
       this.compositeUniform,
     );
     this.blitSceneBind = d.createBindGroup({
-      layout: this.blitPipe.getBindGroupLayout(0),
+      layout: this.pipes.blit.getBindGroupLayout(0),
       entries: [
         { binding: 0, resource: this.frameTarget.view! },
-        { binding: 1, resource: this.clampSampler },
+        { binding: 1, resource: this.sources.clampSampler },
       ],
     });
     this.probe.buildBind(this.frameTarget.view!);
@@ -513,48 +355,18 @@ export class GpuRenderer implements SceneRenderer {
 
   setVideo(video: HTMLVideoElement | null): void {
     this.video = video;
-    this.videoTime = -1;
+    this.sources.resetVideo();
   }
 
-  // --------------------------------------------------------------- uploads
-
-  /** True when the video texture holds a usable frame. */
+  /**
+   * Uploads this frame's camera texture, rebuilding the bind groups over it
+   * when the stream's resolution changed the texture underneath them.
+   */
   private uploadVideo(v: HTMLVideoElement | null): boolean {
-    if (!v || v.readyState < 2 || v.videoWidth === 0 || v.videoHeight === 0)
-      return false;
-    if (this.videoTexW !== v.videoWidth || this.videoTexH !== v.videoHeight) {
-      this.videoTex.destroy();
-      this.videoTex = this.createVideoTexture(v.videoWidth, v.videoHeight);
-      this.videoTime = -1;
+    const ok = this.sources.uploadVideo(v);
+    if (this.boundSourceVersion !== this.sources.version)
       this.buildStaticBinds();
-    }
-    if (v.currentTime !== this.videoTime) {
-      try {
-        this.device.queue.copyExternalImageToTexture(
-          { source: v },
-          { texture: this.videoTex },
-          { width: v.videoWidth, height: v.videoHeight },
-        );
-      } catch {
-        // Not decodable yet, or a stream the copy refuses; keep the last frame.
-        return this.videoTime >= 0;
-      }
-      this.videoTime = v.currentTime;
-    }
-    return true;
-  }
-
-  private uploadGrid(tex: GPUTexture, data: Uint8Array): boolean {
-    const bytes = FLUID_W * FLUID_H * 4;
-    if (data.length < bytes) return false;
-    this.device.queue.writeTexture(
-      { texture: tex },
-      // A view over WASM memory, which may be a SharedArrayBuffer.
-      data as unknown as GPUAllowSharedBufferSource,
-      { bytesPerRow: FLUID_W * 4, rowsPerImage: FLUID_H },
-      { width: FLUID_W, height: FLUID_H },
-    );
-    return true;
+    return ok;
   }
 
   // ----------------------------------------------------------------- frame
@@ -614,7 +426,7 @@ export class GpuRenderer implements SceneRenderer {
   private drawDebug(encoder: GPUCommandEncoder, frame: RenderFrame): void {
     const view = this.context.getCurrentTexture().createView();
     const ok = frame.debug
-      ? this.uploadGrid(this.debugTex, frame.debug)
+      ? this.sources.uploadGrid(this.sources.debugTex, frame.debug)
       : false;
     if (!ok) {
       const p = encoder.beginRenderPass({
@@ -630,7 +442,7 @@ export class GpuRenderer implements SceneRenderer {
       p.end();
       return;
     }
-    this.pass(encoder, view, this.blitPipe, this.blitDebugBind!);
+    this.pass(encoder, view, this.pipes.blit, this.blitDebugBind!);
   }
 
   // ------------------------------------------------------------ simulation
@@ -659,7 +471,7 @@ export class GpuRenderer implements SceneRenderer {
     intensity: number,
     time: number,
   ): void {
-    this.uploadGrid(this.dyeTex, frame.dye);
+    this.sources.uploadGrid(this.sources.dyeTex, frame.dye);
     const camUsed =
       style.camTint[0] + style.camTint[1] + style.camTint[2] > 0 ||
       style.camEdge[0] + style.camEdge[1] + style.camEdge[2] > 0;
@@ -689,8 +501,8 @@ export class GpuRenderer implements SceneRenderer {
     s[3] = 1 / FLUID_H;
     s[4] = camScaleX;
     s[5] = camScaleY;
-    s[6] = 1 / Math.max(1, this.videoTexW);
-    s[7] = 1 / Math.max(1, this.videoTexH);
+    s[6] = 1 / Math.max(1, this.sources.videoTexW);
+    s[7] = 1 / Math.max(1, this.sources.videoTexH);
     s[8] = style.camTint[0];
     s[9] = style.camTint[1];
     s[10] = style.camTint[2];
@@ -708,7 +520,7 @@ export class GpuRenderer implements SceneRenderer {
     s[22] = 0;
     s[23] = 0;
     this.device.queue.writeBuffer(this.sceneUniform, 0, s);
-    this.pass(encoder, this.scene.view!, this.scenePipe, this.sceneBind!);
+    this.pass(encoder, this.scene.view!, this.pipes.scene, this.sceneBind!);
   }
 
   private drawParticles(
@@ -738,7 +550,7 @@ export class GpuRenderer implements SceneRenderer {
         { view: this.scene.view!, loadOp: "load", storeOp: "store" },
       ],
     });
-    p.setPipeline(this.particleDrawPipe);
+    p.setPipeline(this.pipes.particleDraw);
     p.setBindGroup(0, this.drawBind!);
     p.draw(6, count);
     p.end();
@@ -779,7 +591,7 @@ export class GpuRenderer implements SceneRenderer {
       u[1] = 1;
       u[7] = 0;
       this.device.queue.writeBuffer(this.overlayLineUniform, 0, u);
-      p.setPipeline(this.overlayLinePipe);
+      p.setPipeline(this.pipes.overlayLine);
       p.setBindGroup(0, this.overlayLineBind!);
       p.setVertexBuffer(0, this.overlayBuffer);
       p.draw(mesh.lineVertices);
@@ -797,7 +609,7 @@ export class GpuRenderer implements SceneRenderer {
           { view: this.scene.view!, loadOp: "load", storeOp: "store" },
         ],
       });
-      q.setPipeline(this.overlayPointPipe);
+      q.setPipeline(this.pipes.overlayPoint);
       q.setBindGroup(0, this.overlayPointBind!);
       q.setVertexBuffer(
         0,
@@ -842,7 +654,7 @@ export class GpuRenderer implements SceneRenderer {
     this.pass(
       encoder,
       this.frameTarget.view!,
-      this.compositePipe,
+      this.pipes.composite,
       this.compositeBind!,
     );
   }
@@ -852,7 +664,7 @@ export class GpuRenderer implements SceneRenderer {
     this.pass(
       encoder,
       this.context.getCurrentTexture().createView(),
-      this.blitPipe,
+      this.pipes.blit,
       this.blitSceneBind!,
     );
     this.probe.record(encoder, this.pass);
