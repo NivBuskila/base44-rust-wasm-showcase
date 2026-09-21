@@ -11,6 +11,11 @@ import { defineConfig } from 'vitest/config';
  * runner, and from `tests/`, which is Playwright's.
  */
 export default defineConfig({
+  resolve: {
+    // `wgsl_reflect` ships a CommonJS `main` inside a `"type": "module"`
+    // package, which Node refuses to load; point at its real ESM build.
+    alias: { wgsl_reflect: 'wgsl_reflect/wgsl_reflect.module.js' },
+  },
   test: {
     include: ['src/**/*.test.ts'],
     environment: 'jsdom',

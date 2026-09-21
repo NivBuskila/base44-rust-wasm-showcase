@@ -47,11 +47,23 @@ import type { GpuContext } from "./device";
 import { recordGpuError } from "./error-log";
 import { ParticleSim } from "./particle-sim";
 import { Readback } from "./readback";
-import { BLOOM_DOWN_WGSL, BLOOM_UP_WGSL } from "./shaders/bloom";
-import { BLIT_WGSL, COMPOSITE_WGSL } from "./shaders/composite";
-import { OVERLAY_LINES_WGSL, OVERLAY_POINTS_WGSL } from "./shaders/overlay";
+import {
+  BLOOM_DOWN_WGSL,
+  BLOOM_UNIFORM_FLOATS,
+  BLOOM_UP_WGSL,
+} from "./shaders/bloom";
+import {
+  BLIT_WGSL,
+  COMPOSITE_UNIFORM_FLOATS,
+  COMPOSITE_WGSL,
+} from "./shaders/composite";
+import {
+  OVERLAY_LINES_WGSL,
+  OVERLAY_POINTS_WGSL,
+  OVERLAY_UNIFORM_FLOATS,
+} from "./shaders/overlay";
 import { DRAW_UNIFORM_FLOATS, PARTICLE_DRAW_WGSL } from "./shaders/particles";
-import { SCENE_WGSL } from "./shaders/scene";
+import { SCENE_UNIFORM_FLOATS, SCENE_WGSL } from "./shaders/scene";
 import { clamp, finite } from "./sim-uniform";
 
 /** Intermediate HDR format; guaranteed renderable and blendable in WebGPU. */
@@ -389,18 +401,18 @@ export class GpuRenderer implements SceneRenderer {
         size: floats * 4,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
       });
-    this.sceneUniform = uniform(24, "scene-uniform");
-    this.compositeUniform = uniform(12, "composite-uniform");
+    this.sceneUniform = uniform(SCENE_UNIFORM_FLOATS, "scene-uniform");
+    this.compositeUniform = uniform(COMPOSITE_UNIFORM_FLOATS, "composite-uniform");
     this.drawUniform = uniform(DRAW_UNIFORM_FLOATS, "draw-uniform");
     // Two buffers, not one: `queue.writeBuffer` lands before the whole encoder
     // is submitted, so a second write would also change the first draw.
-    this.overlayLineUniform = uniform(8, "overlay-lines-uniform");
-    this.overlayPointUniform = uniform(8, "overlay-points-uniform");
+    this.overlayLineUniform = uniform(OVERLAY_UNIFORM_FLOATS, "overlay-lines-uniform");
+    this.overlayPointUniform = uniform(OVERLAY_UNIFORM_FLOATS, "overlay-points-uniform");
     this.downUniforms = Array.from({ length: BLOOM_LEVELS }, (_, i) =>
-      uniform(4, `down${i}`),
+      uniform(BLOOM_UNIFORM_FLOATS, `down${i}`),
     );
     this.upUniforms = Array.from({ length: BLOOM_LEVELS }, (_, i) =>
-      uniform(4, `up${i}`),
+      uniform(BLOOM_UNIFORM_FLOATS, `up${i}`),
     );
 
     this.overlayBuffer = d.createBuffer({
