@@ -29,13 +29,14 @@
 
 import { MAX_PARTICLES, STAT } from './constants';
 import type { EngineTier } from './engine-loader';
+import { handsPresent, statCells, warpView } from './hud-cells';
 import { ComboBook, comboState, duetState } from './hud-combos';
 import { FrameTimer } from './hud-frame-timer';
 import { hudAction } from './hud-keys';
 import { markup } from './hud-markup';
 import { Meter, finite, frameTone } from './hud-meter';
 import { PRESETS, type ParamPreset } from './hud-presets';
-import { fmtSmall, presence, spellAt } from './hud-readouts';
+import { presence, spellAt } from './hud-readouts';
 import { Sparkline } from './hud-spark';
 import { statusLine } from './hud-status';
 import { GestureTutorial } from './tutorial';
@@ -46,7 +47,6 @@ import {
   MODES,
   PARAMS,
   PARTICLE_DETENTS,
-  clamp01,
   countToDetent,
   detentToCount,
   thousands,
@@ -229,27 +229,15 @@ export class Hud {
     for (const m of this.meters) m.paint();
     this.spark.draw();
 
-    const hands = Math.round(finite(st?.[STAT.HANDS_PRESENT]));
-    const maskOn = finite(st?.[STAT.MASK_PRESENT]) > 0.5;
-    this.cell('particles', thousands(finite(st?.[STAT.PARTICLES_ALIVE])));
-    this.cell('energy', finite(st?.[STAT.FLUID_ENERGY]).toFixed(2));
-    this.cell('speed', finite(st?.[STAT.FLUID_MAX_SPEED]).toFixed(1));
-    this.cell('divergence', fmtSmall(finite(st?.[STAT.FLUID_DIVERGENCE])));
-    this.cell('motion', finite(st?.[STAT.MOTION_ENERGY]).toFixed(3));
-    this.cell('hands', `${Math.max(0, Math.min(2, hands))}`);
-    this.cell('body', maskOn ? `${(finite(st?.[STAT.MASK_COVERAGE]) * 100).toFixed(0)}%` : '—');
-    this.cell('repairs', finite(st?.[STAT.NAN_REPAIRS]).toFixed(0));
+    const hands = handsPresent(st);
+    for (const [id, text] of Object.entries(statCells(st))) this.cell(id, text);
 
-    const timeScale = finite(st?.[STAT.TIME_SCALE]);
-    const warping = Math.abs(timeScale - 1) > 0.05;
-    this.setText(this.warpValue, `${timeScale.toFixed(2)}×`);
-    // Full travel is the engine's own 4x clamp, so 1x sits a quarter along:
-    // left of the thumb is slow motion, right of it is fast.
-    const warpPct = `${Math.round(clamp01(timeScale / 4) * 100)}%`;
-    if (this.warpFill.style.getPropertyValue('--v') !== warpPct) {
-      this.warpFill.style.setProperty('--v', warpPct);
+    const warp = warpView(st);
+    this.setText(this.warpValue, warp.label);
+    if (this.warpFill.style.getPropertyValue('--v') !== warp.pct) {
+      this.warpFill.style.setProperty('--v', warp.pct);
     }
-    this.setData(this.warpFill, 'tone', warping ? 'on' : 'off');
+    this.setData(this.warpFill, 'tone', warp.warping ? 'on' : 'off');
 
     const held = presence(hands, s.spells);
     for (let i = 0; i < this.spellEls.length; i++) {
@@ -265,7 +253,7 @@ export class Hud {
     }
 
     for (const [spell, el] of this.legendEls) {
-      const on = spell === 'warp' ? warping : s.spells?.[0] === spell || s.spells?.[1] === spell;
+      const on = spell === 'warp' ? warp.warping : s.spells?.[0] === spell || s.spells?.[1] === spell;
       this.setData(el, 'on', on ? '1' : '');
     }
 
