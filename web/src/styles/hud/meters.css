@@ -1,0 +1,111 @@
+/* Meters ----------------------------------------------------------------- */
+
+.m-row {
+  display: grid;
+  grid-template-columns: 44px 1fr 40px 14px;
+  align-items: center;
+  gap: 7px;
+  height: 17px;
+}
+
+.m-key {
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+
+.trk {
+  position: relative;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--well);
+  overflow: hidden;
+}
+
+.trk-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--v, 0%);
+  border-radius: 2px;
+  background: var(--accent);
+  transition:
+    width 110ms linear,
+    background 180ms ease;
+}
+
+.trk-fill[data-tone='warn'] {
+  background: var(--warn);
+}
+
+.trk-fill[data-tone='over'] {
+  background: var(--over);
+  box-shadow: 0 0 8px rgba(255, 107, 139, 0.6);
+}
+
+.trk-fill[data-tone='off'] {
+  background: var(--faint);
+}
+
+.trk-fill[data-tone='on'] {
+  background: var(--magenta);
+  box-shadow: 0 0 8px rgba(255, 94, 168, 0.5);
+}
+
+.m-val {
+  font-size: 10px;
+  text-align: right;
+  color: var(--ink);
+}
+
+.m-unit {
+  font-size: 8.5px;
+  color: var(--faint);
+}
+
+.m-warp {
+  margin-top: 8px;
+}
+
+.hud-spark {
+  display: block;
+  width: 100%;
+  height: 26px;
+  margin-top: 8px;
+  border-bottom: 1px solid var(--edge);
+}
+
+/* Counters --------------------------------------------------------------- */
+
+/* Label left, number right — the same rhythm as the meters above, so the whole
+   panel reads as one column of gauges instead of two unrelated widgets. */
+.c-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 16px;
+  row-gap: 1px;
+}
+
+.c-box {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 6px;
+  height: 16px;
+  border-bottom: 1px solid rgba(126, 166, 214, 0.07);
+}
+
+.c-box span {
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.c-box b {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--ink);
+  white-space: nowrap;
+}
+

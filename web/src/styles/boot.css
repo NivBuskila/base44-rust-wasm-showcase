@@ -1,0 +1,83 @@
+/* Boot ------------------------------------------------------------------- */
+
+#boot {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 50% 42%, #0a1120 0%, #04050a 72%);
+  z-index: 100;
+  transition:
+    opacity 600ms ease,
+    visibility 0s linear 600ms;
+}
+
+#boot.done {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.boot-inner {
+  text-align: center;
+  padding: 0 24px;
+}
+
+.boot-inner h1 {
+  margin: 0 0 14px;
+  font-size: clamp(20px, 6vw, 30px);
+  font-weight: 300;
+  letter-spacing: 0.5em;
+  /* The title sits optically centred despite the trailing letter-space. */
+  text-indent: 0.5em;
+  color: var(--ink);
+  text-shadow: 0 0 40px rgba(53, 214, 255, 0.28);
+}
+
+#boot-status {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--dim);
+}
+
+/* A scanning hairline stands in for a progress bar: boot has no measurable
+   percentage, and a fake one would be a lie. */
+.boot-inner::after {
+  content: '';
+  display: block;
+  width: 170px;
+  height: 1px;
+  margin: 20px auto 0;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  background-size: 55% 100%;
+  background-repeat: no-repeat;
+  animation: scan 1.7s ease-in-out infinite;
+}
+
+@keyframes scan {
+  0% {
+    background-position: -40% 0;
+  }
+  100% {
+    background-position: 140% 0;
+  }
+}
+
+#boot.failed #boot-status {
+  color: var(--over);
+}
+
+#boot.failed .boot-inner h1 {
+  color: var(--dim);
+  text-shadow: none;
+}
+
+/* The sweep stops dead and goes red: loading and failure should not share a
+   silhouette. */
+#boot.failed .boot-inner::after {
+  animation: none;
+  background: var(--over);
+  opacity: 0.4;
+}
+
