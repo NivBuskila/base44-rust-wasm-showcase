@@ -37,11 +37,11 @@ import { markup } from "./hud-markup";
 import { Meter, finite, frameTone } from "./hud-meter";
 import { ParamControls } from "./hud-params";
 import { PoolControl } from "./hud-pool";
-import { presence, spellAt } from "./hud-readouts";
 import { Sparkline } from "./hud-spark";
+import { SpellReadout } from "./hud-spells";
 import { statusLine } from "./hud-status";
 import { GestureTutorial } from "./tutorial";
-import { CELLS, GESTURES, METERS, MODES } from "./hud-spec";
+import { CELLS, METERS, MODES } from "./hud-spec";
 import type {
   HudCallbacks,
   HudStats,
@@ -72,8 +72,7 @@ export class Hud {
   private readonly meters: Meter[] = [];
   private readonly spark: Sparkline;
   private readonly cells = new Map<string, HTMLElement>();
-  private readonly spellEls: HTMLElement[] = [];
-  private readonly legendEls = new Map<string, HTMLElement>();
+  private readonly spells: SpellReadout;
   private readonly warpValue: HTMLElement;
   private readonly warpFill: HTMLElement;
   private readonly percepEl: HTMLElement;
@@ -140,12 +139,7 @@ export class Hud {
     }
     for (const c of CELLS)
       this.cells.set(c.id, this.q(`[data-cell="${c.id}"] b`));
-    for (const g of GESTURES)
-      this.legendEls.set(g.spell, this.q(`[data-spell="${g.spell}"]`));
-    this.spellEls.push(
-      this.q('[data-hand="0"] b'),
-      this.q('[data-hand="1"] b'),
-    );
+    this.spells = new SpellReadout(this.root);
 
     // The status line lives outside the scrolling body — "why is tracking off"
     // must not be something you have to scroll to — so collapsing hides both.
@@ -242,30 +236,7 @@ export class Hud {
     }
     this.setData(this.warpFill, "tone", warp.warping ? "on" : "off");
 
-    const held = presence(hands, s.spells);
-    for (let i = 0; i < this.spellEls.length; i++) {
-      const el = this.spellEls[i];
-      if (!el) continue;
-      const spell = spellAt(s.spells, i);
-      const present = held[i] === true;
-      this.setText(el, !present ? "no hand" : spell);
-      const card = el.parentElement;
-      if (card) {
-        this.setData(
-          card,
-          "state",
-          !present ? "off" : spell === "idle" ? "idle" : "cast",
-        );
-      }
-    }
-
-    for (const [spell, el] of this.legendEls) {
-      const on =
-        spell === "warp"
-          ? warp.warping
-          : s.spells?.[0] === spell || s.spells?.[1] === spell;
-      this.setData(el, "on", on ? "1" : "");
-    }
+    this.spells.paint(hands, s.spells, warp.warping);
 
     this.paintPerception(s.perception);
   }
