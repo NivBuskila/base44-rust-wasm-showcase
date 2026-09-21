@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::Params;
 use crate::config::{FLUID_H, FLUID_W};
 use crate::rng::Rng;
 
