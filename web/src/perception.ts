@@ -23,15 +23,10 @@
  * chunk.
  */
 
-import { HAND_BUFFER, HANDS, POSE_STRIDE } from './constants';
-import {
-  HAND_MODEL,
-  POSE_MODEL,
-  describe,
-  muteInfoLogs,
-  resolveModel,
-  resolveWasmPath,
-} from './perception/assets';
+import { HAND_BUFFER, POSE_STRIDE } from './constants';
+import { describe } from './perception/assets';
+import { closeGraphs, loadGraphs } from './perception/graphs';
+import { DutyLimiter } from './perception/limiter';
 import {
   HandSlots,
   MaskScaler,
@@ -46,24 +41,6 @@ import type { GestureRecognizer, PoseLandmarker } from '@mediapipe/tasks-vision'
 
 /** Consecutive inference failures before perception gives up for good. */
 const MAX_FAILURES = 10;
-
-/**
- * Inference cost, in ms, above which perception starts rationing itself.
- *
- * `tasks-vision` is synchronous: a pass blocks the main thread, and with it the
- * render loop. Up to about a frame and a half the render loop's own 30 Hz gate
- * is the binding constraint and rationing would only throw away landmarks the
- * caller asked for — so the limiter stays out of the way. Past it, calling as
- * often as the loop asks pins the whole app at a few fps: the fluid stops, the
- * particles stop, and the gesture being made is lost anyway.
- */
-const BUDGET_MS = 50;
-
-/** Share of wall-clock time inference may consume once past `BUDGET_MS`. */
-const MAX_DUTY = 0.35;
-
-/** Gain of the inference-cost estimate; ~4 inferences to track a change. */
-const COST_GAIN = 0.25;
 
 /** Live numbers about the loaded models, for the HUD and the headless suite. */
 export interface PerceptionDiagnostics {
@@ -98,10 +75,10 @@ export class MediaPipePerception implements PerceptionSource {
    * landmarks: at a 60 ms pass it drops gestures from ~16 Hz to ~6 Hz, felt
    * directly as hands lagging behind the fluid they are supposed to push.
    */
-  private readonly rationInference: boolean;
+  private readonly limiter: DutyLimiter;
 
   constructor(options: { rationInference?: boolean } = {}) {
-    this.rationInference = options.rationInference ?? true;
+    this.limiter = new DutyLimiter(options.rationInference ?? true);
   }
 
   private state: PerceptionStatus = { kind: 'loading' };
@@ -128,8 +105,6 @@ export class MediaPipePerception implements PerceptionSource {
   private lastVideoTime = -1;
   private lastStamp = 0;
   private failures = 0;
-  private costMs = 0;
-  private nextRunMs = 0;
 
   private delegate: 'GPU' | 'CPU' | null = null;
   private loadMs = 0;
@@ -153,8 +128,8 @@ export class MediaPipePerception implements PerceptionSource {
       lastLatencyMs: this.frame.latencyMs,
       maskWidth: this.maskWidth,
       maskHeight: this.maskHeight,
-      costMs: this.costMs,
-      gapMs: this.gap(),
+      costMs: this.limiter.costMs,
+      gapMs: this.limiter.gapMs,
       failures: this.failures,
     };
   }
@@ -167,74 +142,31 @@ export class MediaPipePerception implements PerceptionSource {
 
   private async load(): Promise<void> {
     const started = performance.now();
-    const unmute = muteInfoLogs();
-    let reason: string;
     try {
-      const vision = await import('@mediapipe/tasks-vision');
-      const fileset = await vision.FilesetResolver.forVisionTasks(await resolveWasmPath());
-      const [handModel, poseModel] = await Promise.all([
-        resolveModel(HAND_MODEL),
-        resolveModel(POSE_MODEL),
-      ]);
-      this.handModel = handModel;
-      this.poseModel = poseModel;
-
-      const failures: string[] = [];
-      // The GPU delegate fails on machines with no usable WebGL2, and the
-      // failure surfaces as a rejected task construction rather than a flag to
-      // query — so trying it and falling back *is* the capability check.
-      for (const delegate of ['GPU', 'CPU'] as const) {
-        const built = await Promise.allSettled([
-          vision.GestureRecognizer.createFromOptions(fileset, {
-            baseOptions: { modelAssetPath: handModel, delegate },
-            runningMode: 'VIDEO',
-            numHands: HANDS,
-          }),
-          vision.PoseLandmarker.createFromOptions(fileset, {
-            baseOptions: { modelAssetPath: poseModel, delegate },
-            runningMode: 'VIDEO',
-            numPoses: 1,
-            outputSegmentationMasks: true,
-          }),
-        ]);
-        const [recognizer, landmarker] = built;
-        if (recognizer.status === 'fulfilled' && landmarker.status === 'fulfilled') {
-          this.recognizer = recognizer.value;
-          this.landmarker = landmarker.value;
-          this.delegate = delegate;
-          this.loadMs = performance.now() - started;
-          // A `close()` can land while 14 MB of models are still in flight.
-          // Adopting the tasks anyway would resurrect a source the caller has
-          // already released — inference would resume, and the two WASM graphs
-          // and their GL contexts would never be freed, since nothing holds a
-          // reference to close them a second time.
-          if (this.closed) {
-            this.release();
-            throw new Error('Perception was closed while it was loading.');
-          }
-          this.state = { kind: 'ready', delegate };
-          return;
-        }
-        // One half can succeed while the other fails; that half owns a WASM
-        // graph and a WebGL context, and leaking them would poison the retry.
-        const why: string[] = [];
-        for (const task of built) {
-          if (task.status === 'fulfilled') task.value.close();
-          else why.push(describe(task.reason));
-        }
-        failures.push(`${delegate}: ${why.join(' / ')}`);
-        console.warn(`[aether] ${delegate} delegate unavailable: ${why.join(' / ')}`);
+      const graphs = await loadGraphs();
+      this.handModel = graphs.handModel;
+      this.poseModel = graphs.poseModel;
+      this.delegate = graphs.delegate;
+      this.loadMs = performance.now() - started;
+      // A `close()` can land while 14 MB of models are still in flight. Adopting
+      // the tasks anyway would resurrect a source the caller has already
+      // released — inference would resume, and the two WASM graphs and their GL
+      // contexts would never be freed, since nothing holds a reference to close
+      // them a second time.
+      if (this.closed) {
+        closeGraphs(graphs.recognizer, graphs.landmarker);
+        throw new Error('Perception was closed while it was loading.');
       }
-      reason = `no usable delegate (${failures.join('; ')})`;
+      this.recognizer = graphs.recognizer;
+      this.landmarker = graphs.landmarker;
+      this.state = { kind: 'ready', delegate: graphs.delegate };
+      return;
     } catch (err) {
-      reason = describe(err);
-    } finally {
-      unmute();
+      this.loadMs = performance.now() - started;
+      const reason = describe(err);
+      this.state = { kind: 'unavailable', reason };
+      throw new Error(reason);
     }
-
-    this.loadMs = performance.now() - started;
-    this.state = { kind: 'unavailable', reason };
-    throw new Error(reason);
   }
 
   /**
@@ -271,7 +203,7 @@ export class MediaPipePerception implements PerceptionSource {
     const recognizer = this.recognizer;
     const landmarker = this.landmarker;
     if (!recognizer || !landmarker) return null;
-    if (performance.now() < this.nextRunMs) return null;
+    if (!this.limiter.ready(performance.now())) return null;
 
     const stamp = nextTimestamp(this.lastStamp, timestampMs);
     this.lastStamp = stamp;
@@ -316,14 +248,7 @@ export class MediaPipePerception implements PerceptionSource {
 
     const finished = performance.now();
     const latency = finished - started;
-    // The first pass through each graph also compiles shaders and allocates
-    // textures; it routinely costs twenty times the steady state, and folding
-    // it into the estimate would ration the whole first ten seconds of the
-    // session for no reason.
-    if (this.inferences > 0) this.costMs += (latency - this.costMs) * COST_GAIN;
-    // Measured from the moment the main thread is free again, so the gap is
-    // idle time rather than a total period.
-    this.nextRunMs = finished + this.gap();
+    this.limiter.charge(latency, finished, this.inferences === 0);
 
     this.failures = 0;
     this.inferences++;
@@ -331,12 +256,6 @@ export class MediaPipePerception implements PerceptionSource {
     this.frame.latencyMs = latency;
     this.frame.anyHand = count > 0;
     return this.frame;
-  }
-
-  /** Idle time the duty-cycle limiter owes after an inference costing `costMs`. */
-  private gap(): number {
-    if (!this.rationInference) return 0;
-    return this.costMs <= BUDGET_MS ? 0 : this.costMs * (1 / MAX_DUTY - 1);
   }
 
   /**
@@ -366,20 +285,11 @@ export class MediaPipePerception implements PerceptionSource {
   }
 
   private release(): void {
-    for (const task of [this.recognizer, this.landmarker]) {
-      try {
-        task?.close();
-      } catch (err) {
-        // Teardown runs on the page-unload path; a throw here would take the
-        // rest of the cleanup with it.
-        console.warn('[aether] closing a vision task failed', err);
-      }
-    }
+    closeGraphs(this.recognizer, this.landmarker);
     this.recognizer = null;
     this.landmarker = null;
     this.slots.reset();
-    this.costMs = 0;
-    this.nextRunMs = 0;
+    this.limiter.reset();
     this.hands.fill(0);
     this.pose.fill(0);
     this.frame.mask = null;
