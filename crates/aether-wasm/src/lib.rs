@@ -155,12 +155,23 @@ impl AetherEngine {
         self.inner.gpu_particles()
     }
 
-    /// `[op_stride, max_ops]`, mirrored in `web/src/constants.ts`.
+    /// `[op_stride, max_ops, ...one entry per op kind]`, the kinds in
+    /// `aether_core::particles::OP_KINDS` order.
+    ///
+    /// The whole protocol travels here, kinds included, so `assertOpLayout` in
+    /// `web/src/constants.ts` can reject *any* drift at boot instead of only a
+    /// changed stride — a renumbered kind used to replay as a different op.
     pub fn particle_op_layout(&self) -> Vec<u32> {
-        vec![
+        let mut v = vec![
             aether_core::particles::OP_STRIDE as u32,
             aether_core::particles::MAX_OPS as u32,
-        ]
+        ];
+        v.extend(
+            aether_core::particles::OP_KINDS
+                .iter()
+                .map(|(_, kind)| *kind as u32),
+        );
+        v
     }
 
     /// Pointer to this frame's op records, `particle_ops_len() * op_stride` floats.
