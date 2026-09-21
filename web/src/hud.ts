@@ -31,11 +31,13 @@ import { MAX_PARTICLES, STAT } from './constants';
 import type { EngineTier } from './engine-loader';
 import { ComboBook, comboState, duetState } from './hud-combos';
 import { FrameTimer } from './hud-frame-timer';
+import { hudAction } from './hud-keys';
 import { markup } from './hud-markup';
 import { Meter, finite, frameTone } from './hud-meter';
 import { PRESETS, type ParamPreset } from './hud-presets';
 import { fmtSmall, presence, spellAt } from './hud-readouts';
 import { Sparkline } from './hud-spark';
+import { statusLine } from './hud-status';
 import { GestureTutorial } from './tutorial';
 import {
   CELLS,
@@ -371,37 +373,35 @@ export class Hud {
   }
 
   private readonly onKey = (e: KeyboardEvent): void => {
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    // Typing in a control — including dragging a slider with the arrow keys —
-    // must never be hijacked by a single-letter shortcut.
-    const t = e.target;
-    if (t instanceof HTMLElement) {
-      const tag = t.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable) return;
-    }
-
-    const mode = MODES.find((m) => m.key === e.key);
-    if (mode) {
-      // No un-hiding here: the view change is visible in the canvas itself, and
-      // someone who pressed H wants the screen clean.
-      this.setMode(mode.mode);
-    } else if (e.key === 'c' || e.key === 'C') {
-      this.setCamera(!this.cameraOn);
-    } else if (e.key === 'o' || e.key === 'O') {
-      this.setOverdrive(!this.overdriveOn);
-    } else if (e.key === 'h' || e.key === 'H') {
-      this.setHiddenAll(!this.hiddenAll);
-    } else if (e.key === 'r' || e.key === 'R') {
-      this.cb.onReset();
-    } else if (e.key === 't' || e.key === 'T') {
-      this.toggleTutorial();
-    } else if (e.key === '?' || e.key === '/') {
-      this.setHelp(!this.helpOpen);
-    } else if (e.key === 'Escape') {
-      if (!this.helpOpen) return;
-      this.setHelp(false);
-    } else {
-      return;
+    const act = hudAction(e, this.helpOpen);
+    if (!act) return;
+    switch (act.kind) {
+      case 'mode':
+        // No un-hiding here: the view change is visible in the canvas itself,
+        // and someone who pressed H wants the screen clean.
+        this.setMode(act.mode);
+        break;
+      case 'camera':
+        this.setCamera(!this.cameraOn);
+        break;
+      case 'overdrive':
+        this.setOverdrive(!this.overdriveOn);
+        break;
+      case 'hideAll':
+        this.setHiddenAll(!this.hiddenAll);
+        break;
+      case 'reset':
+        this.cb.onReset();
+        break;
+      case 'tutorial':
+        this.toggleTutorial();
+        break;
+      case 'help':
+        this.setHelp(!this.helpOpen);
+        break;
+      case 'closeHelp':
+        this.setHelp(false);
+        break;
     }
     e.preventDefault();
   };
@@ -493,25 +493,7 @@ export class Hud {
   }
 
   private paintPerception(p: PerceptionStatus): void {
-    let head: string;
-    let why: string;
-    let tone: string;
-    if (p.kind === 'ready') {
-      head = 'hand + body tracking live';
-      why =
-        p.delegate === 'GPU'
-          ? 'GPU delegate'
-          : 'CPU delegate — inference will cost more per frame';
-      tone = 'ok';
-    } else if (p.kind === 'loading') {
-      head = 'loading the vision models';
-      why = 'optical flow is already driving the fluid';
-      tone = 'wait';
-    } else {
-      head = 'optical flow only';
-      why = `${p.reason} Move, and the fluid still answers.`;
-      tone = 'warn';
-    }
+    const { head, why, tone } = statusLine(p);
     // The status changes almost never; a string compare is cheaper than three
     // DOM writes at 10 Hz.
     const sig = `${tone}|${head}|${why}`;
