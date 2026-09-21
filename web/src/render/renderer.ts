@@ -36,6 +36,16 @@ import {
   isSoftwareRasteriser,
   probeHdr,
 } from "./gl";
+import {
+  aspectOf,
+  bloomAmount,
+  cameraFit,
+  exposureAmount,
+  particleGain,
+  particleSize,
+  rushFocus,
+  usesCamera,
+} from "./look";
 import { LumaProbe } from "./luma-probe";
 import { HandOverlay } from "./overlay";
 import type { ScenePrograms } from "./programs";
@@ -417,11 +427,8 @@ export class Renderer implements SceneRenderer {
     // both the body and the rim to black, so running the layer there costs a
     // full-frame `texSubImage2D` plus five fetches per pixel to add exactly
     // zero. On a software rasteriser that was a quarter of the frame.
-    const camUsed =
-      style.camTint[0] + style.camTint[1] + style.camTint[2] > 0 ||
-      style.camEdge[0] + style.camEdge[1] + style.camEdge[2] > 0;
     const wantCamera =
-      camUsed &&
+      usesCamera(style) &&
       (frame.mode === "camera" || frame.mode === "blend" || frame.showCamera);
     const hasVideo =
       wantCamera && res.sources.uploadVideo(frame.video ?? this.video);
@@ -448,16 +455,11 @@ export class Renderer implements SceneRenderer {
       1 / Math.max(1, res.sources.videoTexH),
     );
 
-    // Cover fit: crop the long axis so the feed fills the canvas at its own
-    // aspect ratio. Letterboxing would put black bars inside the simulation,
-    // and stretching would make gestures land off their landmarks.
-    const canvasAspect = this.canvas.width / Math.max(1, this.canvas.height);
-    const videoAspect = res.sources.videoAspect;
-    if (videoAspect > canvasAspect) {
-      p.f2("u_camScale", canvasAspect / videoAspect, 1);
-    } else {
-      p.f2("u_camScale", 1, videoAspect / canvasAspect);
-    }
+    const [camScaleX, camScaleY] = cameraFit(
+      aspectOf(this.canvas.width, this.canvas.height, 1),
+      res.sources.videoAspect,
+    );
+    p.f2("u_camScale", camScaleX, camScaleY);
 
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
@@ -502,17 +504,9 @@ export class Renderer implements SceneRenderer {
 
     const p = res.programs.particles;
     p.use();
-    // Energy normalisation: the pool is user-adjustable from 2k to 220k, and
-    // without this the 220k setting is a white screen and the 2k setting is
-    // nearly invisible. Total emitted light stays roughly constant instead.
-    // The floor sits low enough that the 1M overdrive pool reads as dense
-    // dust rather than a saturated sheet.
-    p.f1("u_gain", style.particles * clamp(90_000 / count, 0.1, 2.0));
-    // Point size follows the target, not the canvas: the scene can be drawn
-    // below canvas resolution, and a size in canvas pixels would then make the
-    // dust swell into blobs when the composite scales it back up.
+    p.f1("u_gain", particleGain(style, count));
     const px = this.dpr * this.sceneScale * this.viewScale;
-    p.f1("u_size", px * (3.1 + (1.35 - 3.1) * clamp(count / 200_000, 0, 1)));
+    p.f1("u_size", particleSize(px, count));
     p.f1("u_intensity", intensity);
 
     res.scene.bind();
@@ -540,12 +534,8 @@ export class Renderer implements SceneRenderer {
     // Motion drives the glow, not the exposure: pushing exposure with movement
     // makes the whole frame pump, while pushing bloom makes the bright parts
     // bloom harder, which is what "a burst of movement blazes" should feel like.
-    p.f1("u_bloomAmount", style.bloom * (0.72 + 0.75 * intensity));
-    // The camera view is ungraded and must not breathe with motion.
-    p.f1(
-      "u_exposure",
-      style.exposure * (style.grade > 0 ? 0.96 + 0.22 * intensity : 1),
-    );
+    p.f1("u_bloomAmount", bloomAmount(style, intensity));
+    p.f1("u_exposure", exposureAmount(style, intensity));
     p.f1("u_aberration", style.aberration);
     p.f1("u_vignette", style.vignette);
     p.f1("u_grade", style.grade);
@@ -553,18 +543,10 @@ export class Renderer implements SceneRenderer {
     // The engine's origin is in the dye grid's convention (y down); this pass
     // samples the scene target, which holds that image flipped, so the y has to
     // be flipped with it or the rush would dolly in on the mirror of the palm.
-    const rush = frame.rush;
-    const power =
-      rush && rush.length >= 4 && Number.isFinite(rush[3])
-        ? Math.max(0, rush[3])
-        : 0;
-    p.f2(
-      "u_rushAt",
-      power > 0 ? rush![0] : 0.5,
-      power > 0 ? 1 - rush![1] : 0.5,
-    );
-    p.f1("u_rushProgress", power > 0 ? rush![2] : 0);
-    p.f1("u_rushPower", power);
+    const rush = rushFocus(frame.rush, true);
+    p.f2("u_rushAt", rush.x, rush.y);
+    p.f1("u_rushProgress", rush.progress);
+    p.f1("u_rushPower", rush.power);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 

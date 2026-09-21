@@ -40,12 +40,14 @@ import type {
 import { BloomChain } from "./bloom";
 import type { GpuContext } from "./device";
 import { recordGpuError } from "./error-log";
+import { packCompositeUniform, packSceneUniform } from "./frame-uniforms";
 import {
+  aspectOf,
   cameraFit,
-  packCompositeUniform,
-  packSceneUniform,
+  particleGain,
+  particleSize,
   usesCamera,
-} from "./frame-uniforms";
+} from "../render/look";
 import { HandOverlay } from "./overlay";
 import { LuminanceProbe } from "./probe";
 import { ParticleSim } from "./particle-sim";
@@ -463,11 +465,10 @@ export class GpuRenderer implements SceneRenderer {
     const v = frame.video ?? this.video;
     const hasVideo = wantCamera && this.uploadVideo(v);
 
+    const canvasAspect = aspectOf(this.canvas.width, this.canvas.height, 1);
     const [camScaleX, camScaleY] = cameraFit(
-      this.canvas.width,
-      this.canvas.height,
-      hasVideo && v ? v.videoWidth : 0,
-      hasVideo && v ? v.videoHeight : 0,
+      canvasAspect,
+      hasVideo && v ? aspectOf(v.videoWidth, v.videoHeight, 0) : 0,
     );
 
     const s = this.sceneScratch;
@@ -496,10 +497,8 @@ export class GpuRenderer implements SceneRenderer {
   ): void {
     const d = this.drawScratch;
     const px = this.dpr * this.sceneScale * this.viewScale;
-    d[0] = px * (3.1 + (1.35 - 3.1) * clamp(count / 200_000, 0, 1));
-    // Same energy normalisation as the WebGL2 path: total emitted light stays
-    // roughly constant as the pool is resized.
-    d[1] = style.particles * clamp(90_000 / count, 0.1, 2.0);
+    d[0] = particleSize(px, count);
+    d[1] = particleGain(style, count);
     d[2] = intensity;
     d[3] = 0;
     d[4] = this.scene.width;
