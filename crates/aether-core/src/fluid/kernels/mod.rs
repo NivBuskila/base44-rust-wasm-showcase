@@ -14,6 +14,9 @@ mod stencil;
 #[cfg(all(target_arch = "wasm32", feature = "simd"))]
 mod simd;
 
+// The scalar sweeps are the fallback dispatch target, and the tests compare the
+// SIMD path against them, so the re-export is unused only in a SIMD release build.
+#[allow(unused_imports)]
 pub(super) use scalar::{jacobi_diffuse_scalar, jacobi_pressure_scalar};
 pub(super) use stencil::{wall_pick, StencilRows};
 
