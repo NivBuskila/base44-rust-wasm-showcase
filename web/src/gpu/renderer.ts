@@ -40,6 +40,12 @@ import type {
 import { BloomChain } from "./bloom";
 import type { GpuContext } from "./device";
 import { recordGpuError } from "./error-log";
+import {
+  cameraFit,
+  packCompositeUniform,
+  packSceneUniform,
+  usesCamera,
+} from "./frame-uniforms";
 import { HandOverlay } from "./overlay";
 import { LuminanceProbe } from "./probe";
 import { ParticleSim } from "./particle-sim";
@@ -103,8 +109,10 @@ export class GpuRenderer implements SceneRenderer {
   private drawBind: GPUBindGroup | null = null;
 
   // --- scratch
-  private readonly sceneScratch = new Float32Array(24);
-  private readonly compositeScratch = new Float32Array(12);
+  private readonly sceneScratch = new Float32Array(SCENE_UNIFORM_FLOATS);
+  private readonly compositeScratch = new Float32Array(
+    COMPOSITE_UNIFORM_FLOATS,
+  );
   private readonly drawScratch = new Float32Array(DRAW_UNIFORM_FLOATS);
 
   // --- frame state
@@ -449,53 +457,32 @@ export class GpuRenderer implements SceneRenderer {
     time: number,
   ): void {
     this.sources.uploadGrid(this.sources.dyeTex, frame.dye);
-    const camUsed =
-      style.camTint[0] + style.camTint[1] + style.camTint[2] > 0 ||
-      style.camEdge[0] + style.camEdge[1] + style.camEdge[2] > 0;
     const wantCamera =
-      camUsed &&
+      usesCamera(style) &&
       (frame.mode === "camera" || frame.mode === "blend" || frame.showCamera);
     const v = frame.video ?? this.video;
     const hasVideo = wantCamera && this.uploadVideo(v);
 
-    const canvasAspect = Math.max(
-      1e-6,
-      this.canvas.width / Math.max(1, this.canvas.height),
+    const [camScaleX, camScaleY] = cameraFit(
+      this.canvas.width,
+      this.canvas.height,
+      hasVideo && v ? v.videoWidth : 0,
+      hasVideo && v ? v.videoHeight : 0,
     );
-    const videoAspect =
-      hasVideo && v && v.videoHeight > 0
-        ? v.videoWidth / v.videoHeight
-        : canvasAspect;
-    const camScaleX =
-      videoAspect > canvasAspect ? canvasAspect / videoAspect : 1;
-    const camScaleY =
-      videoAspect > canvasAspect ? 1 : videoAspect / canvasAspect;
 
     const s = this.sceneScratch;
-    s[0] = FLUID_W;
-    s[1] = FLUID_H;
-    s[2] = 1 / FLUID_W;
-    s[3] = 1 / FLUID_H;
-    s[4] = camScaleX;
-    s[5] = camScaleY;
-    s[6] = 1 / Math.max(1, this.sources.videoTexW);
-    s[7] = 1 / Math.max(1, this.sources.videoTexH);
-    s[8] = style.camTint[0];
-    s[9] = style.camTint[1];
-    s[10] = style.camTint[2];
-    s[11] = style.camToe;
-    s[12] = style.camEdge[0];
-    s[13] = style.camEdge[1];
-    s[14] = style.camEdge[2];
-    s[15] = style.camRaw;
-    s[16] = style.dye;
-    s[17] = style.bg;
-    s[18] = hasVideo ? 1 : 0;
-    s[19] = intensity;
-    s[20] = time;
-    s[21] = 0;
-    s[22] = 0;
-    s[23] = 0;
+    packSceneUniform(s, {
+      style,
+      fluidW: FLUID_W,
+      fluidH: FLUID_H,
+      camScaleX,
+      camScaleY,
+      videoTexW: this.sources.videoTexW,
+      videoTexH: this.sources.videoTexH,
+      hasVideo,
+      intensity,
+      time,
+    });
     this.device.queue.writeBuffer(this.sceneUniform, 0, s);
     this.pass(encoder, this.scene.view!, this.pipes.scene, this.sceneBind!);
   }
@@ -540,25 +527,12 @@ export class GpuRenderer implements SceneRenderer {
     intensity: number,
   ): void {
     const c = this.compositeScratch;
-    c[0] = style.bloom * (0.72 + 0.75 * intensity);
-    c[1] = style.exposure * (style.grade > 0 ? 0.96 + 0.22 * intensity : 1);
-    c[2] = style.aberration;
-    c[3] = style.vignette;
-    c[4] = style.grade;
-    c[5] = this.frameIndex;
-    const rush = frame.rush;
-    const power =
-      rush && rush.length >= 4 && Number.isFinite(rush[3])
-        ? Math.max(0, rush[3])
-        : 0;
-    c[6] = power > 0 ? rush![2] : 0;
-    c[7] = power;
-    // The scene target already holds the image the way the screen shows it, so
-    // the origin needs no y flip here — unlike the GL chain.
-    c[8] = power > 0 ? rush![0] : 0.5;
-    c[9] = power > 0 ? rush![1] : 0.5;
-    c[10] = 0;
-    c[11] = 0;
+    packCompositeUniform(c, {
+      style,
+      intensity,
+      frameIndex: this.frameIndex,
+      rush: frame.rush,
+    });
     this.device.queue.writeBuffer(this.compositeUniform, 0, c);
     this.pass(
       encoder,
