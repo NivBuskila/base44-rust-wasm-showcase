@@ -100,6 +100,24 @@ function scramble(node: HTMLElement, text: string, ms = 520): void {
   }, 30);
 }
 
+/** The field lens: the glow and ripples track the pointer, and the key leans toward it. */
+function magnetise(button: HTMLButtonElement): void {
+  button.addEventListener('pointermove', (event) => {
+    const r = button.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const x = (event.clientX - r.left) / r.width;
+    const y = (event.clientY - r.top) / r.height;
+    button.style.setProperty('--mx', `${x * 100}%`);
+    button.style.setProperty('--my', `${y * 100}%`);
+    if (reducedMotion()) return;
+    button.style.setProperty('--tx', `${(x - 0.5) * 14}px`);
+    button.style.setProperty('--ty', `${(y - 0.5) * 10}px`);
+  });
+  button.addEventListener('pointerleave', () => {
+    for (const key of ['--mx', '--my', '--tx', '--ty']) button.style.removeProperty(key);
+  });
+}
+
 /** Builds the console into `root` and returns the nodes the intro drives. */
 function build(root: HTMLElement, full: boolean) {
   root.replaceChildren();
@@ -154,7 +172,9 @@ function build(root: HTMLElement, full: boolean) {
     enter.type = 'button';
     enter.disabled = true;
     label = el('span', 'landing-enter-label', 'INITIALISING');
-    enter.append(label, el('span', 'landing-enter-arrow', '→'), el('span', 'landing-enter-sheen'));
+    const arrow = el('span', 'landing-enter-arrow');
+    arrow.append(el('span', '', '›'), el('span', '', '›'), el('span', '', '›'));
+    enter.append(label, arrow, el('span', 'landing-enter-sheen'));
     foot.append(
       enter,
       el(
@@ -211,6 +231,7 @@ export function mountIntro(): Intro {
     open(r.left + r.width / 2, r.top + r.height / 2);
   };
 
+  if (ui.enter) magnetise(ui.enter);
   ui.enter?.addEventListener('click', openFromButton);
   root.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && root.classList.contains('ready')) openFromButton();
