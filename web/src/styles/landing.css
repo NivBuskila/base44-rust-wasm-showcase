@@ -74,7 +74,8 @@
 
 /* No second entrance: the header and log glide into place (`glide` in
    `landing.ts`) and only the parts that were not there fade in. */
-#boot.resumed .landing-frame {
+#boot.resumed .landing-frame,
+.boot-resumed #boot .landing-frame {
   animation: none;
 }
 
