@@ -3,9 +3,9 @@
  *
  * It mounts over `#boot` before anything loads as the compact loader (the
  * wordmark and a live boot log). Once the engine runs the backdrop turns
- * translucent and, on a first visit, the console unfolds into the welcome —
- * the capability lines check in one by one and "Enter the field" irises it
- * open from the button. With a camera running, holding a hand up fills the
+ * translucent so the field wakes behind it and, on a first visit, a single
+ * line and "Enter the field" unfold under the centred header; the button
+ * irises it open. With a camera running, holding a hand up fills the
  * button and opens it too (`landing-hand.ts`). The HUD's first-run moments
  * wait for `onOpen`, so nothing plays unseen behind the console.
  *
@@ -20,36 +20,6 @@ import { watchHand, type HandWatch } from './landing-hand';
 const SEEN_KEY = 'aether.landing.seen';
 /** Must match the iris animation's duration in `landing.css`. */
 const EXIT_MS = 1150;
-
-interface Capability {
-  title: string;
-  body: string;
-  tag: 'ONLINE' | 'READY';
-}
-
-/** What a new user needs to know before their first gesture. */
-const CAPABILITIES: Capability[] = [
-  {
-    title: 'Rust + WebAssembly fluid',
-    body: 'A grid fluid solver and a particle pool step in WebAssembly, multithreaded where the browser allows it.',
-    tag: 'ONLINE',
-  },
-  {
-    title: 'Hands and body as input',
-    body: 'Webcam hand and pose tracking drives the field directly — no mouse, no controls to learn.',
-    tag: 'READY',
-  },
-  {
-    title: 'Spells, combos and duets',
-    body: 'Poses cast attract, push, shatter and release; chains and two-hand moves unlock bigger effects.',
-    tag: 'READY',
-  },
-  {
-    title: 'WebGL2 or WebGPU',
-    body: 'The renderer picks the best backend available and adapts quality live to hold a smooth frame rate.',
-    tag: 'ONLINE',
-  },
-];
 
 export interface ReadyOptions {
   /** Hands in view, when a camera is running: lets a raised hand enter. */
@@ -165,29 +135,8 @@ function build(root: HTMLElement, full: boolean) {
   head.append(titleRow, state);
   frame.append(head);
 
-  const tags: HTMLElement[] = [];
   if (full) {
-    frame.append(
-      el(
-        'p',
-        'landing-lede',
-        'A gesture-driven fluid reality engine, running entirely in this browser. It is coming alive behind this panel.',
-      ),
-    );
-    const grid = el('div', 'landing-grid');
-    for (const cap of CAPABILITIES) {
-      const item = el('div', 'landing-item');
-      const line = el('div', 'landing-line');
-      const name = el('div', 'landing-name');
-      name.append(el('span', 'landing-check', '✓'), el('span', '', cap.title));
-      const tag = el('span', 'landing-tag', 'WAIT');
-      tag.dataset.on = cap.tag;
-      tags.push(tag);
-      line.append(name, tag);
-      item.append(line, el('p', '', cap.body));
-      grid.append(item);
-    }
-    frame.append(grid);
+    frame.append(el('p', 'landing-lede', 'Your hands shape a living fluid. It is waking up behind this panel.'));
   }
 
   const foot = el('div', 'landing-foot');
@@ -215,19 +164,12 @@ function build(root: HTMLElement, full: boolean) {
     );
     const cta = el('div', 'landing-cta');
     cta.append(enter, el('span', 'landing-hand', 'or raise a hand to the camera'));
-    foot.append(
-      cta,
-      el(
-        'p',
-        'landing-note',
-        'Allow camera access to cast with your hands — without it Aether runs an ambient simulation. Press H any time for controls, T for the gesture tutorial.',
-      ),
-    );
+    foot.append(cta, el('p', 'landing-note', 'camera optional · H controls · T tutorial'));
   }
   frame.append(foot);
   root.append(frame);
 
-  return { state, tags, statusEl, enter, label, anchors: [titleRow, state, log] };
+  return { state, statusEl, enter, label, anchors: [titleRow, state, log] };
 }
 
 /**
@@ -333,18 +275,9 @@ export function mountIntro(resumed = false): Intro {
       ui.state.textContent = 'ONLINE';
       ui.statusEl.textContent = 'field stable — all systems nominal';
       if (ui.enter && ui.label) {
-        glide(ui.anchors, () => {
-          root.classList.remove('compact');
-          root.classList.add('revealed');
-        });
-        // Each line checks in just after its card lands (see the CSS delays).
-        ui.tags.forEach((tag, i) => {
-          window.setTimeout(() => {
-            tag.classList.add('on');
-            tag.closest('.landing-item')?.classList.add('on');
-            scramble(tag, tag.dataset.on ?? 'ONLINE', 360);
-          }, 700 + i * 150);
-        });
+        // The console stays centred: the header and log only glide up to make
+        // room for the lede and the button, while the field wakes behind.
+        glide(ui.anchors, () => root.classList.add('revealed'));
         ui.enter.disabled = false;
         ui.enter.focus();
         scramble(ui.label, 'ENTER THE FIELD');
