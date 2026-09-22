@@ -73,6 +73,8 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
 }
 
 function isFirstRun(): boolean {
+  // `?welcome` replays the full welcome without clearing storage.
+  if (new URLSearchParams(location.search).has('welcome')) return true;
   try {
     return localStorage.getItem(SEEN_KEY) !== '1';
   } catch {
@@ -253,8 +255,9 @@ function glide(nodes: HTMLElement[], change: () => void): void {
 export function mountIntro(resumed = false): Intro {
   const root = document.getElementById('boot') ?? document.body.appendChild(el('div', ''));
   root.id = 'boot';
-  // The same console survived a reload: skip its entrance.
-  root.classList.toggle('resumed', resumed);
+  // The prerendered loader (index.html) already played the entrance, and after
+  // the isolation reload it must not play again: never replay it here.
+  root.classList.toggle('resumed', resumed || root.childElementCount > 0);
   const full = isFirstRun();
   const ui = build(root, full);
   let opened = false;
