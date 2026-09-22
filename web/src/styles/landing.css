@@ -88,6 +88,10 @@
 #boot.revealed .landing-enter { animation-delay: 860ms; }
 #boot.revealed .landing-note { animation-delay: 960ms; }
 
+#boot.revealed .landing-hand {
+  animation: landing-reveal 650ms cubic-bezier(0.2, 0.8, 0.2, 1) 960ms backwards;
+}
+
 .landing-head {
   display: flex;
   align-items: center;
@@ -411,6 +415,55 @@
 
 .landing-enter-arrow span:nth-child(2) { animation-delay: 160ms; }
 .landing-enter-arrow span:nth-child(3) { animation-delay: 320ms; }
+
+/* Raise a hand to enter: the pill fills left to right while a hand is held
+   up (`--charge` from `landing-hand.ts`), and the hint beside it answers. */
+.landing-cta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 18px 26px;
+}
+
+.landing-hand {
+  display: none;
+  color: #667b94;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  transition: color 300ms ease;
+}
+
+.landing-hand::before {
+  content: '✋ ';
+}
+
+#boot.hand-ready .landing-hand {
+  display: inline;
+}
+
+#boot.hand-seen .landing-hand {
+  color: var(--mint);
+}
+
+.landing-enter-charge {
+  --charge: 0;
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.landing-enter-charge::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(62, 240, 194, 0.12), rgba(62, 240, 194, 0.42));
+  transform: scaleX(var(--charge));
+  transform-origin: left;
+  transition: transform 90ms linear;
+}
 
 /* The scanning hairline — the booting state only. */
 .landing-enter-sheen {

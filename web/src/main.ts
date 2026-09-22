@@ -91,7 +91,10 @@ async function boot(): Promise<void> {
     window.addEventListener('pagehide', () => app.flushQaSession());
 
     await app.start(setStatus);
-    intro.ready();
+    intro.ready({
+      hands: app.diagnostics.cameraAvailable ? () => app.handsPresent : undefined,
+      onOpen: () => app.stage(),
+    });
   } catch (err) {
     fail(
       err instanceof Error ? `Aether failed to start: ${err.message}` : 'Aether failed to start.',

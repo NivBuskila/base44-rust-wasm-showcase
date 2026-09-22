@@ -75,6 +75,8 @@ export class Hud {
   private lastPaintMs = 0;
   private hintStartMs = 0;
   private hintDone = false;
+  /** False while the intro console covers the stage; see {@link stage}. */
+  private staged = false;
 
   constructor(root: HTMLElement, callbacks: HudCallbacks) {
     this.root = root;
@@ -120,7 +122,7 @@ export class Hud {
     const now = performance.now();
     this.telemetry.sample(s, now);
 
-    if (this.hintStartMs === 0) this.hintStartMs = now;
+    if (this.staged && this.hintStartMs === 0) this.hintStartMs = now;
 
     // Every frame, ahead of the 10 Hz gate: a charge bar that steps at 10 Hz
     // reads as lag in the recognition itself, and each write is diffed inside
@@ -129,18 +131,20 @@ export class Hud {
     if (s.duetBook) this.combos.setDuetBook(s.duetBook);
     this.combos.update(comboState(s.comboProgress), duetState(s.duetProgress));
     // Every frame too: its hold bar is the feedback that the pose is being read.
-    this.tutorial.update(
-      s.spells ?? [],
-      finite(s.stats?.[STAT.HANDS_PRESENT]),
-      now,
-      s.hands ?? null,
-    );
+    if (this.staged) {
+      this.tutorial.update(
+        s.spells ?? [],
+        finite(s.stats?.[STAT.HANDS_PRESENT]),
+        now,
+        s.hands ?? null,
+      );
+    }
 
     if (now - this.lastPaintMs < PAINT_MS) return;
     this.lastPaintMs = now;
 
     this.telemetry.paintHeader(s);
-    this.tickHint(s, now);
+    if (this.staged) this.tickHint(s, now);
 
     if (this.hiddenAll || this.collapsed) {
       // Still drain the peak-holds: expanding the panel after a minute must not
@@ -151,6 +155,15 @@ export class Hud {
     }
 
     this.telemetry.paintBody(s);
+  }
+
+  /**
+   * The intro console has opened onto the stage. Until then the first-run
+   * moments — the hint's timer and the tutorial's auto-start — would play
+   * unseen behind it.
+   */
+  stage(): void {
+    this.staged = true;
   }
 
   /** Shows which engine build is running; static for the session. */
