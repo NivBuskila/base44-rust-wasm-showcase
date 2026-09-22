@@ -11,12 +11,6 @@
   initial-value: 0px;
 }
 
-@property --ripple {
-  syntax: '<length>';
-  inherits: false;
-  initial-value: 0px;
-}
-
 #boot {
   --mint: #3ef0c2;
   position: fixed;
@@ -117,9 +111,20 @@
   width: 12px;
   height: 12px;
   border-radius: 50%;
+  position: relative;
   background: #52647b;
+  box-shadow: 0 0 14px rgba(62, 240, 194, 0.45);
   transition: background 400ms ease;
   animation: landing-pulse 1.8s ease-in-out infinite;
+}
+
+.landing-dot::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  background: rgba(62, 240, 194, 0.14);
+  animation: landing-halo 1.8s ease-in-out infinite;
 }
 
 #boot.ready .landing-dot {
@@ -285,7 +290,12 @@
 #boot.failed .landing-caret,
 #boot.failed .landing-dot {
   background: #ff6b8b;
+  box-shadow: none;
   animation: none;
+}
+
+#boot.failed .landing-dot::after {
+  display: none;
 }
 
 /* Enter the field -------------------------------------------------------- */
@@ -316,34 +326,57 @@
   font-size: 16px;
   letter-spacing: 0.3em;
   cursor: pointer;
-  overflow: hidden;
+  box-shadow: 0 0 28px rgba(62, 240, 194, 0.14);
   transform: translate(var(--tx), var(--ty));
   transition:
     transform 350ms cubic-bezier(0.2, 0.8, 0.2, 1),
     border-color 300ms ease,
     color 200ms ease;
-  animation: landing-beacon 2.6s ease-out infinite;
 }
 
-/* The ripples: rings sliding outward from the pointer, faded by distance. */
+/* Every loop below animates only transform and opacity, so the compositor
+   runs them without repainting while the engine owns the main thread. */
+
+/* The beacon: an outline of the pill that swells outward and fades. */
 .landing-enter::after {
   content: '';
   position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border: 1px solid rgba(62, 240, 194, 0.5);
+  border-radius: inherit;
+  pointer-events: none;
+  animation: landing-beacon 2.6s ease-out infinite;
+}
+
+/* The ripples: two rings spreading from under the pointer, clipped to the pill. */
+.landing-enter-ripples {
+  position: absolute;
   inset: 0;
   z-index: -1;
+  border-radius: inherit;
+  overflow: hidden;
   pointer-events: none;
-  background: repeating-radial-gradient(
-    circle at var(--mx) var(--my),
-    rgba(62, 240, 194, 0.3) calc(var(--ripple) - 16px),
-    rgba(62, 240, 194, 0.3) calc(var(--ripple) - 15px),
-    transparent calc(var(--ripple) - 15px),
-    transparent var(--ripple)
-  );
-  -webkit-mask-image: radial-gradient(130px circle at var(--mx) var(--my), #000, transparent);
-  mask-image: radial-gradient(130px circle at var(--mx) var(--my), #000, transparent);
   opacity: 0.45;
   transition: opacity 300ms ease;
-  animation: landing-ripple 1.2s linear infinite;
+}
+
+.landing-enter-ripples::before,
+.landing-enter-ripples::after {
+  content: '';
+  position: absolute;
+  left: var(--mx);
+  top: var(--my);
+  width: 240px;
+  height: 240px;
+  border: 1.5px solid rgba(62, 240, 194, 0.6);
+  border-radius: 50%;
+  opacity: 0;
+  animation: landing-ripple 1.6s ease-out infinite;
+}
+
+.landing-enter-ripples::after {
+  animation-delay: 800ms;
 }
 
 .landing-enter-label {
@@ -392,7 +425,7 @@
   color: #fff;
 }
 
-.landing-enter:hover:not(:disabled)::after {
+.landing-enter:hover:not(:disabled) .landing-enter-ripples {
   opacity: 1;
 }
 
@@ -418,10 +451,14 @@
   color: #52647b;
   background: #0a0f18;
   border-color: #263449;
-  animation: none;
+  box-shadow: none;
 }
 
-.landing-enter:disabled::after,
+.landing-enter:disabled::after {
+  display: none;
+}
+
+.landing-enter:disabled .landing-enter-ripples,
 .landing-enter:disabled .landing-enter-arrow {
   opacity: 0;
 }
@@ -479,7 +516,7 @@
   animation: none;
 }
 
-#boot.entering .landing-enter::after {
+#boot.entering .landing-enter-ripples {
   opacity: 1;
 }
 
@@ -545,12 +582,13 @@
 }
 
 @keyframes landing-ripple {
-  to { --ripple: 16px; }
+  from { opacity: 1; transform: translate(-50%, -50%) scale(0.06); }
+  to { opacity: 0; transform: translate(-50%, -50%) scale(1); }
 }
 
 @keyframes landing-beacon {
-  0% { box-shadow: 0 0 0 0 rgba(62, 240, 194, 0.4), 0 0 28px rgba(62, 240, 194, 0.14); }
-  70%, 100% { box-shadow: 0 0 0 16px rgba(62, 240, 194, 0), 0 0 28px rgba(62, 240, 194, 0.14); }
+  0% { opacity: 0.8; transform: scale(1); }
+  70%, 100% { opacity: 0; transform: scale(1.08, 1.4); }
 }
 
 @keyframes landing-chevron {
@@ -582,8 +620,13 @@
 }
 
 @keyframes landing-pulse {
-  0%, 100% { opacity: 0.6; box-shadow: 0 0 0 6px rgba(62, 240, 194, 0.06), 0 0 10px currentColor; }
-  50% { opacity: 1; box-shadow: 0 0 0 9px rgba(62, 240, 194, 0.14), 0 0 26px #3ef0c2; }
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+@keyframes landing-halo {
+  0%, 100% { opacity: 0.4; transform: scale(0.75); }
+  50% { opacity: 1; transform: scale(1); }
 }
 
 @media (max-width: 860px) {
@@ -597,9 +640,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .landing-enter,
   .landing-enter::after,
+  .landing-enter-ripples::before,
+  .landing-enter-ripples::after,
   .landing-enter-arrow span,
+  .landing-dot::after,
   .landing-enter-sheen::before,
   .landing-dot {
     animation: none;
