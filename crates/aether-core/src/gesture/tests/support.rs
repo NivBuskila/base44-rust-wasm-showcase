@@ -3,6 +3,7 @@
 pub(super) use crate::gesture::*;
 
 pub(super) use crate::config::POSE_STRIDE;
+pub(super) use crate::gesture::synth::{self, Hand};
 pub(super) const DT: f32 = 1.0 / 30.0;
 
 pub(super) fn tracker() -> GestureTracker {
