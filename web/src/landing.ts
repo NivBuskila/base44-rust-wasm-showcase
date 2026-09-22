@@ -1,15 +1,15 @@
 /**
  * The intro console: the boot screen and the first-run welcome as one surface.
  *
- * It mounts over `#boot` before anything loads and *is* the loading screen —
- * each capability line flips from WAIT to its tag as the boot stage that
- * proves it completes, so the introduction doubles as honest progress. Once
- * the engine runs the backdrop turns translucent and the live field shows
- * through; "Enter the field" then irises the console open from the button.
+ * It mounts over `#boot` before anything loads as the compact loader (the
+ * wordmark and a live boot log). Once the engine runs the backdrop turns
+ * translucent and, on a first visit, the console unfolds into the welcome —
+ * the capability lines check in one by one and "Enter the field" irises it
+ * open from the button.
  *
  * First visit only (`aether.landing.seen` in `localStorage` — clear it to see
- * it again): later visits get the compact header + log, which opens on its
- * own when boot finishes. After it opens, `#boot` stays attached as
+ * it again): later visits stay compact and open on their own when boot
+ * finishes. After it opens, `#boot` stays attached as
  * `.done` (hidden, no pointer events) so it can never eat a gesture.
  */
 
@@ -17,11 +17,7 @@ const SEEN_KEY = 'aether.landing.seen';
 /** Must match the iris animation's duration in `landing.css`. */
 const EXIT_MS = 1150;
 
-/** The boot stage that proves each capability. */
-export type BootStage = 'engine' | 'render' | 'input' | 'spells';
-
 interface Capability {
-  stage: BootStage;
   title: string;
   body: string;
   tag: 'ONLINE' | 'READY';
@@ -30,25 +26,21 @@ interface Capability {
 /** What a new user needs to know before their first gesture. */
 const CAPABILITIES: Capability[] = [
   {
-    stage: 'engine',
     title: 'Rust + WebAssembly fluid',
     body: 'A grid fluid solver and a particle pool step in WebAssembly, multithreaded where the browser allows it.',
     tag: 'ONLINE',
   },
   {
-    stage: 'input',
     title: 'Hands and body as input',
     body: 'Webcam hand and pose tracking drives the field directly — no mouse, no controls to learn.',
     tag: 'READY',
   },
   {
-    stage: 'spells',
     title: 'Spells, combos and duets',
     body: 'Poses cast attract, push, shatter and release; chains and two-hand moves unlock bigger effects.',
     tag: 'READY',
   },
   {
-    stage: 'render',
     title: 'WebGL2 or WebGPU',
     body: 'The renderer picks the best backend available and adapts quality live to hold a smooth frame rate.',
     tag: 'ONLINE',
@@ -57,9 +49,7 @@ const CAPABILITIES: Capability[] = [
 
 export interface Intro {
   status(text: string): void;
-  /** Marks a boot stage complete, lighting its capability line. */
-  stage(stage: BootStage): void;
-  /** The engine is running: arm the entry (or open, on a return visit). */
+  /** The engine is running: unfold the welcome (or open, on a return visit). */
   ready(): void;
   fail(message: string): void;
 }
@@ -113,7 +103,8 @@ function scramble(node: HTMLElement, text: string, ms = 520): void {
 /** Builds the console into `root` and returns the nodes the intro drives. */
 function build(root: HTMLElement, full: boolean) {
   root.replaceChildren();
-  root.classList.toggle('compact', !full);
+  // Everyone waits on the compact loader; the welcome unfolds on `ready`.
+  root.classList.add('compact');
 
   const frame = el('div', 'landing-frame');
 
@@ -124,7 +115,7 @@ function build(root: HTMLElement, full: boolean) {
   head.append(titleRow, state);
   frame.append(head);
 
-  const tags = new Map<BootStage, HTMLElement>();
+  const tags: HTMLElement[] = [];
   if (full) {
     frame.append(
       el(
@@ -141,7 +132,7 @@ function build(root: HTMLElement, full: boolean) {
       name.append(el('span', 'landing-check', '✓'), el('span', '', cap.title));
       const tag = el('span', 'landing-tag', 'WAIT');
       tag.dataset.on = cap.tag;
-      tags.set(cap.stage, tag);
+      tags.push(tag);
       line.append(name, tag);
       item.append(line, el('p', '', cap.body));
       grid.append(item);
@@ -229,19 +220,21 @@ export function mountIntro(): Intro {
     status(text) {
       ui.statusEl.textContent = text;
     },
-    stage(stage) {
-      const tag = ui.tags.get(stage);
-      if (!tag || tag.classList.contains('on')) return;
-      tag.classList.add('on');
-      tag.closest('.landing-item')?.classList.add('on');
-      scramble(tag, tag.dataset.on ?? 'ONLINE', 360);
-    },
     ready() {
-      for (const stage of ui.tags.keys()) this.stage(stage);
       root.classList.add('ready');
       ui.state.textContent = 'ONLINE';
       ui.statusEl.textContent = 'field stable — all systems nominal';
       if (ui.enter && ui.label) {
+        root.classList.remove('compact');
+        root.classList.add('revealed');
+        // Each line checks in just after its card lands (see the CSS delays).
+        ui.tags.forEach((tag, i) => {
+          window.setTimeout(() => {
+            tag.classList.add('on');
+            tag.closest('.landing-item')?.classList.add('on');
+            scramble(tag, tag.dataset.on ?? 'ONLINE', 360);
+          }, 700 + i * 150);
+        });
         ui.enter.disabled = false;
         ui.enter.focus();
         scramble(ui.label, 'ENTER THE FIELD');

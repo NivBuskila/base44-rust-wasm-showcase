@@ -63,14 +63,12 @@ async function boot(): Promise<void> {
     const loaded = await loadEngine(setStatus);
     const engine = new loaded.module.AetherEngine(SEED);
     assertLayout(engine.layout());
-    intro.stage('engine');
 
     const canvas = document.getElementById('stage');
     if (!(canvas instanceof HTMLCanvasElement)) throw new Error('#stage canvas missing');
 
     setStatus('starting the renderer…');
     const { renderer } = await createRenderer(canvas);
-    intro.stage('render');
 
     const app = new App(engine, loaded.memory, renderer, loaded.tier);
     window.__aether = {
