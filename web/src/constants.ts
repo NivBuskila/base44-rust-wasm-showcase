@@ -20,6 +20,28 @@ export const MAX_PARTICLES = 1_000_000;
 /** Floats per particle in the render buffer: x, y, heat, life. */
 export const PARTICLE_STRIDE = 4;
 
+/**
+ * Particle op log, `aether_core::particles::offload`. Floats per record and
+ * records per frame; `assertOpLayout` checks them at boot when the GPU pool is
+ * in use.
+ */
+export const PARTICLE_OP_STRIDE = 12;
+export const MAX_PARTICLE_OPS = 64;
+/**
+ * Op kinds, slot 0 of each record. Declaration order is the protocol order:
+ * `aether_core::particles::OP_KINDS` publishes the same list through
+ * `particle_op_layout()`, `assertOpLayout` compares the two entry by entry, and
+ * the WGSL replay constants are generated from this object — so a kind exists in
+ * exactly one place per language and a renumber cannot pass unnoticed.
+ */
+export const PARTICLE_OP = {
+  BURST: 1,
+  RING: 2,
+  IMPULSE: 3,
+  DAMP: 4,
+  GRIP: 5,
+} as const;
+
 /** MediaPipe hand landmark count. */
 export const HAND_LANDMARKS = 21;
 /** MediaPipe pose landmark count. */
@@ -105,9 +127,37 @@ export function gestureId(categoryName: string): number {
 }
 
 /**
- * Fails loudly when the TS constants drift from the Rust ones.
- * `layout` is `[fluidW, fluidH, flowW, flowH, maxParticles, particleStride]`.
+ * Fails loudly when the op protocol here drifts from the Rust one.
+ *
+ * `layout` is `AetherEngine.particle_op_layout()`:
+ * `[opStride, maxOps, ...one value per kind in PARTICLE_OP declaration order]`.
  */
+export function assertOpLayout(layout: Uint32Array | number[]): void {
+  const kinds = Object.entries(PARTICLE_OP);
+  const expected: [string, number][] = [
+    ['PARTICLE_OP_STRIDE', PARTICLE_OP_STRIDE],
+    ['MAX_PARTICLE_OPS', MAX_PARTICLE_OPS],
+    ...kinds.map(([name, value]): [string, number] => [`PARTICLE_OP.${name}`, value]),
+  ];
+  if (layout.length !== expected.length) {
+    throw new Error(
+      `constants.ts is out of sync with aether-core: the engine publishes ` +
+        `${layout.length} op layout entries, TS expects ${expected.length}. ` +
+        `Update web/src/constants.ts to match particles/offload.rs.`,
+    );
+  }
+  for (let i = 0; i < expected.length; i++) {
+    const [name, value] = expected[i];
+    if (layout[i] !== value) {
+      throw new Error(
+        `constants.ts is out of sync with aether-core: ${name} is ${value} in TS ` +
+          `but ${layout[i]} in the engine. ` +
+          `Update web/src/constants.ts to match particles/offload.rs.`,
+      );
+    }
+  }
+}
+
 export function assertLayout(layout: Uint32Array | number[]): void {
   const expected = [FLUID_W, FLUID_H, FLOW_W, FLOW_H, MAX_PARTICLES, PARTICLE_STRIDE];
   const names = ['FLUID_W', 'FLUID_H', 'FLOW_W', 'FLOW_H', 'MAX_PARTICLES', 'PARTICLE_STRIDE'];

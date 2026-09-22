@@ -17,8 +17,10 @@ function stubCanvas(pixels: () => Uint8ClampedArray) {
     drawImage: vi.fn(),
     getImageData: vi.fn(() => ({ data: pixels() })),
   };
+  // `getContext` is overloaded (2d, webgl2, webgpu…); the stub answers one of
+  // them, so the mock is typed loosely rather than against every signature.
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(
-    () => ctx as unknown as CanvasRenderingContext2D,
+    (() => ctx) as unknown as HTMLCanvasElement['getContext'],
   );
   return ctx;
 }
