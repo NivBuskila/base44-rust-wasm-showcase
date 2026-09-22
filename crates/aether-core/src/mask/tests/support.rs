@@ -2,13 +2,6 @@
 
 pub(super) use crate::mask::*;
 
-pub(super) const H: usize = 144;
-pub(super) const CELLS: usize = W * H;
-pub(super) const DT30: f32 = 1.0 / 30.0;
-
-//! Mask pipeline tests.
-
-
 /// Grid the tests run `BodyMask` on, deliberately **not**
 /// `config::W/H`.
 ///
@@ -19,6 +12,9 @@ pub(super) const DT30: f32 = 1.0 / 30.0;
 /// grid for the frame budget turned every carefully chosen coordinate into
 /// either an out-of-bounds index or a different part of the frame.
 pub(super) const W: usize = 256;
+pub(super) const H: usize = 144;
+pub(super) const CELLS: usize = W * H;
+pub(super) const DT30: f32 = 1.0 / 30.0;
 
 /// Config with the temporal EMA disabled, so one update lands the raw mask
 /// exactly and a test's arithmetic stays analytic.

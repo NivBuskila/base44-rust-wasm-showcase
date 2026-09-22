@@ -8,12 +8,12 @@ pub(super) use crate::gesture::synth::{self, Hand};
 pub(super) use crate::gesture::{GestureConfig, GestureTracker};
 pub(super) use crate::particles::ParticleConfig;
 pub(super) struct Rig {
-    fluid: Fluid,
-    particles: Particles,
-    flow: VecField,
-    body: VecField,
-    state: SpellState,
-    params: Params,
+    pub(super) fluid: Fluid,
+    pub(super) particles: Particles,
+    pub(super) flow: VecField,
+    pub(super) body: VecField,
+    pub(super) state: SpellState,
+    pub(super) params: Params,
 }
 impl Rig {
     /// The field drives are off by default so the gesture paths can be
