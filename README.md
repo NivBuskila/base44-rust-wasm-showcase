@@ -66,22 +66,75 @@ change can be judged without a browser.
 
 ## Running it
 
-Requires Rust 1.90 with the `wasm32-unknown-unknown` target (pinned by
-`rust-toolchain.toml`), `wasm-pack`, and Node 22.
+### Quick start
+
+You need three things installed:
+
+| Tool | Version | Why |
+| --- | --- | --- |
+| [Rust](https://rustup.rs) | 1.90 (picked automatically from `rust-toolchain.toml`) | compiles the simulation to WebAssembly |
+| `wasm-pack` | 0.13+ | packages the WASM as an ES module |
+| [Node.js](https://nodejs.org) | 22 | runs the Vite dev server and the tooling |
+
+Then, from a fresh clone:
 
 ```bash
+# 1. One-time Rust setup
 rustup target add wasm32-unknown-unknown
 cargo install wasm-pack
 
+# 2. Install the web tooling (also vendors the MediaPipe WASM runtime)
 cd web
-npm install              # also vendors the MediaPipe WASM runtime
-npm run fetch:models     # optional: 14 MB of models for offline use
-npm run dev              # builds both wasm engines (if missing), then serves on :5173
+npm install
+
+# 3. Optional: keep the ~14 MB of models locally so it works offline
+npm run fetch:models
+
+# 4. Build the engines and start the dev server
+npm run dev
 ```
 
-Open the page and allow camera access. Show your hands. Press `T` (or the
-panel's book button) for the gesture tutorial; it also opens itself the first
-time a hand is seen.
+The first `npm run dev` compiles both WASM engines (about a minute with LTO);
+later starts skip the build when the artefacts are already there. When Vite
+prints its URL, open **http://localhost:5173** in a current Chrome, Edge or
+Firefox and **allow camera access**.
+
+What you should see:
+
+- Smoke drifting on its own before you do anything — that is the ambient drive.
+- The HUD in the corner showing fps and the engine line — `1 thr · simd` for
+  the baseline, `N thr · simd` plus a *threads* badge when the multithreaded
+  engine is running. Which renderer won is in
+  `window.__aether.diagnostics().renderBackend` (`webgl2` or `webgpu`).
+- The moment a hand is seen, the gesture tutorial opens by itself and walks you
+  through each spell. Reopen it any time with `T` or the panel's book button;
+  `H` or `?` shows the key reference.
+
+Without a camera (or with permission denied) the app still runs: the fluid
+drives itself and the HUD says why perception is off.
+
+### Running with Docker instead
+
+If you would rather not install Rust or Node, the repository ships a Compose
+file that builds everything from the mounted source and serves it on port 3000:
+
+```bash
+docker compose -f docker-compose.base44.yml up -d --build
+# then open http://localhost:3000
+```
+
+The `wasm` service compiles the engines (and rebuilds when Rust sources
+change); the `web` service runs Vite. The first boot takes a few minutes while
+the toolchains download.
+
+### Useful URL switches
+
+| Query | Effect |
+| --- | --- |
+| `?engine=single` | force the single-threaded engine for side-by-side comparison |
+| `?gpu=off` / `?gpu=on` | force the WebGL2 or the WebGPU renderer |
+| `?rscale=0.5` | pin the internal render scale (WebGL2 path) |
+| `?perception=off` | skip the models entirely — optical flow only |
 
 ### The multithreaded engine
 
@@ -92,9 +145,8 @@ time a hand is seen.
 particle system run on a [rayon](https://github.com/rayon-rs/rayon) pool of Web
 Workers over shared WASM linear memory. The engine picks the threaded build at
 boot whenever the page is cross-origin isolated and falls back to the baseline
-otherwise, so nothing breaks in an embedded frame or an old browser.
-`?engine=single` forces the baseline for side-by-side comparison; the HUD shows
-the tier and thread count either way.
+otherwise, so nothing breaks in an embedded frame or an old browser. The HUD
+shows the tier and thread count either way.
 
 The threaded build needs the nightly toolchain, because `std` itself has to be
 recompiled with atomics. The script installs it on demand
@@ -111,14 +163,16 @@ both from a Service Worker and the app reloads once to pick them up. Inside an
 iframe this is skipped: isolation is a property of the whole frame tree, so an
 embedded page follows its host and runs single-threaded.
 
-Without `fetch:models` the app loads the models from Google's CDN on first run,
-so it works out of the box; fetching them locally just makes it work offline and
-start faster.
+### Troubleshooting
 
-If `npm install` fails with npm's own `Exit handler never called!`, that is a
-known npm bug rather than anything in this project. `npm cache clean --force`
-then retry; `npm install --ignore-scripts` followed by `npm run sync:mp` gets
-you moving in the meantime.
+| Symptom | Cause and fix |
+| --- | --- |
+| `npm install` fails with `Exit handler never called!` | A known npm bug, not this project. `npm cache clean --force` and retry; or `npm install --ignore-scripts` followed by `npm run sync:mp`. |
+| HUD stays on `1 thr` | The page is not cross-origin isolated. Open it in its own tab (not an iframe) and hard-reload once so the Service Worker installs. If `web/src/wasm-mt/` is missing, the nightly toolchain was unavailable — run `scripts/build-wasm.sh release --threads` and read its warning. |
+| Vite reports `Failed to resolve import "./wasm-mt/aether.js"` | The threaded build has not finished yet. It clears itself once `web/src/wasm-mt/` appears. |
+| Perception says it stood down / gestures do nothing | Inference is too slow for the device (or the models were blocked). The fluid still follows your motion through optical flow; try a smaller window or `?gpu=on`. |
+| Models load slowly on first run | Without `npm run fetch:models` they come from Google's CDN once; fetching them locally makes it work offline and start faster. |
+| Black canvas, no smoke | Check the browser console for a WebGL2/WebGPU error and try `?gpu=off`. On a headless or software GPU expect a low frame rate — see *Measured*. |
 
 ### Gestures
 
