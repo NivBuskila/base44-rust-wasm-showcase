@@ -14,6 +14,8 @@ const SEEN_KEY = 'aether.landing.seen';
 interface Capability {
   title: string;
   body: string;
+  /** The status tag on the capability's boot-log line. */
+  tag: 'ONLINE' | 'READY';
 }
 
 /** What a new user needs to know before their first gesture. */
@@ -21,20 +23,32 @@ const CAPABILITIES: Capability[] = [
   {
     title: 'Rust + WebAssembly fluid',
     body: 'A grid fluid solver and a particle pool step in WebAssembly, multithreaded where the browser allows it.',
+    tag: 'ONLINE',
   },
   {
     title: 'Hands and body as input',
     body: 'Webcam hand and pose tracking drives the field directly — no mouse, no controls to learn.',
+    tag: 'READY',
   },
   {
     title: 'Spells, combos and duets',
     body: 'Poses cast attract, push, shatter and release; chains and two-hand moves unlock bigger effects.',
+    tag: 'READY',
   },
   {
     title: 'WebGL2 or WebGPU',
     body: 'The renderer picks the best backend available and adapts quality live to hold a smooth frame rate.',
+    tag: 'ONLINE',
   },
 ];
+
+/** An element with a class and optional text. */
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
 
 /** True when this browser has not dismissed the overlay before. */
 function isFirstRun(): boolean {
@@ -59,42 +73,43 @@ function build(): HTMLElement {
   root.setAttribute('role', 'dialog');
   root.setAttribute('aria-label', 'Welcome to Aether');
 
-  const card = document.createElement('div');
-  card.className = 'landing-card';
+  // Header: the wordmark behind a pulsing status dot, and the engine state.
+  const head = el('div', 'landing-head');
+  const titleRow = el('div', 'landing-title');
+  titleRow.append(el('span', 'landing-dot'), el('h1', '', 'AETHER'));
+  head.append(titleRow, el('span', 'landing-state', 'ONLINE'));
 
-  const title = document.createElement('h1');
-  title.textContent = 'AETHER';
+  const lede = el(
+    'p',
+    'landing-lede',
+    'A gesture-driven fluid reality engine, running entirely in this browser. It is already simulating behind this panel.',
+  );
 
-  const lede = document.createElement('p');
-  lede.className = 'landing-lede';
-  lede.textContent =
-    'A gesture-driven fluid reality engine, running entirely in this browser. It is already simulating behind this panel.';
-
-  const grid = document.createElement('div');
-  grid.className = 'landing-grid';
+  // Each capability is one checked line of the boot log.
+  const grid = el('div', 'landing-grid');
   for (const cap of CAPABILITIES) {
-    const item = document.createElement('div');
-    item.className = 'landing-item';
-    const heading = document.createElement('h2');
-    heading.textContent = cap.title;
-    const body = document.createElement('p');
-    body.textContent = cap.body;
-    item.append(heading, body);
+    const item = el('div', 'landing-item');
+    const line = el('div', 'landing-line');
+    const name = el('div', 'landing-name');
+    name.append(el('span', 'landing-check', '✓'), el('span', '', cap.title));
+    line.append(name, el('span', 'landing-tag', cap.tag));
+    item.append(line, el('p', '', cap.body));
     grid.append(item);
   }
 
-  const enter = document.createElement('button');
+  const foot = el('div', 'landing-foot');
+  const enter = el('button', 'landing-enter', 'Enter the field');
   enter.type = 'button';
-  enter.className = 'landing-enter';
-  enter.textContent = 'Enter the field';
+  foot.append(
+    enter,
+    el(
+      'p',
+      'landing-note',
+      'Allow camera access to cast with your hands — without it Aether runs an ambient simulation. Press H any time for controls, T for the gesture tutorial.',
+    ),
+  );
 
-  const note = document.createElement('p');
-  note.className = 'landing-note';
-  note.textContent =
-    'Allow camera access to cast with your hands — without it Aether runs an ambient simulation. Press H any time for controls, T for the gesture tutorial.';
-
-  card.append(title, lede, grid, enter, note);
-  root.append(card);
+  root.append(head, lede, grid, foot);
   return root;
 }
 
