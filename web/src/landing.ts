@@ -1,48 +1,69 @@
 /**
- * The first-run welcome overlay.
+ * The intro console: the boot screen and the first-run welcome as one surface.
  *
- * It sits over the live simulation rather than in front of it: the engine is
- * already running and visible behind the panel, so the introduction shows the
- * thing it describes. Dismissal is remembered in `localStorage`
- * (`aether.landing.seen` — clear it to see the overlay again), and the overlay
- * removes itself from the DOM so it can never eat a pointer event that belongs
- * to the gesture surface.
+ * It mounts over `#boot` before anything loads and *is* the loading screen —
+ * each capability line flips from WAIT to its tag as the boot stage that
+ * proves it completes, so the introduction doubles as honest progress. Once
+ * the engine runs the backdrop turns translucent and the live field shows
+ * through; "Enter the field" then irises the console open from the button.
+ *
+ * First visit only (`aether.landing.seen` in `localStorage` — clear it to see
+ * it again): later visits get the compact header + log, which opens on its
+ * own when boot finishes. After it opens, `#boot` stays attached as
+ * `.done` (hidden, no pointer events) so it can never eat a gesture.
  */
 
 const SEEN_KEY = 'aether.landing.seen';
+/** Must match the iris animation's duration in `landing.css`. */
+const EXIT_MS = 1150;
+
+/** The boot stage that proves each capability. */
+export type BootStage = 'engine' | 'render' | 'input' | 'spells';
 
 interface Capability {
+  stage: BootStage;
   title: string;
   body: string;
-  /** The status tag on the capability's boot-log line. */
   tag: 'ONLINE' | 'READY';
 }
 
 /** What a new user needs to know before their first gesture. */
 const CAPABILITIES: Capability[] = [
   {
+    stage: 'engine',
     title: 'Rust + WebAssembly fluid',
     body: 'A grid fluid solver and a particle pool step in WebAssembly, multithreaded where the browser allows it.',
     tag: 'ONLINE',
   },
   {
+    stage: 'input',
     title: 'Hands and body as input',
     body: 'Webcam hand and pose tracking drives the field directly — no mouse, no controls to learn.',
     tag: 'READY',
   },
   {
+    stage: 'spells',
     title: 'Spells, combos and duets',
     body: 'Poses cast attract, push, shatter and release; chains and two-hand moves unlock bigger effects.',
     tag: 'READY',
   },
   {
+    stage: 'render',
     title: 'WebGL2 or WebGPU',
     body: 'The renderer picks the best backend available and adapts quality live to hold a smooth frame rate.',
     tag: 'ONLINE',
   },
 ];
 
-/** An element with a class and optional text. */
+export interface Intro {
+  status(text: string): void;
+  /** Marks a boot stage complete, lighting its capability line. */
+  stage(stage: BootStage): void;
+  /** The engine is running: arm the entry (or open, on a return visit). */
+  ready(): void;
+  fail(message: string): void;
+}
+
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, text?: string) {
   const node = document.createElement(tag);
   if (className) node.className = className;
@@ -50,7 +71,6 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, te
   return node;
 }
 
-/** True when this browser has not dismissed the overlay before. */
 function isFirstRun(): boolean {
   try {
     return localStorage.getItem(SEEN_KEY) !== '1';
@@ -67,74 +87,173 @@ function remember(): void {
   }
 }
 
-function build(): HTMLElement {
-  const root = document.createElement('div');
-  root.id = 'landing';
-  root.setAttribute('role', 'dialog');
-  root.setAttribute('aria-label', 'Welcome to Aether');
+const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  // Header: the wordmark behind a pulsing status dot, and the engine state.
+/** Decodes `text` into `node` through a short glyph scramble. */
+function scramble(node: HTMLElement, text: string, ms = 520): void {
+  if (reducedMotion()) {
+    node.textContent = text;
+    return;
+  }
+  const glyphs = '▚▞░▒▓<>/\\=+*#01';
+  // A timer, not rAF: a hidden tab pauses frames, and the label must still land.
+  const start = performance.now();
+  const timer = window.setInterval(() => {
+    const p = Math.min(1, (performance.now() - start) / ms);
+    const locked = Math.floor(p * text.length);
+    let out = text.slice(0, locked);
+    for (let i = locked; i < text.length; i++) {
+      out += text[i] === ' ' ? ' ' : glyphs[(Math.random() * glyphs.length) | 0];
+    }
+    node.textContent = out;
+    if (p === 1) window.clearInterval(timer);
+  }, 30);
+}
+
+/** Builds the console into `root` and returns the nodes the intro drives. */
+function build(root: HTMLElement, full: boolean) {
+  root.replaceChildren();
+  root.classList.toggle('compact', !full);
+
+  const frame = el('div', 'landing-frame');
+
   const head = el('div', 'landing-head');
   const titleRow = el('div', 'landing-title');
   titleRow.append(el('span', 'landing-dot'), el('h1', '', 'AETHER'));
-  head.append(titleRow, el('span', 'landing-state', 'ONLINE'));
+  const state = el('span', 'landing-state', 'BOOTING');
+  head.append(titleRow, state);
+  frame.append(head);
 
-  const lede = el(
-    'p',
-    'landing-lede',
-    'A gesture-driven fluid reality engine, running entirely in this browser. It is already simulating behind this panel.',
-  );
-
-  // Each capability is one checked line of the boot log.
-  const grid = el('div', 'landing-grid');
-  for (const cap of CAPABILITIES) {
-    const item = el('div', 'landing-item');
-    const line = el('div', 'landing-line');
-    const name = el('div', 'landing-name');
-    name.append(el('span', 'landing-check', '✓'), el('span', '', cap.title));
-    line.append(name, el('span', 'landing-tag', cap.tag));
-    item.append(line, el('p', '', cap.body));
-    grid.append(item);
+  const tags = new Map<BootStage, HTMLElement>();
+  if (full) {
+    frame.append(
+      el(
+        'p',
+        'landing-lede',
+        'A gesture-driven fluid reality engine, running entirely in this browser. It is coming alive behind this panel.',
+      ),
+    );
+    const grid = el('div', 'landing-grid');
+    for (const cap of CAPABILITIES) {
+      const item = el('div', 'landing-item');
+      const line = el('div', 'landing-line');
+      const name = el('div', 'landing-name');
+      name.append(el('span', 'landing-check', '✓'), el('span', '', cap.title));
+      const tag = el('span', 'landing-tag', 'WAIT');
+      tag.dataset.on = cap.tag;
+      tags.set(cap.stage, tag);
+      line.append(name, tag);
+      item.append(line, el('p', '', cap.body));
+      grid.append(item);
+    }
+    frame.append(grid);
   }
 
   const foot = el('div', 'landing-foot');
-  const enter = el('button', 'landing-enter', 'Enter the field');
-  enter.type = 'button';
-  foot.append(
-    enter,
-    el(
-      'p',
-      'landing-note',
-      'Allow camera access to cast with your hands — without it Aether runs an ambient simulation. Press H any time for controls, T for the gesture tutorial.',
-    ),
-  );
+  const log = el('p', 'landing-log');
+  const statusEl = el('span', '', 'waking the engine…');
+  statusEl.id = 'boot-status';
+  log.append(el('span', 'landing-prompt', '>'), statusEl, el('span', 'landing-caret'));
+  foot.append(log);
 
-  root.append(head, lede, grid, foot);
-  return root;
+  let enter: HTMLButtonElement | null = null;
+  let label: HTMLElement | null = null;
+  if (full) {
+    enter = el('button', 'landing-enter');
+    enter.type = 'button';
+    enter.disabled = true;
+    label = el('span', 'landing-enter-label', 'INITIALISING');
+    enter.append(label, el('span', 'landing-enter-arrow', '→'), el('span', 'landing-enter-sheen'));
+    foot.append(
+      enter,
+      el(
+        'p',
+        'landing-note',
+        'Allow camera access to cast with your hands — without it Aether runs an ambient simulation. Press H any time for controls, T for the gesture tutorial.',
+      ),
+    );
+  }
+  frame.append(foot);
+  root.append(frame);
+
+  return { state, tags, statusEl, enter, label };
 }
 
-/**
- * Shows the welcome overlay on a first visit; a later visit skips it unless
- * `force` is true.
- */
-export function showLanding(force = false): void {
-  if (!force && !isFirstRun()) return;
+/** Mounts the intro console into `#boot`, replacing its static fallback. */
+export function mountIntro(): Intro {
+  const root = document.getElementById('boot') ?? document.body.appendChild(el('div', ''));
+  root.id = 'boot';
+  const full = isFirstRun();
+  const ui = build(root, full);
+  let opened = false;
 
-  const root = build();
-  const dismiss = () => {
+  /** Irises the console open from (x, y), surging the stage behind it. */
+  const open = (x: number, y: number) => {
+    if (opened) return;
+    opened = true;
     remember();
-    root.classList.add('leaving');
-    root.addEventListener('transitionend', () => root.remove(), { once: true });
-    // Belt and braces: a skipped transition must not leave the overlay behind.
-    window.setTimeout(() => root.remove(), 600);
+    if (reducedMotion()) {
+      root.classList.add('done');
+      return;
+    }
+    root.style.setProperty('--ex', `${x}px`);
+    root.style.setProperty('--ey', `${y}px`);
+    const shock = el('div', 'landing-shock');
+    shock.style.setProperty('--ex', `${x}px`);
+    shock.style.setProperty('--ey', `${y}px`);
+    shock.append(el('span', ''), el('span', ''));
+    document.body.append(shock);
+    const stage = document.getElementById('stage');
+    stage?.classList.add('surge');
+    root.classList.add('entering');
+    window.setTimeout(() => {
+      root.classList.add('done');
+      root.classList.remove('entering');
+      shock.remove();
+      stage?.classList.remove('surge');
+    }, EXIT_MS);
   };
 
-  const enter = root.querySelector<HTMLButtonElement>('.landing-enter');
-  enter?.addEventListener('click', dismiss);
+  const openFromButton = () => {
+    if (!ui.enter || ui.enter.disabled) return;
+    const r = ui.enter.getBoundingClientRect();
+    open(r.left + r.width / 2, r.top + r.height / 2);
+  };
+
+  ui.enter?.addEventListener('click', openFromButton);
   root.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') dismiss();
+    if (event.key === 'Escape' && root.classList.contains('ready')) openFromButton();
   });
 
-  document.body.append(root);
-  enter?.focus();
+  return {
+    status(text) {
+      ui.statusEl.textContent = text;
+    },
+    stage(stage) {
+      const tag = ui.tags.get(stage);
+      if (!tag || tag.classList.contains('on')) return;
+      tag.classList.add('on');
+      tag.closest('.landing-item')?.classList.add('on');
+      scramble(tag, tag.dataset.on ?? 'ONLINE', 360);
+    },
+    ready() {
+      for (const stage of ui.tags.keys()) this.stage(stage);
+      root.classList.add('ready');
+      ui.state.textContent = 'ONLINE';
+      ui.statusEl.textContent = 'field stable — all systems nominal';
+      if (ui.enter && ui.label) {
+        ui.enter.disabled = false;
+        ui.enter.focus();
+        scramble(ui.label, 'ENTER THE FIELD');
+      } else {
+        window.setTimeout(() => open(innerWidth / 2, innerHeight / 2), 450);
+      }
+    },
+    fail(message) {
+      root.classList.add('failed');
+      ui.state.textContent = 'FAILED';
+      ui.statusEl.textContent = message;
+      if (ui.label) ui.label.textContent = 'OFFLINE';
+    },
+  };
 }
