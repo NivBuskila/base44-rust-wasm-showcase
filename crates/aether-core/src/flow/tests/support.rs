@@ -33,7 +33,12 @@ impl Texture {
             .sum();
         0.5 + 0.5 * s / self.norm
     }
-    pub(super) fn render(&self, w: usize, h: usize, map: impl Fn(f32, f32) -> (f32, f32)) -> Vec<u8> {
+    pub(super) fn render(
+        &self,
+        w: usize,
+        h: usize,
+        map: impl Fn(f32, f32) -> (f32, f32),
+    ) -> Vec<u8> {
         let mut out = vec![0u8; w * h];
         for y in 0..h {
             for x in 0..w {
@@ -60,9 +65,6 @@ impl Texture {
 pub(super) const W: usize = 128;
 pub(super) const H: usize = 72;
 pub(super) const DT: f32 = 1.0 / 30.0;
-
-//! Solver tests: ground-truth recovery, robustness, and the config surface.
-
 
 /// Deterministic band-limited test texture.
 ///

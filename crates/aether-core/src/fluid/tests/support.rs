@@ -65,7 +65,13 @@ pub(super) fn bar_mask(w: usize, h: usize, x0: usize, x1: usize) -> Grid {
 /// Deliberately naive pressure sweep, written from the 2-D indices with an
 /// explicit per-neighbour wall test. Independent of the shipping kernels,
 /// so agreement means something.
-pub(super) fn reference_pressure(p: &[f32], div: &[f32], solid: &[f32], w: usize, h: usize) -> Vec<f32> {
+pub(super) fn reference_pressure(
+    p: &[f32],
+    div: &[f32],
+    solid: &[f32],
+    w: usize,
+    h: usize,
+) -> Vec<f32> {
     let mut out = vec![0.0f32; w * h];
     let is_solid = |x: usize, y: usize| solid[y * w + x] >= 0.5;
     for y in 1..h - 1 {
