@@ -206,13 +206,36 @@ function build(root: HTMLElement, full: boolean) {
   frame.append(foot);
   root.append(frame);
 
-  return { state, tags, statusEl, enter, label };
+  return { state, tags, statusEl, enter, label, anchors: [titleRow, state, log] };
+}
+
+/**
+ * Runs `change` and glides each node from where it was to where it lands, so
+ * the loader's header and log move into the welcome instead of the console
+ * appearing a second time. Transform only, on the compositor.
+ */
+function glide(nodes: HTMLElement[], change: () => void): void {
+  const before = nodes.map((node) => node.getBoundingClientRect());
+  change();
+  if (reducedMotion()) return;
+  nodes.forEach((node, i) => {
+    const after = node.getBoundingClientRect();
+    const dx = before[i].left - after.left;
+    const dy = before[i].top - after.top;
+    if (!dx && !dy) return;
+    node.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], {
+      duration: 700,
+      easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
+    });
+  });
 }
 
 /** Mounts the intro console into `#boot`, replacing its static fallback. */
-export function mountIntro(): Intro {
+export function mountIntro(resumed = false): Intro {
   const root = document.getElementById('boot') ?? document.body.appendChild(el('div', ''));
   root.id = 'boot';
+  // The same console survived a reload: skip its entrance.
+  root.classList.toggle('resumed', resumed);
   const full = isFirstRun();
   const ui = build(root, full);
   let opened = false;
@@ -265,8 +288,10 @@ export function mountIntro(): Intro {
       ui.state.textContent = 'ONLINE';
       ui.statusEl.textContent = 'field stable — all systems nominal';
       if (ui.enter && ui.label) {
-        root.classList.remove('compact');
-        root.classList.add('revealed');
+        glide(ui.anchors, () => {
+          root.classList.remove('compact');
+          root.classList.add('revealed');
+        });
         // Each line checks in just after its card lands (see the CSS delays).
         ui.tags.forEach((tag, i) => {
           window.setTimeout(() => {
