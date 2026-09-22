@@ -5,8 +5,6 @@
  * pieces up in the right order and reports a failure to the boot screen.
  */
 
-import './styles.css';
-
 import { App } from './app';
 import { ensureCrossOriginIsolation, resumedFromIsolationReload } from './cross-origin-isolation';
 import { loadEngine } from './engine-loader';
