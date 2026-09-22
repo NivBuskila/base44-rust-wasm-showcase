@@ -1,0 +1,116 @@
+/* Landing (first-run welcome) -------------------------------------------- */
+
+/* Over the stage, below boot (z 100), so a failed boot is never hidden behind
+   the welcome panel. */
+#landing {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: radial-gradient(circle at 50% 40%, rgba(4, 6, 14, 0.72) 0%, rgba(2, 3, 8, 0.9) 75%);
+  backdrop-filter: blur(3px);
+  transition: opacity 420ms ease;
+}
+
+#landing.leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.landing-card {
+  width: min(680px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 28px 30px 24px;
+  border: 1px solid rgba(53, 214, 255, 0.18);
+  border-radius: 14px;
+  background: rgba(6, 9, 18, 0.82);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+  text-align: center;
+}
+
+.landing-card h1 {
+  margin: 0 0 12px;
+  font-size: clamp(20px, 5vw, 28px);
+  font-weight: 300;
+  letter-spacing: 0.5em;
+  /* Optically centred despite the trailing letter-space, like the boot title. */
+  text-indent: 0.5em;
+  color: var(--ink);
+  text-shadow: 0 0 40px rgba(53, 214, 255, 0.28);
+}
+
+.landing-lede {
+  margin: 0 auto 22px;
+  max-width: 52ch;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--dim);
+}
+
+.landing-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  text-align: left;
+}
+
+.landing-item {
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.landing-item h2 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.landing-item p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--dim);
+}
+
+.landing-enter {
+  margin: 22px 0 0;
+  padding: 10px 26px;
+  border: 1px solid rgba(53, 214, 255, 0.45);
+  border-radius: 999px;
+  background: rgba(53, 214, 255, 0.12);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.landing-enter:hover {
+  background: rgba(53, 214, 255, 0.22);
+  border-color: rgba(53, 214, 255, 0.7);
+}
+
+.landing-note {
+  margin: 16px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--dim);
+  opacity: 0.8;
+}
+
+@media (max-width: 560px) {
+  .landing-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
