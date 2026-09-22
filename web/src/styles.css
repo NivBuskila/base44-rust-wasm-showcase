@@ -35,7 +35,6 @@
 @import './styles/landing.css';
 
 @import './styles/focus.css';
-@import './styles/boot.css';
 
 /* Last on purpose: these override the sections above. */
 @import './styles/responsive.css';

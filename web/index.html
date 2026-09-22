@@ -22,13 +22,9 @@
     <!-- Populated by hud.ts. Empty here so the HUD owns its own markup. -->
     <div id="hud"></div>
 
-    <!-- Shown before WASM and the models finish loading, and on fatal errors. -->
-    <div id="boot" role="status" aria-live="polite">
-      <div class="boot-inner">
-        <h1>AETHER</h1>
-        <p id="boot-status">waking the engine…</p>
-      </div>
-    </div>
+    <!-- The intro console (landing.ts): boot progress, first-run welcome and
+         fatal errors in one surface. Empty until the module mounts it. -->
+    <div id="boot" role="dialog" aria-label="Welcome to Aether" aria-live="polite"></div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>

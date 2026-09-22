@@ -10,7 +10,7 @@ import './styles.css';
 import { App } from './app';
 import { ensureCrossOriginIsolation } from './cross-origin-isolation';
 import { loadEngine } from './engine-loader';
-import { showLanding } from './landing';
+import { mountIntro } from './landing';
 import { clearQaSession, readQaSession, type QaSession } from './qa-recorder';
 import { createRenderer } from './gpu';
 import { assertLayout } from './constants';
@@ -45,16 +45,14 @@ declare global {
 }
 
 async function boot(): Promise<void> {
-  const bootEl = document.getElementById('boot');
-  const statusEl = document.getElementById('boot-status');
-  const setStatus = (text: string) => {
-    if (statusEl) statusEl.textContent = text;
-  };
+  // One console for the whole boot: it is the loading screen and, on a first
+  // visit, the welcome that opens onto the running field.
+  const intro = mountIntro();
+  const setStatus = (text: string) => intro.status(text);
 
   const fail = (message: string, err?: unknown) => {
     console.error(`[aether] ${message}`, err);
-    if (statusEl) statusEl.textContent = message;
-    bootEl?.classList.add('failed');
+    intro.fail(message);
   };
 
   try {
@@ -65,12 +63,14 @@ async function boot(): Promise<void> {
     const loaded = await loadEngine(setStatus);
     const engine = new loaded.module.AetherEngine(SEED);
     assertLayout(engine.layout());
+    intro.stage('engine');
 
     const canvas = document.getElementById('stage');
     if (!(canvas instanceof HTMLCanvasElement)) throw new Error('#stage canvas missing');
 
     setStatus('starting the renderer…');
     const { renderer } = await createRenderer(canvas);
+    intro.stage('render');
 
     const app = new App(engine, loaded.memory, renderer, loaded.tier);
     window.__aether = {
@@ -92,10 +92,7 @@ async function boot(): Promise<void> {
     window.addEventListener('pagehide', () => app.flushQaSession());
 
     await app.start(setStatus);
-    bootEl?.classList.add('done');
-    // After boot only: the welcome panel introduces an engine that is already
-    // running behind it.
-    showLanding();
+    intro.ready();
   } catch (err) {
     fail(
       err instanceof Error ? `Aether failed to start: ${err.message}` : 'Aether failed to start.',
