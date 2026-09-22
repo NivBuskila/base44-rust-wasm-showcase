@@ -8,7 +8,7 @@
 import './styles.css';
 
 import { App } from './app';
-import { ensureCrossOriginIsolation } from './cross-origin-isolation';
+import { ensureCrossOriginIsolation, resumedFromIsolationReload } from './cross-origin-isolation';
 import { loadEngine } from './engine-loader';
 import { mountIntro } from './landing';
 import { clearQaSession, readQaSession, type QaSession } from './qa-recorder';
@@ -47,7 +47,8 @@ declare global {
 async function boot(): Promise<void> {
   // One console for the whole boot: it is the loading screen and, on a first
   // visit, the welcome that opens onto the running field.
-  const intro = mountIntro();
+  // After the one isolation reload the loader continues instead of re-entering.
+  const intro = mountIntro(resumedFromIsolationReload());
   const setStatus = (text: string) => intro.status(text);
 
   const fail = (message: string, err?: unknown) => {

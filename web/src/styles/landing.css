@@ -72,9 +72,21 @@
   display: none;
 }
 
-#boot.revealed .landing-frame {
-  animation-name: landing-unfold;
+/* No second entrance: the header and log glide into place (`glide` in
+   `landing.ts`) and only the parts that were not there fade in. */
+#boot.resumed .landing-frame {
+  animation: none;
 }
+
+#boot.revealed .landing-lede,
+#boot.revealed .landing-enter,
+#boot.revealed .landing-note {
+  animation: landing-reveal 650ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+#boot.revealed .landing-lede { animation-delay: 120ms; }
+#boot.revealed .landing-enter { animation-delay: 860ms; }
+#boot.revealed .landing-note { animation-delay: 960ms; }
 
 .landing-head {
   display: flex;
@@ -606,9 +618,8 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes landing-unfold {
-  from { opacity: 0; transform: scale(0.97); filter: blur(6px); }
-  to { opacity: 1; transform: scale(1); filter: blur(0); }
+@keyframes landing-reveal {
+  from { opacity: 0; transform: translateY(12px); }
 }
 
 @keyframes landing-row-in {
