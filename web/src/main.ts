@@ -10,6 +10,7 @@ import './styles.css';
 import { App } from './app';
 import { ensureCrossOriginIsolation } from './cross-origin-isolation';
 import { loadEngine } from './engine-loader';
+import { showLanding } from './landing';
 import { clearQaSession, readQaSession, type QaSession } from './qa-recorder';
 import { createRenderer } from './gpu';
 import { assertLayout } from './constants';
@@ -92,6 +93,9 @@ async function boot(): Promise<void> {
 
     await app.start(setStatus);
     bootEl?.classList.add('done');
+    // After boot only: the welcome panel introduces an engine that is already
+    // running behind it.
+    showLanding();
   } catch (err) {
     fail(
       err instanceof Error ? `Aether failed to start: ${err.message}` : 'Aether failed to start.',
