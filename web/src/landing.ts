@@ -100,20 +100,39 @@ function scramble(node: HTMLElement, text: string, ms = 520): void {
   }, 30);
 }
 
-/** The field lens: the glow and ripples track the pointer, and the key leans toward it. */
+/**
+ * The field lens: the glow and ripples track the pointer, and the key leans
+ * toward it. The rect is measured once on entry (the lean itself would skew
+ * a live read) and writes are batched to one per frame.
+ */
 function magnetise(button: HTMLButtonElement): void {
-  button.addEventListener('pointermove', (event) => {
-    const r = button.getBoundingClientRect();
-    if (!r.width || !r.height) return;
-    const x = (event.clientX - r.left) / r.width;
-    const y = (event.clientY - r.top) / r.height;
+  let rect: DOMRect | null = null;
+  let frame = 0;
+  let x = 0.5;
+  let y = 0.5;
+
+  const write = () => {
+    frame = 0;
     button.style.setProperty('--mx', `${x * 100}%`);
     button.style.setProperty('--my', `${y * 100}%`);
     if (reducedMotion()) return;
     button.style.setProperty('--tx', `${(x - 0.5) * 14}px`);
     button.style.setProperty('--ty', `${(y - 0.5) * 10}px`);
+  };
+
+  button.addEventListener('pointerenter', () => {
+    rect = button.getBoundingClientRect();
+  });
+  button.addEventListener('pointermove', (event) => {
+    if (!rect || !rect.width || !rect.height) return;
+    x = (event.clientX - rect.left) / rect.width;
+    y = (event.clientY - rect.top) / rect.height;
+    if (!frame) frame = requestAnimationFrame(write);
   });
   button.addEventListener('pointerleave', () => {
+    rect = null;
+    cancelAnimationFrame(frame);
+    frame = 0;
     for (const key of ['--mx', '--my', '--tx', '--ty']) button.style.removeProperty(key);
   });
 }
@@ -174,7 +193,7 @@ function build(root: HTMLElement, full: boolean) {
     label = el('span', 'landing-enter-label', 'INITIALISING');
     const arrow = el('span', 'landing-enter-arrow');
     arrow.append(el('span', '', '›'), el('span', '', '›'), el('span', '', '›'));
-    enter.append(label, arrow, el('span', 'landing-enter-sheen'));
+    enter.append(el('span', 'landing-enter-ripples'), label, arrow, el('span', 'landing-enter-sheen'));
     foot.append(
       enter,
       el(
