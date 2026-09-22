@@ -1,0 +1,70 @@
+/* Perception ------------------------------------------------------------- */
+
+.hud-percep {
+  position: relative;
+  display: grid;
+  grid-template-columns: 10px 1fr;
+  align-items: baseline;
+  gap: 2px 7px;
+  margin: 0;
+  padding: 9px 13px 11px;
+  border-top: 1px solid var(--edge);
+}
+
+/* Tells you the body above is scrollable without adding a widget to click. */
+.hud-percep::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 18px;
+  background: linear-gradient(rgba(6, 9, 16, 0), rgba(6, 9, 16, 0.85));
+  pointer-events: none;
+}
+
+.hud-percep .dot {
+  grid-row: 1;
+  width: 6px;
+  height: 6px;
+  margin-bottom: 1px;
+  border-radius: 50%;
+  background: var(--faint);
+  box-shadow: 0 0 7px currentColor;
+}
+
+.hud-percep b {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--ink);
+}
+
+.hud-percep span {
+  grid-column: 2;
+  font-size: 8.5px;
+  line-height: 1.5;
+  color: var(--faint);
+}
+
+.hud-percep[data-tone='ok'] .dot {
+  background: var(--accent);
+  color: rgba(53, 214, 255, 0.55);
+}
+
+.hud-percep[data-tone='warn'] .dot {
+  background: var(--warn);
+  color: rgba(255, 198, 92, 0.5);
+}
+
+.hud-percep[data-tone='wait'] .dot {
+  background: var(--dim);
+  color: transparent;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+

@@ -45,6 +45,7 @@ const MAX_EVENTS = 60;
 /** Sampled frame rates below this are what a tester perceives as stutter. */
 const SLOW_FRAME_FPS = 50;
 
+import { gpuErrorLog } from './gpu/error-log';
 import type { EngineTier } from './engine-loader';
 import type { PerceptionStatus, ViewMode } from './types';
 
@@ -116,6 +117,8 @@ export interface QaSession {
   perceptionHz: { median: number; min: number };
   qualityTier: { start: number; worst: number; end: number };
   particleCount: { min: number; max: number; end: number };
+  /** WebGPU errors this tab hit, each with its repeat count. Empty is healthy. */
+  gpuErrors: string[];
   events: QaEvent[];
 }
 
@@ -266,6 +269,7 @@ export class QaRecorder {
         max: this.particlesMax,
         end: last?.particleCount ?? 0,
       },
+      gpuErrors: gpuErrorLog(),
       events: this.events,
     };
   }

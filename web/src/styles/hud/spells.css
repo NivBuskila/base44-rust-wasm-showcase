@@ -1,0 +1,114 @@
+/* Spells ----------------------------------------------------------------- */
+
+.h-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.h-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px 7px;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: rgba(7, 10, 18, 0.5);
+  transition:
+    border-color 180ms ease,
+    background 180ms ease;
+}
+
+.h-card span {
+  font-size: 8px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.h-card b {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--faint);
+  transition: color 180ms ease;
+}
+
+.h-card[data-state='idle'] b {
+  color: var(--dim);
+}
+
+.h-card[data-state='cast'] {
+  border-color: rgba(53, 214, 255, 0.45);
+  background: var(--accent-soft);
+}
+
+.h-card[data-state='cast'] b {
+  color: var(--accent);
+}
+
+.g-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 1px;
+}
+
+.g-row {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  color: var(--dim);
+  transition:
+    background 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.g-row svg {
+  width: 16px;
+  height: 16px;
+  opacity: 0.75;
+}
+
+.g-txt {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.g-txt b {
+  font-size: 10px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+.g-txt i {
+  font-size: 8.5px;
+  font-style: normal;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.g-row[data-on='1'] {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 1px 0 0 var(--accent);
+}
+
+.g-row[data-on='1'] svg {
+  opacity: 1;
+}
+
+.g-row[data-on='1'] .g-txt i {
+  color: rgba(53, 214, 255, 0.7);
+}
+
