@@ -5,13 +5,17 @@
  * wordmark and a live boot log). Once the engine runs the backdrop turns
  * translucent and, on a first visit, the console unfolds into the welcome —
  * the capability lines check in one by one and "Enter the field" irises it
- * open from the button.
+ * open from the button. With a camera running, holding a hand up fills the
+ * button and opens it too (`landing-hand.ts`). The HUD's first-run moments
+ * wait for `onOpen`, so nothing plays unseen behind the console.
  *
  * First visit only (`aether.landing.seen` in `localStorage` — clear it to see
  * it again): later visits stay compact and open on their own when boot
  * finishes. After it opens, `#boot` stays attached as
  * `.done` (hidden, no pointer events) so it can never eat a gesture.
  */
+
+import { watchHand, type HandWatch } from './landing-hand';
 
 const SEEN_KEY = 'aether.landing.seen';
 /** Must match the iris animation's duration in `landing.css`. */
@@ -47,10 +51,17 @@ const CAPABILITIES: Capability[] = [
   },
 ];
 
+export interface ReadyOptions {
+  /** Hands in view, when a camera is running: lets a raised hand enter. */
+  hands?: () => number;
+  /** The console has fully opened onto the stage. */
+  onOpen?: () => void;
+}
+
 export interface Intro {
   status(text: string): void;
   /** The engine is running: unfold the welcome (or open, on a return visit). */
-  ready(): void;
+  ready(options?: ReadyOptions): void;
   fail(message: string): void;
 }
 
@@ -193,9 +204,17 @@ function build(root: HTMLElement, full: boolean) {
     label = el('span', 'landing-enter-label', 'INITIALISING');
     const arrow = el('span', 'landing-enter-arrow');
     arrow.append(el('span', '', '›'), el('span', '', '›'), el('span', '', '›'));
-    enter.append(el('span', 'landing-enter-ripples'), label, arrow, el('span', 'landing-enter-sheen'));
+    enter.append(
+      el('span', 'landing-enter-charge'),
+      el('span', 'landing-enter-ripples'),
+      label,
+      arrow,
+      el('span', 'landing-enter-sheen'),
+    );
+    const cta = el('div', 'landing-cta');
+    cta.append(enter, el('span', 'landing-hand', 'or raise a hand to the camera'));
     foot.append(
-      enter,
+      cta,
       el(
         'p',
         'landing-note',
@@ -239,14 +258,18 @@ export function mountIntro(resumed = false): Intro {
   const full = isFirstRun();
   const ui = build(root, full);
   let opened = false;
+  let onOpen: (() => void) | undefined;
+  let watch: HandWatch | null = null;
 
   /** Irises the console open from (x, y), surging the stage behind it. */
   const open = (x: number, y: number) => {
     if (opened) return;
     opened = true;
+    watch?.stop();
     remember();
     if (reducedMotion()) {
       root.classList.add('done');
+      onOpen?.();
       return;
     }
     root.style.setProperty('--ex', `${x}px`);
@@ -264,6 +287,7 @@ export function mountIntro(resumed = false): Intro {
       root.classList.remove('entering');
       shock.remove();
       stage?.classList.remove('surge');
+      onOpen?.();
     }, EXIT_MS);
   };
 
@@ -271,6 +295,23 @@ export function mountIntro(resumed = false): Intro {
     if (!ui.enter || ui.enter.disabled) return;
     const r = ui.enter.getBoundingClientRect();
     open(r.left + r.width / 2, r.top + r.height / 2);
+  };
+
+  /** A held hand fills the button and opens it — the first gesture is the way in. */
+  const watchForHand = (hands: () => number) => {
+    const fill = root.querySelector<HTMLElement>('.landing-enter-charge');
+    const hint = root.querySelector<HTMLElement>('.landing-hand');
+    if (!fill || !hint) return;
+    root.classList.add('hand-ready');
+    watch = watchHand(
+      hands,
+      (charge, seen) => {
+        fill.style.setProperty('--charge', String(charge));
+        root.classList.toggle('hand-seen', seen);
+        hint.textContent = seen ? 'hand seen — hold it there…' : 'or raise a hand to the camera';
+      },
+      openFromButton,
+    );
   };
 
   if (ui.enter) magnetise(ui.enter);
@@ -283,7 +324,8 @@ export function mountIntro(resumed = false): Intro {
     status(text) {
       ui.statusEl.textContent = text;
     },
-    ready() {
+    ready(options = {}) {
+      onOpen = options.onOpen;
       root.classList.add('ready');
       ui.state.textContent = 'ONLINE';
       ui.statusEl.textContent = 'field stable — all systems nominal';
@@ -303,6 +345,7 @@ export function mountIntro(resumed = false): Intro {
         ui.enter.disabled = false;
         ui.enter.focus();
         scramble(ui.label, 'ENTER THE FIELD');
+        if (options.hands) watchForHand(options.hands);
       } else {
         window.setTimeout(() => open(innerWidth / 2, innerHeight / 2), 450);
       }
