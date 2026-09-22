@@ -1,0 +1,240 @@
+/* ------------------------------------------------------------------ the HUD */
+
+#hud {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+/* `H` takes the panel and the hint out — visibility, not just opacity, so a
+   hidden panel cannot be tabbed into — and deliberately leaves the help sheet
+   openable, or `?` would have nothing to show. */
+#hud.is-hidden .hud-panel,
+#hud.is-hidden .hud-hint {
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 240ms ease,
+    visibility 0s linear 240ms;
+}
+
+.hud-panel {
+  position: absolute;
+  top: max(var(--gut), env(safe-area-inset-top));
+  left: max(var(--gut), env(safe-area-inset-left));
+  width: 316px;
+  max-height: calc(100dvh - 2 * var(--gut));
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(170deg, var(--panel-a), var(--panel-b));
+  border: 1px solid var(--edge);
+  border-radius: var(--r);
+  box-shadow:
+    0 24px 60px -28px rgba(0, 0, 0, 0.95),
+    inset 0 1px 0 rgba(255, 255, 255, 0.045);
+  backdrop-filter: blur(16px) saturate(1.25);
+  -webkit-backdrop-filter: blur(16px) saturate(1.25);
+  pointer-events: auto;
+  overflow: hidden;
+  transition:
+    width 200ms ease,
+    background 200ms ease,
+    opacity 240ms ease;
+}
+
+/* Collapsed is a chip, not a narrow panel: fps, the two icon buttons, and the
+   ambient badge if the engine is driving itself. Anything else at this size
+   overlaps, and the point of the state is to get out of the way. */
+#hud.is-collapsed .hud-panel {
+  width: auto;
+  background: linear-gradient(170deg, rgba(11, 16, 26, 0.6), rgba(6, 9, 16, 0.55));
+}
+
+#hud.is-collapsed .hud-mark {
+  display: none;
+}
+
+/* Header ------------------------------------------------------------------ */
+
+.hud-head {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 0 10px;
+  padding: 10px 11px 10px 13px;
+}
+
+.hud-mark {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.hud-mark b {
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.34em;
+  color: var(--ink);
+}
+
+.hud-mark span {
+  font-size: 8.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hud-fps {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+}
+
+.hud-fps b {
+  font-size: 19px;
+  font-weight: 400;
+  line-height: 1;
+  color: var(--accent);
+  transition: color 200ms ease;
+}
+
+.hud-fps b[data-tone='warn'] {
+  color: var(--warn);
+}
+
+.hud-fps b[data-tone='over'] {
+  color: var(--over);
+}
+
+.hud-fps span {
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  color: var(--faint);
+}
+
+.hud-acts {
+  display: flex;
+  gap: 4px;
+}
+
+.ico-btn {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: transparent;
+  border: 1px solid var(--edge);
+  border-radius: 7px;
+  color: var(--dim);
+  cursor: pointer;
+  pointer-events: auto;
+  transition:
+    color 140ms ease,
+    border-color 140ms ease,
+    background 140ms ease;
+}
+
+.ico-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.ico-btn:hover {
+  color: var(--ink);
+  border-color: var(--edge-hi);
+  background: var(--well);
+}
+
+.chev-u {
+  display: none;
+}
+
+#hud.is-collapsed .chev-u {
+  display: inline;
+}
+
+#hud.is-collapsed .chev-d {
+  display: none;
+}
+
+/* A second header row rather than an absolute overlay: the badge only exists
+   sometimes, and nothing else in the header may move when it appears. */
+.hud-badge {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  margin-top: 2px;
+  font-size: 8px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--magenta);
+}
+
+.hud-badge::before {
+  content: '';
+  display: inline-block;
+  width: 4px;
+  height: 4px;
+  margin-right: 6px;
+  vertical-align: 1px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+}
+
+.hud-badge.is-engine {
+  grid-row: 3;
+  color: var(--accent);
+}
+
+/* Body ------------------------------------------------------------------- */
+
+.hud-body {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* The body sets `touch-action: none` for the gesture surface; the panel is
+     the one place a drag should still scroll. */
+  touch-action: pan-y;
+  scrollbar-width: thin;
+  scrollbar-color: var(--edge-hi) transparent;
+}
+
+.hud-body::-webkit-scrollbar {
+  width: 6px;
+}
+
+.hud-body::-webkit-scrollbar-thumb {
+  background: var(--edge);
+  border-radius: 3px;
+}
+
+.hud-sec {
+  padding: 10px 13px 12px;
+  border-top: 1px solid var(--edge);
+}
+
+.hud-sec h2 {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 8.5px;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.hud-sec h2 span {
+  letter-spacing: 0.08em;
+  color: rgba(93, 112, 137, 0.72);
+  text-transform: none;
+}
+

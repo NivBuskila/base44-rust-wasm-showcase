@@ -1,0 +1,56 @@
+:root {
+  --ink: #e7f1fb;
+  --dim: #92a6bf;
+  --faint: #5d7089;
+  --bg: #04050a;
+
+  --panel-a: rgba(11, 16, 26, 0.82);
+  --panel-b: rgba(6, 9, 16, 0.78);
+  --edge: rgba(126, 166, 214, 0.16);
+  --edge-hi: rgba(126, 166, 214, 0.32);
+  --well: rgba(126, 166, 214, 0.1);
+
+  --accent: #35d6ff;
+  --accent-soft: rgba(53, 214, 255, 0.14);
+  --magenta: #ff5ea8;
+  --warn: #ffc65c;
+  --over: #ff6b8b;
+
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+  --r: 12px;
+  --gut: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  /* Nothing here is meant to be selected or long-pressed; the whole surface
+     is a gesture target. */
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#stage {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+

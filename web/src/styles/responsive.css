@@ -1,0 +1,58 @@
+/* Responsive ------------------------------------------------------------- */
+
+@media (max-width: 620px) {
+  :root {
+    --gut: 8px;
+  }
+
+  .hud-panel {
+    width: auto;
+    right: max(var(--gut), env(safe-area-inset-right));
+    /* The fluid is the point. On a phone the panel gets a little over half the
+       screen and scrolls; it never becomes the whole view. */
+    max-height: min(calc(100dvh - 2 * var(--gut) - 74px), 58dvh);
+  }
+
+  #hud.is-collapsed .hud-panel {
+    width: auto;
+    right: auto;
+  }
+
+  .c-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .help-cols {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+
+  .hud-hint {
+    bottom: max(14px, env(safe-area-inset-bottom));
+    gap: 7px;
+  }
+
+  .hud-hint > b {
+    font-size: 11px;
+    letter-spacing: 0.26em;
+  }
+
+  /* Seven chips wrap to four rows on a phone and cover the simulation, and a
+     clipped list looks broken rather than terse. The panel and the help sheet
+     carry the full legend; the hint just points at them. */
+  .hud-hint .chips {
+    display: none;
+  }
+}
+
+/* A short viewport (phone in landscape) has no room for the legend. */
+@media (max-height: 520px) {
+  .hud-panel {
+    max-height: calc(100dvh - 2 * var(--gut));
+  }
+
+  .hud-hint .chips {
+    display: none;
+  }
+}
+
