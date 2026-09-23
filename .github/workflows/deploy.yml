@@ -1,0 +1,51 @@
+name: Deploy (Cloudflare Pages)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-pages
+  cancel-in-progress: false
+
+env:
+  PAGES_PROJECT: ${{ vars.CLOUDFLARE_PAGES_PROJECT || 'aether' }}
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+      # Must match rust-toolchain.toml (see ci.yml).
+      - uses: dtolnay/rust-toolchain@1.90.0
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack@0.13.1
+      - run: bash scripts/build-wasm.sh release
+      - run: bash scripts/build-wasm.sh release --threads
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # `npm ci` vendors the MediaPipe runtime (postinstall); the models are
+      # self-hosted too so the app does not depend on Google's CDN.
+      - run: npm ci
+        working-directory: web
+      - run: npm run fetch:models
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Creates the Pages project on the first run; fails harmlessly afterwards.
+          preCommands: npx wrangler pages project create ${{ env.PAGES_PROJECT }} --production-branch=main || true
+          command: pages deploy web/dist --project-name=${{ env.PAGES_PROJECT }} --branch=main
