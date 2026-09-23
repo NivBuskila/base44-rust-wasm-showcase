@@ -62,8 +62,10 @@ if (!importScriptsWorks()) {
       // Indirect eval, so the script's top-level declarations land on the global
       // object the way a classic script's would. A direct `eval` would scope
       // them to this module and reproduce the bug this file exists to fix.
-      const globalEval = eval;
-      globalEval(request.responseText);
+      // Called as a property on purpose: the production minifier inlined the
+      // old `const globalEval = eval; globalEval(...)` back into a direct
+      // `eval(...)`, which only broke the deployed build.
+      globalThis.eval(request.responseText);
     }
   };
 
