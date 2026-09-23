@@ -22,21 +22,34 @@
   /* A soft pool of shade keeps the centred text legible once the backdrop
      clears; only the flat colour below it animates. */
   background-image: radial-gradient(ellipse at 50% 50%, rgba(5, 7, 13, 0.7), transparent 62%);
-  background-color: #05070d;
+  background-color: rgba(5, 7, 13, 0.3);
   color: #d7e4ef;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  transition: background-color 2600ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* The opaque backdrop is its own layer so clearing it is an opacity fade on
+   the compositor, not a full-screen repaint every frame while the engine
+   wakes. */
+#boot::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: #05070d;
+  pointer-events: none;
+  transition: opacity 2600ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* The engine is up: the backdrop slowly clears and the field wakes behind
    the console. */
-#boot.ready {
-  background-color: rgba(5, 7, 13, 0.3);
+#boot.ready::after {
+  opacity: 0;
 }
 
+/* `display: none` (not `visibility`) so every looping animation inside stops
+   for the rest of the session instead of ticking beside the engine. */
 #boot.done {
-  visibility: hidden;
-  pointer-events: none;
+  display: none;
 }
 
 /* The inset hairline frame. */
@@ -385,6 +398,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
+  left: 0;
   width: 30%;
   background: linear-gradient(90deg, transparent, rgba(53, 214, 255, 0.18), transparent);
   animation: landing-sheen 1.7s ease-in-out infinite;
@@ -562,8 +576,9 @@
 }
 
 @keyframes landing-sheen {
-  0% { left: -45%; }
-  60%, 100% { left: 110%; }
+  /* In the sweep's own widths (30% of the pill): -45% → 110% of the pill. */
+  0% { transform: translateX(-150%); }
+  60%, 100% { transform: translateX(366.67%); }
 }
 
 @keyframes landing-boot-in {
