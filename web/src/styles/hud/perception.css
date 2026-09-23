@@ -48,7 +48,7 @@
 
 .hud-percep[data-tone='ok'] .dot {
   background: var(--accent);
-  color: rgba(53, 214, 255, 0.55);
+  color: rgba(var(--accent-rgb), 0.55);
 }
 
 .hud-percep[data-tone='warn'] .dot {
