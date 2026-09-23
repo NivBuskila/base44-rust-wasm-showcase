@@ -192,8 +192,10 @@ export class App {
     t.begin(this.clock.outside(t.frameMs));
 
     t.measure('cameraMs', () => {
-      this.pumpCamera(nowMs);
+      // Start the worker's asynchronous bitmap decode before the synchronous
+      // luma readback; both inputs still reach the engine before step().
       this.perception.pump(nowMs);
+      this.pumpCamera(nowMs);
     });
     t.measure('stepMs', () => this.engine.step(simDt));
 
