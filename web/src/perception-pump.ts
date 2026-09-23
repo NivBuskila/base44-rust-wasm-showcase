@@ -69,6 +69,8 @@ export interface PerceptionPumpDeps {
 export class PerceptionPump {
   private source: PerceptionSource | null = null;
   private closed = false;
+  private fallingBack = false;
+  private sourceVersion = 0;
   status: PerceptionStatus = { kind: 'loading' };
   /**
    * The most recent packed hand buffer, kept for the renderer's landmark
@@ -122,6 +124,10 @@ export class PerceptionPump {
   pump(nowMs: number): void {
     const video = this.deps.frame();
     if (!this.source || !video) return;
+    if (this.offThread && this.source.status.kind === 'unavailable') {
+      void this.fallback(this.source.status.reason);
+      return;
+    }
 
     // Off-thread perception paces itself: the worker takes one frame at a time,
     // and `process` only decodes a bitmap and hands back whatever has already
@@ -141,11 +147,27 @@ export class PerceptionPump {
     try {
       result = this.source.process(video, nowMs);
     } catch (err) {
-      // One bad inference must not kill the loop; drop perception instead.
-      console.error('[aether] perception threw, disabling it', err);
-      this.status = { kind: 'unavailable', reason: 'Inference failed.' };
-      this.source.close();
-      this.source = null;
+      if (this.offThread) {
+        void this.fallback(String(err));
+      } else {
+        console.error('[aether] perception threw, disabling it', err);
+        this.status = { kind: 'unavailable', reason: 'Inference failed.' };
+        this.source.close();
+        this.source = null;
+        this.hands = null;
+        this.deps.engine.clear_perception();
+      }
+      return;
+    }
+    if (this.source.status.kind === 'unavailable') {
+      if (this.offThread) void this.fallback(this.source.status.reason);
+      else {
+        this.status = this.source.status;
+        this.source.close();
+        this.source = null;
+        this.hands = null;
+        this.deps.engine.clear_perception();
+      }
       return;
     }
 
@@ -233,15 +255,48 @@ export class PerceptionPump {
    * the inline path stays as the fallback rather than the default: same models,
    * same results, just paid for out of the frame budget.
    */
-  private async build(): Promise<PerceptionSource> {
-    const offloaded = new WorkerPerception();
+  private async build(): Promise<PerceptionSource | null> {
+    let offloaded: WorkerPerception | null = null;
     try {
+      offloaded = new WorkerPerception();
       await offloaded.init();
       return offloaded;
     } catch (err) {
       console.warn('[aether] perception worker unusable, running inference inline', err);
-      offloaded.close();
-      return this.closed ? offloaded : new MediaPipePerception();
+      offloaded?.close();
+      return this.closed ? null : new MediaPipePerception();
+    }
+  }
+
+  /** A worker failure after boot gets the same inline fallback as a boot failure. */
+  private async fallback(reason: string): Promise<void> {
+    if (this.closed || this.fallingBack || !this.offThread) return;
+    console.warn('[aether] perception worker unusable, running inference inline', reason);
+    this.fallingBack = true;
+    this.source?.close();
+    this.source = null;
+    this.offThread = false;
+    this.hands = null;
+    this.deps.engine.clear_perception();
+    this.status = { kind: 'loading' };
+    const version = this.sourceVersion;
+    const inline = new MediaPipePerception();
+    try {
+      await inline.init();
+      if (this.closed || this.sourceVersion !== version || this.source) {
+        inline.close();
+        return;
+      }
+      this.source = inline;
+      this.status = inline.status;
+      this.lastMs = 0;
+    } catch (err) {
+      inline.close();
+      if (!this.closed && this.sourceVersion === version && !this.source) {
+        this.status = { kind: 'unavailable', reason: `Vision models unavailable: ${String(err)}` };
+      }
+    } finally {
+      this.fallingBack = false;
     }
   }
 
@@ -253,8 +308,10 @@ export class PerceptionPump {
    * responsive and the HUD explains what is missing.
    */
   async attach(): Promise<void> {
+    const version = this.sourceVersion;
     const source = await this.build();
-    if (this.closed) {
+    if (!source) return;
+    if (this.closed || this.sourceVersion !== version) {
       source.close();
       return;
     }
@@ -263,7 +320,7 @@ export class PerceptionPump {
       // A scripted source may have been injected while the models loaded
       // (the headless suite does exactly this), and it must win — otherwise a
       // slow load silently overwrites the test's perception mid-run.
-      if (this.closed || this.source !== null) {
+      if (this.closed || this.sourceVersion !== version || this.source !== null) {
         source.close();
         return;
       }
@@ -271,7 +328,7 @@ export class PerceptionPump {
       this.offThread = source instanceof WorkerPerception;
       this.status = source.status;
     } catch (err) {
-      if (this.closed) {
+      if (this.closed || this.sourceVersion !== version) {
         source.close();
         return;
       }
@@ -289,6 +346,7 @@ export class PerceptionPump {
    * perception entirely, leaving the model-free optical-flow path in charge.
    */
   setSource(source: PerceptionSource | null): void {
+    this.sourceVersion++;
     this.source?.close();
     this.source = source;
     this.status = source?.status ?? { kind: 'unavailable', reason: 'detached' };
@@ -312,6 +370,8 @@ export class PerceptionPump {
 
   close(): void {
     this.closed = true;
+    this.sourceVersion++;
     this.source?.close();
+    this.source = null;
   }
 }
