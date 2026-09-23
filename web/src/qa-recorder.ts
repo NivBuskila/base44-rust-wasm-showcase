@@ -304,6 +304,8 @@ export class QaRecorder {
    * `fetch` is not guaranteed to be flushed; failure is ignored, as with storage.
    */
   private upload(): void {
+    // The endpoint is a dev-server plugin; a static host answers 405.
+    if (!import.meta.env.DEV) return;
     try {
       const body = new Blob([JSON.stringify(this.summary())], { type: 'application/json' });
       navigator.sendBeacon(QA_SESSION_ENDPOINT, body);
