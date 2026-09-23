@@ -9,8 +9,7 @@ real time by hand tracking, body pose and a body segmentation mask. Your
 silhouette becomes a solid obstacle the fluid flows around. Your gestures are
 spells: pinch to open a vortex, open your palm to push, close your fist to pull
 everything in, point to paint fire, rotate both hands to warp time. Chain spells
-into combos, cast with both hands for duets, and flick an open palm to throw an
-energy bolt.
+into combos and cast with both hands for duets.
 
 Everything runs locally in the browser. No server, no upload, no video leaving
 the machine.
@@ -193,10 +192,8 @@ collision boundary, so waving an arm displaces smoke.
 **Combos** are spells cast in sequence with one hand: *nova* (fist → palm),
 *tempest* (palm → pinch), *supernova* (fist → victory → fist). **Duets** need
 both hands: *tide* (fist + palm), *clap* (two open hands meeting fast), *big
-bang* (two fists squeezed together, then both opened). **Bolts** are thrown: a
-fast flick of an open hand hurls an energy streak along the motion, and a push
-straight at the camera detonates at the palm and dollies the frame in — the
-"lens rush". The HUD's spellbook tracks the progress of each sequence live.
+bang* (two fists squeezed together, then both opened). The HUD's spellbook
+tracks the progress of each sequence live.
 
 The tutorial puts the engine in *practice mode*, which keeps single spells
 casting but suppresses combos and duets, so a lesson never chains its poses
@@ -241,7 +238,7 @@ crates/aether-core/               zero dependencies, native + wasm32
 ├── mask/                         segmentation mask -> obstacle + boundary velocity
 ├── gesture/                      landmark filtering, gesture state machine
 ├── spells/                       gestures -> forces, dye, bursts, duets
-├── combo/, duet/, bolt/, rush.rs sequences, two-hand casts, thrown bolts, the lens rush
+├── combo/, duet/                 sequences and two-hand casts
 ├── visual.rs                     scores the dye field for tuning without a browser
 ├── par.rs                        rayon or serial, same closures
 └── engine/                       orchestration + the zero-copy buffer protocol
@@ -316,9 +313,9 @@ Two numbers that are *not* the engine, recorded so they are not misread:
 ## Testing
 
 ```bash
-cargo test --workspace     # 236 tests: the simulation, on the host
+cargo test --workspace     # 227 tests: the simulation, on the host
 cd web && npm run typecheck
-cd web && npm run test:unit # 178 tests: the TypeScript that needs no browser (vitest)
+cd web && npm run test:unit # 182 tests: the TypeScript that needs no browser (vitest)
 cd web && npm run test:e2e  # 35 tests: the browser, headless, no webcam (Playwright)
 ```
 
