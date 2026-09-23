@@ -2,16 +2,20 @@
   --ink: #e7f1fb;
   --dim: #92a6bf;
   --faint: #5d7089;
-  --bg: #04050a;
+  --bg: #05070d;
 
-  --panel-a: rgba(11, 16, 26, 0.82);
-  --panel-b: rgba(6, 9, 16, 0.78);
-  --edge: rgba(126, 166, 214, 0.16);
-  --edge-hi: rgba(126, 166, 214, 0.32);
+  --panel-a: rgba(9, 15, 20, 0.82);
+  --panel-b: rgba(5, 9, 13, 0.78);
+  /* The intro console's mint hairlines, so the stage reads as the same
+     instrument the welcome opened onto. */
+  --edge: rgba(62, 240, 194, 0.13);
+  --edge-hi: rgba(62, 240, 194, 0.3);
   --well: rgba(126, 166, 214, 0.1);
 
-  --accent: #35d6ff;
-  --accent-soft: rgba(53, 214, 255, 0.14);
+  /* The console's mint; `--accent-rgb` is for the translucent uses. */
+  --accent-rgb: 62, 240, 194;
+  --accent: rgb(var(--accent-rgb));
+  --accent-soft: rgba(var(--accent-rgb), 0.14);
   --magenta: #ff5ea8;
   --warn: #ffc65c;
   --over: #ff6b8b;
