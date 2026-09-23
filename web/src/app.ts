@@ -313,6 +313,10 @@ export class App {
       /** Inline inference budget cadence (not the measured result rate). */
       perceptionBudgetHz: this.perception.hz,
       inferenceCostMs: this.perception.costMs,
+      firstHandAtMs: this.perception.firstHandAtMs,
+      decodeMs: this.perception.decodeMs,
+      modelMs: this.perception.modelMs,
+      workerOverheadMs: this.perception.workerOverheadMs,
       /** Adaptive quality rung; 0 is full quality. */
       qualityTier: this.governor.level,
       /** Which graphics API drew the last frame, and who owns the pool. */
