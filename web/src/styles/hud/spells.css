@@ -38,7 +38,7 @@
 }
 
 .h-card[data-state='cast'] {
-  border-color: rgba(53, 214, 255, 0.45);
+  border-color: rgba(var(--accent-rgb), 0.45);
   background: var(--accent-soft);
 }
 
@@ -109,6 +109,6 @@
 }
 
 .g-row[data-on='1'] .g-txt i {
-  color: rgba(53, 214, 255, 0.7);
+  color: rgba(var(--accent-rgb), 0.7);
 }
 
