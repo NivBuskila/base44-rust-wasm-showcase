@@ -188,10 +188,11 @@ export class QaRecorder {
   private isolated = false;
   private cameraSeen = false;
 
-  sample(diag: QaDiagnostics): void {
+  sample(input: QaDiagnostics | (() => QaDiagnostics)): void {
     const now = performance.now();
     if (now - this.lastSample < SAMPLE_MS) return;
     this.lastSample = now;
+    const diag = typeof input === 'function' ? input() : input;
 
     // The first second is boot: the smoothed fps is still climbing out of its
     // seed value and would drag every percentile down.
@@ -204,7 +205,9 @@ export class QaRecorder {
       push(this.hudMs, diag.hudMs);
       push(this.frameMs, diag.frameMs);
       push(this.outsideMs, diag.outsideMs);
-      push(this.perceptionHz, diag.perceptionHz);
+      if (diag.perception.kind === 'ready' && diag.perceptionHz > 0) {
+        push(this.perceptionHz, diag.perceptionHz);
+      }
     }
 
     if (this.previous === null) this.tierStart = diag.qualityTier;
@@ -288,9 +291,11 @@ export class QaRecorder {
   persist(): void {
     if (this.fps.length === 0) return;
     if (isEmbedded()) return;
-    this.upload();
+    const summary = this.summary();
+    const body = JSON.stringify(summary);
+    this.upload(body);
     try {
-      localStorage.setItem(QA_SESSION_KEY, JSON.stringify(this.summary()));
+      localStorage.setItem(QA_SESSION_KEY, body);
     } catch {
       /* private mode or quota — never break the session over telemetry */
     }
@@ -303,10 +308,9 @@ export class QaRecorder {
    * origin matches. `sendBeacon` because this also runs from `pagehide`, where a
    * `fetch` is not guaranteed to be flushed; failure is ignored, as with storage.
    */
-  private upload(): void {
+  private upload(body: string): void {
     try {
-      const body = new Blob([JSON.stringify(this.summary())], { type: 'application/json' });
-      navigator.sendBeacon(QA_SESSION_ENDPOINT, body);
+      navigator.sendBeacon(QA_SESSION_ENDPOINT, new Blob([body], { type: 'application/json' }));
     } catch {
       /* dev-server absent (a production build) — never break the session */
     }

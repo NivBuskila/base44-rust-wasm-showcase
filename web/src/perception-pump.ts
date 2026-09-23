@@ -84,6 +84,8 @@ export class PerceptionPump {
   costMs = 0;
 
   private lastMs = 0;
+  private lastResultMs = 0;
+  private resultHz = 0;
   /**
    * True when the source runs the models on a worker, so `process` is cheap and
    * self-pacing and the render loop should drain it every frame.
@@ -98,9 +100,15 @@ export class PerceptionPump {
     return this.source !== null;
   }
 
-  /** Effective inference cadence in Hz, after adaptive throttling. */
+  /** Effective inline inference budget cadence, not the delivered result rate. */
   get hz(): number {
     return 1000 / this.intervalMs;
+  }
+
+  /** Measured rate at which completed results reached the engine. */
+  get actualHz(): number {
+    if (this.status.kind !== 'ready' || performance.now() - this.lastResultMs > 2000) return 0;
+    return this.resultHz;
   }
 
   /** Runs inference at a cadence derived from its own measured cost. */
@@ -141,6 +149,16 @@ export class PerceptionPump {
     if (result && !this.offThread && !this.adaptCadence(cost)) return;
     if (!result) return;
     this.lastMs = nowMs;
+    if (this.lastResultMs > 0) {
+      const gap = nowMs - this.lastResultMs;
+      if (gap > 0) {
+        const rate = 1000 / gap;
+        this.resultHz = this.resultHz === 0 || gap > 2000
+          ? rate
+          : this.resultHz * 0.8 + rate * 0.2;
+      }
+    }
+    this.lastResultMs = nowMs;
 
     // `cost`, not `result.latencyMs`: the HUD row sits in the frame budget, so
     // it must report what the render loop actually paid. With perception on a
@@ -257,6 +275,8 @@ export class PerceptionPump {
     this.deps.engine.clear_perception();
     this.hands = null;
     this.lastMs = 0;
+    this.lastResultMs = 0;
+    this.resultHz = 0;
     this.offThread = source instanceof WorkerPerception;
     // A scripted source has nothing to do with the real one's cost, so the
     // adaptive cadence has to start over or a slow MediaPipe load would leave
