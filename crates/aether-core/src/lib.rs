@@ -18,7 +18,6 @@
 //! let points = engine.particle_buffer(); // x, y, heat, life per particle
 //! ```
 
-pub mod bolt;
 pub mod combo;
 pub mod config;
 pub mod duet;
