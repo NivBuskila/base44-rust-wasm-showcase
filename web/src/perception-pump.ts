@@ -83,6 +83,12 @@ export class PerceptionPump {
   intervalMs = PERCEPTION_MIN_INTERVAL_MS;
   /** Smoothed wall time one `process` call costs the render loop. */
   costMs = 0;
+  /** First detected hand delivered to the engine, on the performance clock. */
+  firstHandAtMs: number | null = null;
+  /** Last completed pass; worker decode is asynchronous, not frame-loop cost. */
+  decodeMs = 0;
+  modelMs = 0;
+  workerOverheadMs = 0;
 
   private lastMs = 0;
   private lastResultMs = 0;
@@ -167,8 +173,13 @@ export class PerceptionPump {
     // decode — charging it the full inference would show a blown budget on a
     // frame that comfortably made 60 Hz.
     this.inferenceMs = cost;
+    this.decodeMs = result.decodeMs ?? 0;
+    this.modelMs = result.latencyMs;
+    this.workerOverheadMs = result.workerRoundTripMs === undefined
+      ? 0 : Math.max(0, result.workerRoundTripMs - result.latencyMs);
     this.hands = result.hands;
     this.deps.engine.push_hands(result.hands, dt);
+    if (result.anyHand && this.firstHandAtMs === null) this.firstHandAtMs = performance.now();
     this.deps.engine.push_pose(result.pose, dt);
 
     if (result.mask) {
@@ -293,6 +304,10 @@ export class PerceptionPump {
     this.intervalMs = PERCEPTION_MIN_INTERVAL_MS;
     this.costMs = 0;
     this.strikes = 0;
+    this.firstHandAtMs = null;
+    this.decodeMs = 0;
+    this.modelMs = 0;
+    this.workerOverheadMs = 0;
   }
 
   close(): void {
