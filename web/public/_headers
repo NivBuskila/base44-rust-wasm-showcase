@@ -1,0 +1,6 @@
+# Cloudflare Pages response headers. Cross-origin isolation unlocks
+# SharedArrayBuffer for the threaded engine (web/src/wasm-mt); keep in sync
+# with `crossOriginIsolationHeaders` in vite.config.ts.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless
