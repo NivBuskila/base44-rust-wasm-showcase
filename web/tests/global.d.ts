@@ -25,6 +25,7 @@ interface AetherDiagnostics {
   mode: 'aether' | 'camera' | 'debug' | 'particles';
   /** Effective inference cadence in Hz, after adaptive throttling. */
   perceptionHz: number;
+  perceptionBudgetHz: number;
   /** Smoothed wall time one inference costs the render loop, in ms. */
   inferenceCostMs: number;
 }

@@ -84,6 +84,25 @@ describe('QaRecorder', () => {
     expect(rec.summary().samples).toBe(2);
   });
 
+  it('only reads live diagnostics when it takes a sample', () => {
+    const c = clock();
+    const rec = new QaRecorder();
+    const read = vi.fn(() => diag());
+    for (let i = 0; i < 10; i++) {
+      rec.sample(read);
+      c.tick(10);
+    }
+    expect(read).not.toHaveBeenCalled();
+    c.warm();
+    rec.sample(read);
+    expect(read).toHaveBeenCalledTimes(1);
+    rec.sample(read);
+    expect(read).toHaveBeenCalledTimes(1);
+    c.tick(SAMPLE_MS);
+    rec.sample(read);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it('summarises frame rate with percentiles and the share of slow samples', () => {
     const c = clock();
     const rec = new QaRecorder();
@@ -105,6 +124,17 @@ describe('QaRecorder', () => {
     expect(s.stepMs.p95).toBe(20);
     expect(s.engine).toBe('threads:8');
     expect(s.engineReason).toBe('cross-origin isolated');
+  });
+
+  it('does not report a configured cadence while models are still loading', () => {
+    const c = clock();
+    const rec = new QaRecorder();
+    c.warm();
+    rec.sample(diag({ perceptionHz: 30, perception: { kind: 'loading' } }));
+    expect(rec.summary().perceptionHz).toEqual({ median: 0, min: 0 });
+    c.tick();
+    rec.sample(diag({ perceptionHz: 12, perception: { kind: 'ready', delegate: 'GPU' } }));
+    expect(rec.summary().perceptionHz).toEqual({ median: 12, min: 12 });
   });
 
   it('drops non-finite timings without dropping the sample', () => {
@@ -179,7 +209,9 @@ describe('QaRecorder', () => {
     const rec = new QaRecorder();
     c.warm();
     rec.sample(diag({ fps: 58 }));
+    const summarise = vi.spyOn(rec, 'summary');
     rec.persist();
+    expect(summarise).toHaveBeenCalledTimes(1);
 
     expect(navigator.sendBeacon).toHaveBeenCalledWith('/__qa/session', expect.any(Blob));
     const stored = readQaSession();

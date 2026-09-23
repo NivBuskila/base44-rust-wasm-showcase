@@ -46,6 +46,8 @@ export class App {
    * this is the only trace a QA pass leaves behind.
    */
   private readonly qa = new QaRecorder();
+  /** Reused callback: diagnostics are built only when the recorder takes a sample. */
+  private readonly qaDiagnostics = () => this.diagnostics;
   /** Every pool resize goes through here; see `engine-pool.ts`. */
   private readonly pool: EnginePool;
   private readonly camera = new Camera();
@@ -226,7 +228,7 @@ export class App {
 
     // Last in the frame: the recorder reads the values this frame just produced,
     // and it rate-limits itself to 2 Hz internally.
-    this.qa.sample(this.diagnostics);
+    this.qa.sample(this.qaDiagnostics);
   };
 
   /** Feeds the luma plane, but only when the camera produced a new frame. */
@@ -306,8 +308,10 @@ export class App {
       particleCount: this.engine.particle_count(),
       mode: this.mode,
       engine: this.tier,
-      /** Effective inference cadence in Hz, after adaptive throttling. */
-      perceptionHz: this.perception.hz,
+      /** Measured rate at which inference results reach the engine. */
+      perceptionHz: this.perception.actualHz,
+      /** Inline inference budget cadence (not the measured result rate). */
+      perceptionBudgetHz: this.perception.hz,
       inferenceCostMs: this.perception.costMs,
       /** Adaptive quality rung; 0 is full quality. */
       qualityTier: this.governor.level,
