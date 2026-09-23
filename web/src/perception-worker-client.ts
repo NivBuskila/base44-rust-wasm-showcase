@@ -40,6 +40,8 @@ export class WorkerPerception implements PerceptionSource {
   /** True while `createImageBitmap` is still resolving. */
   private decoding = false;
   private lastVideoTime = -1;
+  private decodeMs = 0;
+  private submittedAt = 0;
 
   /** Result waiting to be handed to the caller; null once consumed. */
   private pending: PerceptionFrame | null = null;
@@ -131,6 +133,7 @@ export class WorkerPerception implements PerceptionSource {
     this.lastVideoTime = video.currentTime;
 
     this.decoding = true;
+    const decodeStarted = performance.now();
     const scale = Math.min(1, INFERENCE_WIDTH / video.videoWidth);
     createImageBitmap(video, {
       resizeWidth: Math.round(video.videoWidth * scale),
@@ -145,7 +148,9 @@ export class WorkerPerception implements PerceptionSource {
           bitmap.close();
           return;
         }
+        this.decodeMs = performance.now() - decodeStarted;
         this.inFlight = true;
+        this.submittedAt = performance.now();
         const spare = this.spareMask;
         this.spareMask = null;
         this.post({ type: 'frame', bitmap, timestampMs, maskBuf: spare }, [
@@ -196,6 +201,8 @@ export class WorkerPerception implements PerceptionSource {
       mask,
       latencyMs: message.latencyMs,
       anyHand: message.anyHand,
+      decodeMs: this.decodeMs,
+      workerRoundTripMs: performance.now() - this.submittedAt,
     };
   }
 

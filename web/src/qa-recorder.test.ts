@@ -19,6 +19,10 @@ function diag(over: Partial<QaDiagnostics> = {}): QaDiagnostics {
     stepMs: 4,
     renderMs: 3,
     inferenceMs: 20,
+    decodeMs: 0,
+    modelMs: 0,
+    workerOverheadMs: 0,
+    firstHandAtMs: null,
     cameraMs: 1,
     hudMs: 0.1,
     frameMs: 8,
@@ -135,6 +139,42 @@ describe('QaRecorder', () => {
     c.tick();
     rec.sample(diag({ perceptionHz: 12, perception: { kind: 'ready', delegate: 'GPU' } }));
     expect(rec.summary().perceptionHz).toEqual({ median: 12, min: 12 });
+  });
+
+  it('records first hand arrival and separates decode, model and worker overhead', () => {
+    const c = clock();
+    const rec = new QaRecorder();
+    c.warm();
+    rec.sample(diag({ firstHandAtMs: null }));
+    c.tick();
+    rec.sample(diag({ firstHandAtMs: 1800, decodeMs: 4, modelMs: 22, workerOverheadMs: 3 }));
+    c.tick();
+    rec.sample(diag({ firstHandAtMs: 1900, decodeMs: 6, modelMs: 24, workerOverheadMs: 5 }));
+    const s = rec.summary();
+    expect(s.firstHandMs).toBe(1800);
+    expect(s.decodeMs.p95).toBe(6);
+    expect(s.modelMs.p95).toBe(24);
+    expect(s.workerOverheadMs.p95).toBe(5);
+  });
+
+  it('reports only the last 30 seconds and marks old samples stale', () => {
+    const c = clock();
+    const rec = new QaRecorder();
+    c.warm();
+    rec.sample(diag({ fps: 20, frameMs: 30 }));
+    c.tick(30_500);
+    rec.sample(diag({ fps: 60, frameMs: 8, perception: { kind: 'ready', delegate: 'GPU' }, perceptionHz: 18 }));
+    const s = rec.summary();
+    expect(s.samples).toBe(2);
+    expect(s.recent.samples).toBe(1);
+    expect(s.recent.fps.median).toBe(60);
+    expect(s.recent.frameMs.p95).toBe(8);
+    expect(s.recent.perceptionHz.median).toBe(18);
+    expect(s.recent.lastSampleAtMs).toBe(32_000);
+    expect(s.recent.lastSampleAgeMs).toBe(0);
+    c.tick(31_000);
+    expect(rec.summary().recent.samples).toBe(0);
+    expect(rec.summary().recent.lastSampleAgeMs).toBeNull();
   });
 
   it('drops non-finite timings without dropping the sample', () => {
