@@ -111,7 +111,7 @@ export class FrameChain {
     );
   }
 
-  /** Frame texture to the canvas, plus the 16x16 luminance probe. */
+  /** Frame texture to the canvas; the 16x16 diagnostic probe runs periodically. */
   recordBlit(
     encoder: GPUCommandEncoder,
     pass: FullscreenPass,
