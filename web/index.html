@@ -14,6 +14,17 @@
       content="Aether - a gesture-driven fluid reality engine. Rust and WebAssembly physics, real-time hand and body tracking, in your browser."
     />
     <title>Aether — gesture-driven fluid</title>
+    <!-- Linked, not imported from main.ts, so the loader below paints with the
+         first frame instead of waiting for the module graph. -->
+    <link rel="stylesheet" href="/src/styles.css" />
+    <script>
+      // The cross-origin-isolation reload's document continues the loader
+      // rather than replaying its entrance (key: cross-origin-isolation.ts).
+      try {
+        if (sessionStorage.getItem('aether:coi-resume') === '1')
+          document.documentElement.classList.add('boot-resumed');
+      } catch {}
+    </script>
   </head>
   <body>
     <!-- The simulation surface. Sized to the device pixel ratio by the renderer. -->
@@ -22,11 +33,22 @@
     <!-- Populated by hud.ts. Empty here so the HUD owns its own markup. -->
     <div id="hud"></div>
 
-    <!-- Shown before WASM and the models finish loading, and on fatal errors. -->
-    <div id="boot" role="status" aria-live="polite">
-      <div class="boot-inner">
-        <h1>AETHER</h1>
-        <p id="boot-status">waking the engine…</p>
+    <!-- The intro console (landing.ts): boot progress, first-run welcome and
+         fatal errors in one surface. The compact loader is prerendered here
+         (mirrors `build` in landing.ts) so no document ever shows a blank
+         screen while the modules load; the module takes it over seamlessly. -->
+    <div id="boot" class="compact" role="dialog" aria-label="Welcome to Aether" aria-live="polite">
+      <div class="landing-frame">
+        <div class="landing-head">
+          <div class="landing-title"><span class="landing-dot"></span><h1>AETHER</h1></div>
+          <span class="landing-state">BOOTING</span>
+        </div>
+        <div class="landing-foot">
+          <p class="landing-log">
+            <span class="landing-prompt">&gt;</span><span id="boot-status">waking the engine…</span
+            ><span class="landing-caret"></span>
+          </p>
+        </div>
       </div>
     </div>
 
