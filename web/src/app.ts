@@ -139,6 +139,11 @@ export class App {
    * up, and perception attaches itself whenever it is ready.
    */
   async start(setStatus: (text: string) => void): Promise<void> {
+    // Let the worker load the vision graphs while camera permission and the
+    // first video frame are pending, instead of waiting for both to finish.
+    const disabled = new URLSearchParams(location.search).get('perception') === 'off';
+    if (!disabled) void this.perception.attach();
+
     setStatus('opening the camera…');
     try {
       await this.camera.start();
@@ -152,24 +157,17 @@ export class App {
             : 'No camera found — running in ambient mode.'
           : `Camera failed: ${String(err)}`;
       console.warn(`[aether] ${message}`);
+      this.perception.close();
       this.perception.status = { kind: 'unavailable', reason: message };
     }
 
-    if (this.cameraAvailable) {
-      // `?perception=off` runs the app on the model-free path only. The headless
-      // suite uses it for everything that is not specifically about MediaPipe:
-      // on software rasterisation one inference costs ~770 ms, which would make
-      // every unrelated assertion wait on a model it does not care about.
-      const disabled = new URLSearchParams(location.search).get('perception') === 'off';
-      if (disabled) {
-        this.perception.status = {
-          kind: 'unavailable',
-          reason: 'Disabled by ?perception=off — optical flow only.',
-        };
-      } else {
-        this.perception.status = { kind: 'loading' };
-        void this.perception.attach();
-      }
+    // `?perception=off` keeps model loading out of the headless optical-flow
+    // suite, where a software inference would stall unrelated assertions.
+    if (this.cameraAvailable && disabled) {
+      this.perception.status = {
+        kind: 'unavailable',
+        reason: 'Disabled by ?perception=off — optical flow only.',
+      };
     }
 
     this.renderer.setVideo(this.cameraAvailable ? this.camera.video : null);

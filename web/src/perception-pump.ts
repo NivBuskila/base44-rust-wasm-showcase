@@ -68,6 +68,7 @@ export interface PerceptionPumpDeps {
 
 export class PerceptionPump {
   private source: PerceptionSource | null = null;
+  private closed = false;
   status: PerceptionStatus = { kind: 'loading' };
   /**
    * The most recent packed hand buffer, kept for the renderer's landmark
@@ -229,7 +230,7 @@ export class PerceptionPump {
     } catch (err) {
       console.warn('[aether] perception worker unusable, running inference inline', err);
       offloaded.close();
-      return new MediaPipePerception();
+      return this.closed ? offloaded : new MediaPipePerception();
     }
   }
 
@@ -242,12 +243,16 @@ export class PerceptionPump {
    */
   async attach(): Promise<void> {
     const source = await this.build();
+    if (this.closed) {
+      source.close();
+      return;
+    }
     try {
       await source.init();
       // A scripted source may have been injected while the models loaded
       // (the headless suite does exactly this), and it must win — otherwise a
       // slow load silently overwrites the test's perception mid-run.
-      if (this.source !== null) {
+      if (this.closed || this.source !== null) {
         source.close();
         return;
       }
@@ -255,6 +260,10 @@ export class PerceptionPump {
       this.offThread = source instanceof WorkerPerception;
       this.status = source.status;
     } catch (err) {
+      if (this.closed) {
+        source.close();
+        return;
+      }
       const reason = `Vision models unavailable: ${String(err)}`;
       console.warn(`[aether] ${reason}`);
       this.status = { kind: 'unavailable', reason };
@@ -287,6 +296,7 @@ export class PerceptionPump {
   }
 
   close(): void {
+    this.closed = true;
     this.source?.close();
   }
 }
