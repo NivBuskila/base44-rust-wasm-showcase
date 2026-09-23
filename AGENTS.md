@@ -12,6 +12,11 @@ Non-obvious findings only — what the manifests and the README do not say. Grou
 - The preview proxy forwards `Cross-Origin-Opener-Policy` but strips `Cross-Origin-Embedder-Policy`, so Vite's headers alone never produce isolation. `web/public/coi-serviceworker.js` + `web/src/cross-origin-isolation.ts` re-attach both from a Service Worker and reload once; that runs only at top level, so the embedded iframe stays single-threaded by design. Verify the threaded engine in a standalone port-3000 tab (hard-reload once so the worker installs) via `window.__aether.diagnostics().engine`.
 - Initial setup verified native workspace tests, TypeScript checking, live source serving, and the preview rendering in ambient mode. Real webcam gesture recognition requires camera permission and was not verified during setup.
 
+## Deploying (Cloudflare Pages)
+
+- `.github/workflows/deploy.yml` builds both WASM variants in GitHub Actions (Cloudflare's build image can't do the nightly threaded build), self-hosts the MediaPipe runtime + models, and runs `wrangler pages deploy web/dist` on every push to `main` (or manually). Needs repo secrets `CLOUDFLARE_API_TOKEN` (Pages: Edit) and `CLOUDFLARE_ACCOUNT_ID`; project name defaults to `aether`, override with repo variable `CLOUDFLARE_PAGES_PROJECT`.
+- `web/public/_headers` sends COOP/COEP in production so the threaded engine activates without the service-worker fallback. Largest dist file is ~11.8 MB, under Pages' 25 MB per-file cap — keep it that way.
+
 ## Verifying and QA evidence
 
 - Verify with `docker compose -f docker-compose.base44.yml ps`, `curl -f http://localhost:3000/`, `docker compose -f docker-compose.base44.yml exec -T wasm cargo test --workspace`, `docker compose -f docker-compose.base44.yml exec -T web npm run typecheck` and `... exec -T web npm run test:unit`. Current counts (2026-09): `cargo test --workspace` = 236 (227 `aether-core` unit + 2 `perf` + 6 `aether-wasm` + 1 doctest; ~1 min in debug), vitest = 178 tests in 19 files, Playwright = 35 tests across `web/tests/*.spec.ts` (not run in CI or in the sandbox — no Chromium in the `web` container). Update the README's Testing section when these move.
