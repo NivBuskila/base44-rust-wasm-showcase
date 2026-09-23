@@ -15,6 +15,7 @@ Non-obvious findings only — what the manifests and the README do not say. Grou
 ## Deploying (Cloudflare Pages)
 
 - `.github/workflows/deploy.yml` builds both WASM variants in GitHub Actions (Cloudflare's build image can't do the nightly threaded build), self-hosts the MediaPipe runtime + models, and runs `wrangler pages deploy web/dist` on every push to `main` (or manually). Needs repo secrets `CLOUDFLARE_API_TOKEN` (Pages: Edit) and `CLOUDFLARE_ACCOUNT_ID`; project name defaults to `aether`, override with repo variable `CLOUDFLARE_PAGES_PROJECT`.
+- Production-only failure modes the dev server hides: the minifier rewrote `const e = eval; e(x)` into a direct `eval(x)` (perception worker then fails with "ModuleFactory not set" and inference falls back onto the main thread — the site crawls), so `worker-import-scripts.ts` calls `globalThis.eval`; check `grep responseText web/dist/assets/perception.worker-*.js` after a build. `/__qa/session` exists only in dev, so the QA upload is `import.meta.env.DEV`-gated.
 - `web/public/_headers` sends COOP/COEP in production so the threaded engine activates without the service-worker fallback. Largest dist file is ~11.8 MB, under Pages' 25 MB per-file cap — keep it that way.
 
 ## Verifying and QA evidence
