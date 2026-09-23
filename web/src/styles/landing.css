@@ -1,16 +1,10 @@
 /* Intro console (boot + first-run welcome) -------------------------------- */
 
 /* One surface from the first byte to the first gesture: it is the loading
-   screen, it stays centred throughout, and "Enter the field" irises it open
+   screen, it stays centred throughout, and "Enter the field" bursts it open
    onto the live stage. The palette is scoped here; the HUD tokens are
    untouched. `.compact` is the centred layout; `.revealed` adds the first-run
    lede, button and note under it. */
-
-@property --iris {
-  syntax: '<length>';
-  inherits: true;
-  initial-value: 0px;
-}
 
 #boot {
   --mint: #3ef0c2;
@@ -466,26 +460,19 @@
 
 /* The exit ---------------------------------------------------------------- */
 
-/* The console dissolves outward while an iris opens from the button: the
-   mask's transparent disc grows with `--iris`, and the shockwave rings (a
-   separate layer, so the mask cannot clip them) ride its edge. */
+/* The console swells and dissolves while a shockwave and a glow burst from
+   the button. Everything here is opacity and transform on pre-sized layers:
+   the engine is running flat out by now, and the earlier mask/blur/filter
+   exit repainted the whole screen every frame and stuttered. */
 #boot.entering {
   pointer-events: none;
-  -webkit-mask-image: radial-gradient(
-    circle at var(--ex) var(--ey),
-    transparent var(--iris),
-    #000 calc(var(--iris) + 2px)
-  );
-  mask-image: radial-gradient(
-    circle at var(--ex) var(--ey),
-    transparent var(--iris),
-    #000 calc(var(--iris) + 2px)
-  );
-  animation: landing-iris 1150ms cubic-bezier(0.7, 0, 0.2, 1) forwards;
+  will-change: opacity;
+  animation: landing-out 1150ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
 #boot.entering .landing-frame {
-  animation: landing-dissolve 700ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  will-change: transform, opacity;
+  animation: landing-dissolve 650ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
 #boot.entering .landing-enter {
@@ -499,65 +486,84 @@
   opacity: 1;
 }
 
+/* `--reach` (set in `landing.ts`) is the ring's final radius. The rings are
+   laid out once, at half that size to keep their layers light, and are only
+   scaled from then on (to 2 at the end), so no frame re-lays or repaints them. */
 .landing-shock {
   position: fixed;
   inset: 0;
   z-index: 101;
+  overflow: hidden;
   pointer-events: none;
-  animation: landing-iris 1150ms cubic-bezier(0.7, 0, 0.2, 1) forwards;
+}
+
+.landing-shock span,
+.landing-shock::before {
+  position: absolute;
+  left: calc(var(--ex) - var(--reach) / 2);
+  top: calc(var(--ey) - var(--reach) / 2);
+  width: var(--reach);
+  height: var(--reach);
+  border-radius: 50%;
+  will-change: transform, opacity;
 }
 
 .landing-shock span {
-  position: absolute;
-  left: var(--ex);
-  top: var(--ey);
-  width: calc(var(--iris) * 2);
-  height: calc(var(--iris) * 2);
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
+  box-sizing: border-box;
   border: 2px solid #3ef0c2;
   box-shadow:
-    0 0 30px #3ef0c2,
-    inset 0 0 30px rgba(53, 214, 255, 0.6);
-  animation: landing-fade 1150ms ease-in forwards;
+    0 0 15px #3ef0c2,
+    inset 0 0 15px rgba(53, 214, 255, 0.6);
+  animation: landing-shock 1150ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
 }
 
 /* The trailing magenta echo. */
 .landing-shock span + span {
-  width: calc(var(--iris) * 1.4);
-  height: calc(var(--iris) * 1.4);
   border-color: #ff5ea8;
-  box-shadow: 0 0 40px #ff5ea8;
-  opacity: 0.7;
+  box-shadow: 0 0 20px #ff5ea8;
+  animation-delay: 140ms;
+  animation-duration: 1010ms;
 }
 
-/* The field answers the entry: a bright surge that settles back. */
+/* The flash: a mint bloom from the button that the field wakes into. */
+.landing-shock::before {
+  content: '';
+  background: radial-gradient(circle, rgba(62, 240, 194, 0.35), rgba(53, 214, 255, 0.1) 40%, transparent 70%);
+  animation: landing-flash 1000ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* The field answers the entry: it settles back from a slight push-in. */
 #stage.surge {
   animation: landing-surge 1400ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-@keyframes landing-iris {
-  from { --iris: 0px; }
-  to { --iris: 150vmax; }
+@keyframes landing-out {
+  0%, 35% { opacity: 1; }
+  100% { opacity: 0; }
 }
 
 @keyframes landing-dissolve {
   to {
     opacity: 0;
-    transform: scale(1.06);
-    filter: blur(10px);
+    transform: scale(1.08);
   }
 }
 
-@keyframes landing-fade {
-  0%, 55% { opacity: 1; }
-  100% { opacity: 0; }
+@keyframes landing-shock {
+  from { opacity: 1; transform: scale(0.06); }
+  55% { opacity: 1; }
+  to { opacity: 0; transform: scale(2); }
+}
+
+@keyframes landing-flash {
+  from { opacity: 0; transform: scale(0.4); }
+  25% { opacity: 1; }
+  to { opacity: 0; transform: scale(2); }
 }
 
 @keyframes landing-surge {
-  0% { filter: brightness(1) saturate(1); transform: scale(1.08); }
-  30% { filter: brightness(2.1) saturate(1.7); }
-  100% { filter: brightness(1) saturate(1); transform: scale(1); }
+  from { transform: scale(1.06); }
+  to { transform: scale(1); }
 }
 
 @keyframes landing-ripple {
