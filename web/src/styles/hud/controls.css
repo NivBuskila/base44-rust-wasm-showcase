@@ -53,7 +53,7 @@
 }
 
 .seg-btn[aria-pressed='true'] .seg-key {
-  color: rgba(53, 214, 255, 0.72);
+  color: rgba(var(--accent-rgb), 0.72);
 }
 
 .row-btn {

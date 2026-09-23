@@ -1,0 +1,629 @@
+/* Intro console (boot + first-run welcome) -------------------------------- */
+
+/* One surface from the first byte to the first gesture: it is the loading
+   screen, it stays centred throughout, and "Enter the field" bursts it open
+   onto the live stage. The palette is scoped here; the HUD tokens are
+   untouched. `.compact` is the centred layout; `.revealed` adds the first-run
+   lede, button and note under it. */
+
+#boot {
+  --mint: #3ef0c2;
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  overflow: auto;
+  box-sizing: border-box;
+  /* A soft pool of shade keeps the centred text legible once the backdrop
+     clears; only the flat colour below it animates. */
+  background-image: radial-gradient(ellipse at 50% 50%, rgba(5, 7, 13, 0.7), transparent 62%);
+  background-color: rgba(5, 7, 13, 0.3);
+  color: #d7e4ef;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* The opaque backdrop is its own layer so clearing it is an opacity fade on
+   the compositor, not a full-screen repaint every frame while the engine
+   wakes. */
+#boot::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background: #05070d;
+  pointer-events: none;
+  transition: opacity 2600ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* The engine is up: the backdrop slowly clears and the field wakes behind
+   the console. */
+#boot.ready::after {
+  opacity: 0;
+}
+
+/* `display: none` (not `visibility`) so every looping animation inside stops
+   for the rest of the session instead of ticking beside the engine. */
+#boot.done {
+  display: none;
+}
+
+/* The inset hairline frame. */
+#boot::before {
+  content: '';
+  position: fixed;
+  inset: 28px;
+  border: 1px solid rgba(62, 240, 194, 0.13);
+  pointer-events: none;
+}
+
+.landing-frame {
+  min-height: 100%;
+  box-sizing: border-box;
+  padding: clamp(48px, 9vh, 120px) clamp(24px, 11.8vw, 170px) clamp(44px, 8vh, 110px);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  animation: landing-boot-in 700ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+#boot.compact .landing-frame {
+  justify-content: center;
+  align-items: center;
+  gap: 34px;
+}
+
+/* The welcome's parts exist from mount but only unfold once the engine runs;
+   removing `display: none` starts their staggered entrance then. */
+#boot:not(.revealed) .landing-lede,
+#boot:not(.revealed) .landing-cta,
+#boot:not(.revealed) .landing-note {
+  display: none;
+}
+
+/* No second entrance: the header and log glide into place (`glide` in
+   `landing.ts`) and only the parts that were not there fade in. */
+#boot.resumed .landing-frame,
+.boot-resumed #boot .landing-frame {
+  animation: none;
+}
+
+#boot.revealed .landing-lede,
+#boot.revealed .landing-cta,
+#boot.revealed .landing-note {
+  animation: landing-reveal 900ms cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+#boot.revealed .landing-lede { animation-delay: 250ms; }
+#boot.revealed .landing-cta { animation-delay: 550ms; }
+#boot.revealed .landing-note { animation-delay: 850ms; }
+
+.landing-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 35px;
+  border-bottom: 1px solid #263449;
+}
+
+#boot.compact .landing-head {
+  flex-direction: column;
+  gap: 18px;
+  padding-bottom: 0;
+  border: 0;
+}
+
+.landing-title {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.landing-title h1 {
+  margin: 0;
+  color: #f0f7fb;
+  font-size: 46px;
+  line-height: 1;
+  font-weight: 500;
+  letter-spacing: 0.34em;
+  text-shadow: 0 0 40px rgba(53, 214, 255, 0.25);
+}
+
+.landing-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  position: relative;
+  background: #52647b;
+  box-shadow: 0 0 14px rgba(62, 240, 194, 0.45);
+  transition: background 400ms ease;
+  animation: landing-pulse 1.8s ease-in-out infinite;
+}
+
+.landing-dot::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  background: rgba(62, 240, 194, 0.14);
+  animation: landing-halo 1.8s ease-in-out infinite;
+}
+
+#boot.ready .landing-dot {
+  background: var(--mint);
+}
+
+.landing-state {
+  color: #7f93ad;
+  font-size: 16px;
+  letter-spacing: 0.28em;
+}
+
+#boot.ready .landing-state {
+  color: var(--mint);
+}
+
+.landing-lede {
+  max-width: 34ch;
+  margin: 0;
+  color: #b4c3d3;
+  font-size: 19px;
+  line-height: 1.6;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+.landing-foot {
+  border-top: 1px solid #263449;
+  padding-top: 30px;
+}
+
+#boot.compact .landing-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 30px;
+  border: 0;
+  padding: 0;
+}
+
+.landing-log {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 26px;
+  color: #7f93ad;
+  font-size: 14px;
+  letter-spacing: 0.1em;
+}
+
+#boot.compact .landing-log {
+  margin: 0;
+}
+
+.landing-prompt {
+  color: var(--mint);
+}
+
+.landing-caret {
+  width: 8px;
+  height: 15px;
+  background: var(--mint);
+  animation: landing-blink 1s steps(2, start) infinite;
+}
+
+#boot.failed .landing-log,
+#boot.failed .landing-state {
+  color: #ff6b8b;
+}
+
+#boot.failed .landing-caret,
+#boot.failed .landing-dot {
+  background: #ff6b8b;
+  box-shadow: none;
+  animation: none;
+}
+
+#boot.failed .landing-dot::after {
+  display: none;
+}
+
+/* Enter the field -------------------------------------------------------- */
+
+/* A field lens: a pill that leans toward the pointer, with a mint glow and
+   fluid ripples spreading from under the cursor, a beacon pulse around it
+   and chevrons streaming forward. Disabled while booting, it is a dim pill
+   with a scanning hairline instead. `--mx/--my/--tx/--ty` come from
+   `magnetise` in `landing.ts`. */
+.landing-enter {
+  --mx: 50%;
+  --my: 50%;
+  --tx: 0px;
+  --ty: 0px;
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  gap: 22px;
+  padding: 22px 30px 22px 38px;
+  background:
+    radial-gradient(180px circle at var(--mx) var(--my), rgba(62, 240, 194, 0.24), transparent 70%),
+    #06120f;
+  border: 1px solid rgba(62, 240, 194, 0.45);
+  border-radius: 999px;
+  color: #dffcf4;
+  font: inherit;
+  font-size: 16px;
+  letter-spacing: 0.3em;
+  cursor: pointer;
+  box-shadow: 0 0 28px rgba(62, 240, 194, 0.14);
+  transform: translate(var(--tx), var(--ty));
+  transition:
+    transform 350ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-color 300ms ease,
+    color 200ms ease;
+}
+
+/* Every loop below animates only transform and opacity, so the compositor
+   runs them without repainting while the engine owns the main thread. */
+
+/* The beacon: an outline of the pill that swells outward and fades. */
+.landing-enter::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border: 1px solid rgba(62, 240, 194, 0.5);
+  border-radius: inherit;
+  pointer-events: none;
+  animation: landing-beacon 2.6s ease-out infinite;
+}
+
+/* The ripples: two rings spreading from under the pointer, clipped to the pill. */
+.landing-enter-ripples {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0.45;
+  transition: opacity 300ms ease;
+}
+
+.landing-enter-ripples::before,
+.landing-enter-ripples::after {
+  content: '';
+  position: absolute;
+  left: var(--mx);
+  top: var(--my);
+  width: 240px;
+  height: 240px;
+  border: 1.5px solid rgba(62, 240, 194, 0.6);
+  border-radius: 50%;
+  opacity: 0;
+  animation: landing-ripple 1.6s ease-out infinite;
+}
+
+.landing-enter-ripples::after {
+  animation-delay: 800ms;
+}
+
+.landing-enter-label {
+  min-width: 15ch;
+  text-align: left;
+}
+
+.landing-enter-arrow {
+  display: inline-flex;
+  color: var(--mint);
+  font-size: 22px;
+  line-height: 1;
+  letter-spacing: 0;
+  transition: transform 300ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.landing-enter-arrow span {
+  animation: landing-chevron 1.4s ease-in-out infinite;
+}
+
+.landing-enter-arrow span:nth-child(2) { animation-delay: 160ms; }
+.landing-enter-arrow span:nth-child(3) { animation-delay: 320ms; }
+
+/* Raise a hand to enter: the pill fills left to right while a hand is held
+   up (`--charge` from `landing-hand.ts`), and the hint beside it answers. */
+.landing-cta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.landing-hand {
+  display: none;
+  color: #667b94;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  transition: color 300ms ease;
+}
+
+.landing-hand::before {
+  content: '✋ ';
+}
+
+#boot.hand-ready .landing-hand {
+  display: inline;
+}
+
+#boot.hand-seen .landing-hand {
+  color: var(--mint);
+}
+
+.landing-enter-charge {
+  --charge: 0;
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.landing-enter-charge::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(62, 240, 194, 0.12), rgba(62, 240, 194, 0.42));
+  transform: scaleX(var(--charge));
+  transform-origin: left;
+  transition: transform 90ms linear;
+}
+
+/* The scanning hairline — the booting state only. */
+.landing-enter-sheen {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  pointer-events: none;
+  display: none;
+}
+
+.landing-enter-sheen::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 30%;
+  background: linear-gradient(90deg, transparent, rgba(53, 214, 255, 0.18), transparent);
+  animation: landing-sheen 1.7s ease-in-out infinite;
+}
+
+.landing-enter:hover:not(:disabled) {
+  border-color: var(--mint);
+  color: #fff;
+}
+
+.landing-enter:hover:not(:disabled) .landing-enter-ripples {
+  opacity: 1;
+}
+
+.landing-enter:hover:not(:disabled) .landing-enter-arrow {
+  transform: translateX(6px);
+}
+
+.landing-enter:hover:not(:disabled) .landing-enter-arrow span {
+  animation-duration: 0.7s;
+}
+
+.landing-enter:active:not(:disabled) {
+  transform: translate(var(--tx), var(--ty)) scale(0.97);
+}
+
+.landing-enter:focus-visible {
+  outline: 2px solid var(--mint);
+  outline-offset: 8px;
+}
+
+.landing-enter:disabled {
+  cursor: progress;
+  color: #52647b;
+  background: #0a0f18;
+  border-color: #263449;
+  box-shadow: none;
+}
+
+.landing-enter:disabled::after {
+  display: none;
+}
+
+.landing-enter:disabled .landing-enter-ripples,
+.landing-enter:disabled .landing-enter-arrow {
+  opacity: 0;
+}
+
+.landing-enter:disabled .landing-enter-sheen {
+  display: block;
+}
+
+#boot.failed .landing-enter-sheen::before {
+  animation: none;
+  opacity: 0;
+}
+
+.landing-note {
+  margin: 0;
+  color: #5d7189;
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+/* The exit ---------------------------------------------------------------- */
+
+/* The console swells and dissolves while a shockwave and a glow burst from
+   the button. Everything here is opacity and transform on pre-sized layers:
+   the engine is running flat out by now, and the earlier mask/blur/filter
+   exit repainted the whole screen every frame and stuttered. */
+#boot.entering {
+  pointer-events: none;
+  will-change: opacity;
+  animation: landing-out 1150ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+#boot.entering .landing-frame {
+  will-change: transform, opacity;
+  animation: landing-dissolve 650ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+#boot.entering .landing-enter {
+  color: #fff;
+  transform: scale(1.12);
+  box-shadow: 0 0 60px rgba(62, 240, 194, 0.6);
+  animation: none;
+}
+
+#boot.entering .landing-enter-ripples {
+  opacity: 1;
+}
+
+/* `--reach` (set in `landing.ts`) is the ring's final radius. The rings are
+   laid out once, at half that size to keep their layers light, and are only
+   scaled from then on (to 2 at the end), so no frame re-lays or repaints them. */
+.landing-shock {
+  position: fixed;
+  inset: 0;
+  z-index: 101;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.landing-shock span,
+.landing-shock::before {
+  position: absolute;
+  left: calc(var(--ex) - var(--reach) / 2);
+  top: calc(var(--ey) - var(--reach) / 2);
+  width: var(--reach);
+  height: var(--reach);
+  border-radius: 50%;
+  will-change: transform, opacity;
+}
+
+.landing-shock span {
+  box-sizing: border-box;
+  border: 2px solid #3ef0c2;
+  box-shadow:
+    0 0 15px #3ef0c2,
+    inset 0 0 15px rgba(53, 214, 255, 0.6);
+  animation: landing-shock 1150ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+/* The trailing magenta echo. */
+.landing-shock span + span {
+  border-color: #ff5ea8;
+  box-shadow: 0 0 20px #ff5ea8;
+  animation-delay: 140ms;
+  animation-duration: 1010ms;
+}
+
+/* The flash: a mint bloom from the button that the field wakes into. */
+.landing-shock::before {
+  content: '';
+  background: radial-gradient(circle, rgba(62, 240, 194, 0.35), rgba(53, 214, 255, 0.1) 40%, transparent 70%);
+  animation: landing-flash 1000ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* The field answers the entry: it settles back from a slight push-in. */
+#stage.surge {
+  animation: landing-surge 1400ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+@keyframes landing-out {
+  0%, 35% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+@keyframes landing-dissolve {
+  to {
+    opacity: 0;
+    transform: scale(1.08);
+  }
+}
+
+@keyframes landing-shock {
+  from { opacity: 1; transform: scale(0.06); }
+  55% { opacity: 1; }
+  to { opacity: 0; transform: scale(2); }
+}
+
+@keyframes landing-flash {
+  from { opacity: 0; transform: scale(0.4); }
+  25% { opacity: 1; }
+  to { opacity: 0; transform: scale(2); }
+}
+
+@keyframes landing-surge {
+  from { transform: scale(1.06); }
+  to { transform: scale(1); }
+}
+
+@keyframes landing-ripple {
+  from { opacity: 1; transform: translate(-50%, -50%) scale(0.06); }
+  to { opacity: 0; transform: translate(-50%, -50%) scale(1); }
+}
+
+@keyframes landing-beacon {
+  0% { opacity: 0.8; transform: scale(1); }
+  70%, 100% { opacity: 0; transform: scale(1.08, 1.4); }
+}
+
+@keyframes landing-chevron {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
+}
+
+@keyframes landing-sheen {
+  /* In the sweep's own widths (30% of the pill): -45% → 110% of the pill. */
+  0% { transform: translateX(-150%); }
+  60%, 100% { transform: translateX(366.67%); }
+}
+
+@keyframes landing-boot-in {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes landing-reveal {
+  from { opacity: 0; transform: translateY(12px); }
+}
+
+@keyframes landing-blink {
+  to { visibility: hidden; }
+}
+
+@keyframes landing-pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+@keyframes landing-halo {
+  0%, 100% { opacity: 0.4; transform: scale(0.75); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@media (max-width: 860px) {
+  .landing-title h1 {
+    font-size: 30px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .landing-enter::after,
+  .landing-enter-ripples::before,
+  .landing-enter-ripples::after,
+  .landing-enter-arrow span,
+  .landing-dot::after,
+  .landing-enter-sheen::before,
+  .landing-dot {
+    animation: none;
+  }
+}

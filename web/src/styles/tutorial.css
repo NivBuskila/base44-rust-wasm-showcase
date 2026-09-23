@@ -90,14 +90,14 @@
   line-height: 0.8;
   letter-spacing: -0.04em;
   color: transparent;
-  -webkit-text-stroke: 1px rgba(53, 214, 255, 0.16);
+  -webkit-text-stroke: 1px rgba(var(--accent-rgb), 0.16);
   pointer-events: none;
   z-index: 0;
 }
 
 .tut.is-done .tut-num,
 .tut.is-pass .tut-num {
-  -webkit-text-stroke-color: rgba(53, 214, 255, 0.4);
+  -webkit-text-stroke-color: rgba(var(--accent-rgb), 0.4);
 }
 
 .tut-body > *:not(.tut-num) {
@@ -139,7 +139,7 @@
 }
 
 .tut-dots i.is-done {
-  background: rgba(53, 214, 255, 0.45);
+  background: rgba(var(--accent-rgb), 0.45);
 }
 
 .tut-dots i.is-now {
@@ -166,7 +166,7 @@
   height: clamp(112px, 16vh, 156px);
   border-radius: 50%;
   background:
-    radial-gradient(90% 80% at 50% 20%, rgba(53, 214, 255, 0.1), transparent 70%),
+    radial-gradient(90% 80% at 50% 20%, rgba(var(--accent-rgb), 0.1), transparent 70%),
     var(--well);
   border: 1px solid var(--edge);
   color: var(--accent);
@@ -229,7 +229,7 @@
   display: grid;
   place-items: center;
   align-self: center;
-  color: rgba(53, 214, 255, 0.55);
+  color: rgba(var(--accent-rgb), 0.55);
 }
 
 .tut-arrow svg {
@@ -279,7 +279,7 @@
 .tut-goal-art .tut-mirror-line {
   stroke: var(--accent);
   stroke-width: 1.4;
-  filter: drop-shadow(0 0 5px rgba(53, 214, 255, 0.5));
+  filter: drop-shadow(0 0 5px rgba(var(--accent-rgb), 0.5));
 }
 
 .tut.is-step .tut-goal,
@@ -310,7 +310,7 @@
   filter: drop-shadow(0 0 4px rgba(255, 255, 255, 0.55));
 }
 
-/* The hold timer: the same skeleton in accent blue, revealed wrist-upwards. */
+/* The hold timer: the same skeleton in the accent, revealed wrist-upwards. */
 .tut-mirror-fill {
   stroke: var(--accent);
   stroke-width: 2.4;
@@ -334,7 +334,7 @@
 .tut-hand svg {
   width: clamp(70px, 10vh, 100px);
   height: clamp(70px, 10vh, 100px);
-  filter: drop-shadow(0 0 9px rgba(53, 214, 255, 0.4));
+  filter: drop-shadow(0 0 9px rgba(var(--accent-rgb), 0.4));
 }
 
 /* The charge ring lives beside the hand, not inside it: the hand drawing is
@@ -362,7 +362,7 @@
 }
 
 .tut-ring-bg {
-  stroke: rgba(53, 214, 255, 0.14);
+  stroke: rgba(var(--accent-rgb), 0.14);
 }
 
 .tut-ring-v {
@@ -370,7 +370,7 @@
   stroke-linecap: round;
   stroke-dashoffset: calc(1 - var(--vn, 0));
   transition: stroke-dashoffset 90ms linear;
-  filter: drop-shadow(0 0 5px rgba(53, 214, 255, 0.7));
+  filter: drop-shadow(0 0 5px rgba(var(--accent-rgb), 0.7));
 }
 
 /* Each pose hints at what it does, so the drawing is never quite static. */
@@ -444,7 +444,7 @@
   text-transform: lowercase;
   line-height: 1;
   color: var(--ink);
-  text-shadow: 0 0 26px rgba(53, 214, 255, 0.35);
+  text-shadow: 0 0 26px rgba(var(--accent-rgb), 0.35);
 }
 
 .tut-effect {
