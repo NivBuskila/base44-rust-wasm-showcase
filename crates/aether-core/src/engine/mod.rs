@@ -23,7 +23,6 @@
 //! engine.step(dt)  -> then read dye_ptr() and particle_ptr()
 //! ```
 
-use crate::bolt::ThrowTracker;
 use crate::combo::{ComboProgress, ComboTracker};
 use crate::config::{
     Params, DEFAULT_PARTICLES, FLOW_CELLS, FLOW_H, FLOW_W, FLUID_CELLS, FLUID_H, FLUID_W,
@@ -36,7 +35,6 @@ use crate::fluid::Fluid;
 use crate::gesture::{GestureConfig, GestureTracker, Spell};
 use crate::mask::{BodyMask, MaskConfig};
 use crate::particles::{ParticleConfig, Particles};
-use crate::rush::Rush;
 use crate::spells::{SpellReport, SpellState};
 
 /// Largest segmentation mask the input buffer accepts, per axis. MediaPipe's
@@ -105,10 +103,6 @@ pub struct Engine {
     /// Practice mode: combos and duets are still tracked but never cast, so the
     /// tutorial can walk one pose after another without chaining them.
     practice: bool,
-    /// Recognises a flick of an open hand as a thrown energy bolt.
-    throws: ThrowTracker,
-    /// Stages a bolt thrown at the lens as an approach towards the viewer.
-    rush: Rush,
 
     // --- JS-writable input buffers ---
     luma: Vec<u8>,
@@ -158,8 +152,6 @@ impl Engine {
             combos: ComboTracker::new(),
             duets: DuetTracker::new(),
             practice: false,
-            throws: ThrowTracker::new(),
-            rush: Rush::new(),
             luma: vec![0; FLOW_CELLS],
             mask_in: vec![0.0; MASK_IN_CAPACITY],
             dye_rgba: vec![0; FLUID_CELLS * 4],
@@ -234,10 +226,10 @@ impl Engine {
         self.duets.progress()
     }
 
-    /// The in-flight lens rush, for the renderer's composite staging.
+    /// Retained renderer contract: throws no longer stage a lens rush.
     #[inline]
     pub fn rush_state(&self) -> crate::rush::RushState {
-        self.rush.state()
+        crate::rush::RushState::IDLE
     }
 
     #[inline]
@@ -329,8 +321,6 @@ impl Engine {
         };
         self.combos.reset();
         self.duets.reset();
-        self.throws.reset();
-        self.rush.reset();
     }
 }
 

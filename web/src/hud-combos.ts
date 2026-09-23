@@ -218,17 +218,10 @@ class Section {
   }
 }
 
-/**
- * The projectiles. These are recognised from motion and finger geometry rather
- * than latched spells, so the engine has no book for them; the instructions
- * are static and are never painted with progress.
- */
-const SHOTS_BOOK = 'throw:palm,flick';
 export class ComboBook {
   private readonly el: HTMLElement;
   private readonly sequences = new Section('sequences', parseBook);
   private readonly duets = new Section('duets', parseDuetBook);
-  private readonly shots = new Section('shots', parseDuetBook);
 
   constructor(parent: HTMLElement) {
     this.el = document.createElement('div');
@@ -237,8 +230,6 @@ export class ComboBook {
     this.el.setAttribute('aria-hidden', 'true');
     this.el.appendChild(this.sequences.el);
     this.el.appendChild(this.duets.el);
-    this.el.appendChild(this.shots.el);
-    this.shots.setBook(SHOTS_BOOK);
     parent.appendChild(this.el);
     this.refreshVisibility();
   }
@@ -259,12 +250,11 @@ export class ComboBook {
   }
 
   private refreshVisibility(): void {
-    this.el.hidden = !(this.sequences.present || this.duets.present || this.shots.present);
+    this.el.hidden = !(this.sequences.present || this.duets.present);
   }
 
   /** Paints one frame of progress. */
   update(combos: ComboState, duets: DuetState = duetState(undefined)): void {
-    this.shots.paint(-1, 0, 0, -1);
     this.sequences.paint(combos.active, combos.matched, combos.charge, combos.fired);
     // A duet has no step counter: the whole wind-up is the charge on its last
     // step, and every step before it is shown done, because the caster is
