@@ -80,7 +80,7 @@ export class Sparkline {
       const v = this.history[i] ?? 0;
       const tone = frameTone(v);
       ctx.fillStyle =
-        tone === 'over' ? '#ff6b8b' : tone === 'warn' ? '#ffc65c' : 'rgba(53, 214, 255, 0.85)';
+        tone === 'over' ? '#ff6b8b' : tone === 'warn' ? '#ffc65c' : 'rgba(62, 240, 194, 0.85)';
       const bh = Math.max(1, (v / worst) * h);
       ctx.fillRect((offset + i) * colW, h - bh, barW, bh);
     }

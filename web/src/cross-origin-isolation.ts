@@ -15,6 +15,19 @@
 
 /** Marks that this tab has already spent its one reload, so we never loop. */
 const RELOADED_KEY = 'aether:coi-reloaded';
+/** One-shot: this document is the reload, so the loader continues rather than re-entering. */
+const RESUME_KEY = 'aether:coi-resume';
+
+/** True once, in the document that the isolation reload produced. */
+export function resumedFromIsolationReload(): boolean {
+  try {
+    const resumed = sessionStorage.getItem(RESUME_KEY) === '1';
+    sessionStorage.removeItem(RESUME_KEY);
+    return resumed;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Makes the document cross-origin isolated if it is not already, reloading once
@@ -62,6 +75,7 @@ export async function ensureCrossOriginIsolation(): Promise<void> {
 
     if (sessionStorage.getItem(RELOADED_KEY)) return;
     sessionStorage.setItem(RELOADED_KEY, '1');
+    sessionStorage.setItem(RESUME_KEY, '1');
 
     console.info('[aether] reloading to pick up cross-origin isolation');
     window.location.reload();

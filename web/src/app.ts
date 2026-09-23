@@ -316,6 +316,16 @@ export class App {
     };
   }
 
+  /** The intro has opened: first-run HUD moments may start now. */
+  stage(): void {
+    this.hud.stage();
+  }
+
+  /** Hands the engine sees this frame; cheap enough to poll at 20 Hz. */
+  get handsPresent(): number {
+    return this.engine.stats()[STAT.HANDS_PRESENT] ?? 0;
+  }
+
   /** The session record so far, without waiting for the next storage write. */
   qaSession(): QaSession {
     return this.qa.summary();
