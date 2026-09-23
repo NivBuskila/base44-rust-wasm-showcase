@@ -5,7 +5,7 @@
  * wordmark and a live boot log). Once the engine runs the backdrop turns
  * translucent so the field wakes behind it and, on a first visit, a single
  * line and "Enter the field" unfold under the centred header; the button
- * irises it open. With a camera running, holding a hand up fills the
+ * bursts it open. With a camera running, holding a hand up fills the
  * button and opens it too (`landing-hand.ts`). The HUD's first-run moments
  * wait for `onOpen`, so nothing plays unseen behind the console.
  *
@@ -18,7 +18,7 @@
 import { watchHand, type HandWatch } from './landing-hand';
 
 const SEEN_KEY = 'aether.landing.seen';
-/** Must match the iris animation's duration in `landing.css`. */
+/** Must match the exit animation's duration in `landing.css`. */
 const EXIT_MS = 1150;
 
 export interface ReadyOptions {
@@ -206,7 +206,7 @@ export function mountIntro(resumed = false): Intro {
   let onOpen: (() => void) | undefined;
   let watch: HandWatch | null = null;
 
-  /** Irises the console open from (x, y), surging the stage behind it. */
+  /** Bursts the console open from (x, y), surging the stage behind it. */
   const open = (x: number, y: number) => {
     if (opened) return;
     opened = true;
@@ -217,11 +217,12 @@ export function mountIntro(resumed = false): Intro {
       onOpen?.();
       return;
     }
-    root.style.setProperty('--ex', `${x}px`);
-    root.style.setProperty('--ey', `${y}px`);
     const shock = el('div', 'landing-shock');
     shock.style.setProperty('--ex', `${x}px`);
     shock.style.setProperty('--ey', `${y}px`);
+    // The rings end just past the farthest corner, so they sweep the screen.
+    const reach = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+    shock.style.setProperty('--reach', `${Math.ceil(reach)}px`);
     shock.append(el('span', ''), el('span', ''));
     document.body.append(shock);
     const stage = document.getElementById('stage');
