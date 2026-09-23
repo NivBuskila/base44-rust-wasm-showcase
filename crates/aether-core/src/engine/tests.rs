@@ -199,6 +199,51 @@ fn hand_input_marks_perception_active() {
     assert!(!e.stats().ambient, "a tracked hand should suppress ambient");
 }
 
+/// Exercise real packed hand input, including the settling frames needed by
+/// the gesture filter. Moving an open palm still repels, but never shoots.
+fn assert_palm_motion_does_not_shoot(towards_camera: bool) {
+    use crate::gesture::synth;
+    use crate::particles::offload::{OP_BURST, OP_RING, OP_STRIDE};
+
+    let mut e = Engine::new(22);
+    e.set_gpu_particles(true);
+    let dt = 1.0 / 60.0;
+    for frame in 0..50 {
+        let progress = ((frame as f32 - 39.0) / 10.0).clamp(0.0, 1.0);
+        let (x, scale) = if towards_camera {
+            (0.5, 0.1 * (1.0 + 0.8 * progress))
+        } else {
+            (0.25 + 0.5 * progress, 0.1)
+        };
+        let mut packed = synth::buffer();
+        let hand = synth::Hand::at(x, 0.5)
+            .gesture(synth::OPEN_PALM)
+            .scaled(scale);
+        synth::write(&mut packed, 0, &hand);
+        e.push_hands(&packed, dt);
+        e.step(dt);
+        assert_eq!(e.rush_state(), crate::rush::RushState::IDLE);
+        assert!(
+            e.particle_ops()
+                .chunks_exact(OP_STRIDE)
+                .all(|op| op[0] != OP_BURST && op[0] != OP_RING),
+            "an open-palm motion fired a projectile"
+        );
+    }
+    assert_eq!(e.spell_name(0), "repel", "ordinary palm spell was lost");
+    assert!(e.fluid().max_speed() > 0.0, "palm no longer moves fluid");
+}
+
+#[test]
+fn pushing_a_hand_at_the_camera_no_longer_shoots() {
+    assert_palm_motion_does_not_shoot(true);
+}
+
+#[test]
+fn flicking_a_hand_no_longer_shoots() {
+    assert_palm_motion_does_not_shoot(false);
+}
+
 #[test]
 fn short_hand_buffer_is_tolerated() {
     let mut e = Engine::new(15);

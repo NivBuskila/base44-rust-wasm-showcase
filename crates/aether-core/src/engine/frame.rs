@@ -2,14 +2,12 @@
 //!
 //! The order is not arbitrary: duets are recognised before combos (a charged
 //! big bang owns both hands and its release is also each hand's `nova`), the
-//! spell layer runs before thrown bolts (both write into the same field), and
-//! every source is injected before the solve so the same step carries it.
+//! spell layer injects every source before the solve so the same step carries it.
 //!
 //! Only real time drives the perception and pacing clocks; the two-hand
 //! time-warp scales the `dt` handed to the simulation, never the clocks.
 
 use super::{sane_dt, Engine, AMBIENT_AFTER, SANITIZE_EVERY};
-use crate::bolt;
 use crate::config::{FLUID_H, FLUID_W};
 use crate::math::hue_to_rgb;
 use crate::spells;
@@ -97,35 +95,6 @@ impl Engine {
             )
         };
         self.report = report;
-
-        // Thrown bolts: pure motion, so they are recognised from the same hand
-        // state the spells just used and fired straight into the field.
-        let thrown = self.throws.update(&self.tracker, real_dt);
-        for throw in thrown.into_iter().flatten() {
-            // A bolt with no screen direction was pushed at the lens: the
-            // detonation below is its muzzle flash, and the rush is the approach
-            // the 2D field has no axis for.
-            if throw.dir == [0.0, 0.0] {
-                self.rush.trigger(throw.from, throw.power);
-            }
-            bolt::fire(
-                &mut self.fluid,
-                &mut self.particles,
-                self.params.particle_life,
-                throw,
-                (FLUID_W - 1) as f32,
-                (FLUID_H - 1) as f32,
-            );
-        }
-        // Before the solve: the rush injects force and dye like
-        // any other source, so the same step carries it.
-        self.rush.step(
-            &mut self.fluid,
-            &mut self.particles,
-            real_dt,
-            (FLUID_W - 1) as f32,
-            (FLUID_H - 1) as f32,
-        );
 
         self.fluid.step(warped_dt, &self.params);
 
