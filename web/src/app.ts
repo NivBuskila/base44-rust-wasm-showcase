@@ -206,6 +206,7 @@ export class App {
       this.engine.set_particles_alive(this.renderer.particlesAlive?.() ?? 0);
     }
 
+    this.governor.setHold(this.perception.warming);
     this.governor.update(this.clock.fps, realDt * 1000);
     this.overdrive.update(stats, this.clock.fps, t.stepMs);
     t.measure('hudMs', () =>
@@ -327,6 +328,20 @@ export class App {
   /** The intro has opened: first-run HUD moments may start now. */
   stage(): void {
     this.hud.stage();
+  }
+
+  /**
+   * Resolves once the vision models have loaded and delivered a first result,
+   * or after `maxMs` — the boot screen waits on this so the user doesn't enter
+   * during MediaPipe's cold start, when frames stutter. Without a camera (or
+   * with perception off) nothing is warming and it resolves at once.
+   */
+  async settled(maxMs = 30000): Promise<void> {
+    const deadline = performance.now() + maxMs;
+    while (this.perception.warming && performance.now() < deadline) {
+      // A timer, not rAF: a hidden tab pauses frames, and boot must still finish.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
   }
 
   /** Hands the engine sees this frame; cheap enough to poll at 20 Hz. */
