@@ -68,6 +68,9 @@ export interface PerceptionPumpDeps {
 
 export class PerceptionPump {
   private source: PerceptionSource | null = null;
+  private closed = false;
+  private fallingBack = false;
+  private sourceVersion = 0;
   status: PerceptionStatus = { kind: 'loading' };
   /**
    * The most recent packed hand buffer, kept for the renderer's landmark
@@ -82,8 +85,16 @@ export class PerceptionPump {
   intervalMs = PERCEPTION_MIN_INTERVAL_MS;
   /** Smoothed wall time one `process` call costs the render loop. */
   costMs = 0;
+  /** First detected hand delivered to the engine, on the performance clock. */
+  firstHandAtMs: number | null = null;
+  /** Last completed pass; worker decode is asynchronous, not frame-loop cost. */
+  decodeMs = 0;
+  modelMs = 0;
+  workerOverheadMs = 0;
 
   private lastMs = 0;
+  private lastResultMs = 0;
+  private resultHz = 0;
   /**
    * True when the source runs the models on a worker, so `process` is cheap and
    * self-pacing and the render loop should drain it every frame.
@@ -98,15 +109,25 @@ export class PerceptionPump {
     return this.source !== null;
   }
 
-  /** Effective inference cadence in Hz, after adaptive throttling. */
+  /** Effective inline inference budget cadence, not the delivered result rate. */
   get hz(): number {
     return 1000 / this.intervalMs;
+  }
+
+  /** Measured rate at which completed results reached the engine. */
+  get actualHz(): number {
+    if (this.status.kind !== 'ready' || performance.now() - this.lastResultMs > 2000) return 0;
+    return this.resultHz;
   }
 
   /** Runs inference at a cadence derived from its own measured cost. */
   pump(nowMs: number): void {
     const video = this.deps.frame();
     if (!this.source || !video) return;
+    if (this.offThread && this.source.status.kind === 'unavailable') {
+      void this.fallback(this.source.status.reason);
+      return;
+    }
 
     // Off-thread perception paces itself: the worker takes one frame at a time,
     // and `process` only decodes a bitmap and hands back whatever has already
@@ -126,11 +147,27 @@ export class PerceptionPump {
     try {
       result = this.source.process(video, nowMs);
     } catch (err) {
-      // One bad inference must not kill the loop; drop perception instead.
-      console.error('[aether] perception threw, disabling it', err);
-      this.status = { kind: 'unavailable', reason: 'Inference failed.' };
-      this.source.close();
-      this.source = null;
+      if (this.offThread) {
+        void this.fallback(String(err));
+      } else {
+        console.error('[aether] perception threw, disabling it', err);
+        this.status = { kind: 'unavailable', reason: 'Inference failed.' };
+        this.source.close();
+        this.source = null;
+        this.hands = null;
+        this.deps.engine.clear_perception();
+      }
+      return;
+    }
+    if (this.source.status.kind === 'unavailable') {
+      if (this.offThread) void this.fallback(this.source.status.reason);
+      else {
+        this.status = this.source.status;
+        this.source.close();
+        this.source = null;
+        this.hands = null;
+        this.deps.engine.clear_perception();
+      }
       return;
     }
 
@@ -141,6 +178,16 @@ export class PerceptionPump {
     if (result && !this.offThread && !this.adaptCadence(cost)) return;
     if (!result) return;
     this.lastMs = nowMs;
+    if (this.lastResultMs > 0) {
+      const gap = nowMs - this.lastResultMs;
+      if (gap > 0) {
+        const rate = 1000 / gap;
+        this.resultHz = this.resultHz === 0 || gap > 2000
+          ? rate
+          : this.resultHz * 0.8 + rate * 0.2;
+      }
+    }
+    this.lastResultMs = nowMs;
 
     // `cost`, not `result.latencyMs`: the HUD row sits in the frame budget, so
     // it must report what the render loop actually paid. With perception on a
@@ -148,8 +195,13 @@ export class PerceptionPump {
     // decode — charging it the full inference would show a blown budget on a
     // frame that comfortably made 60 Hz.
     this.inferenceMs = cost;
+    this.decodeMs = result.decodeMs ?? 0;
+    this.modelMs = result.latencyMs;
+    this.workerOverheadMs = result.workerRoundTripMs === undefined
+      ? 0 : Math.max(0, result.workerRoundTripMs - result.latencyMs);
     this.hands = result.hands;
     this.deps.engine.push_hands(result.hands, dt);
+    if (result.anyHand && this.firstHandAtMs === null) this.firstHandAtMs = performance.now();
     this.deps.engine.push_pose(result.pose, dt);
 
     if (result.mask) {
@@ -203,15 +255,48 @@ export class PerceptionPump {
    * the inline path stays as the fallback rather than the default: same models,
    * same results, just paid for out of the frame budget.
    */
-  private async build(): Promise<PerceptionSource> {
-    const offloaded = new WorkerPerception();
+  private async build(): Promise<PerceptionSource | null> {
+    let offloaded: WorkerPerception | null = null;
     try {
+      offloaded = new WorkerPerception();
       await offloaded.init();
       return offloaded;
     } catch (err) {
       console.warn('[aether] perception worker unusable, running inference inline', err);
-      offloaded.close();
-      return new MediaPipePerception();
+      offloaded?.close();
+      return this.closed ? null : new MediaPipePerception();
+    }
+  }
+
+  /** A worker failure after boot gets the same inline fallback as a boot failure. */
+  private async fallback(reason: string): Promise<void> {
+    if (this.closed || this.fallingBack || !this.offThread) return;
+    console.warn('[aether] perception worker unusable, running inference inline', reason);
+    this.fallingBack = true;
+    this.source?.close();
+    this.source = null;
+    this.offThread = false;
+    this.hands = null;
+    this.deps.engine.clear_perception();
+    this.status = { kind: 'loading' };
+    const version = this.sourceVersion;
+    const inline = new MediaPipePerception();
+    try {
+      await inline.init();
+      if (this.closed || this.sourceVersion !== version || this.source) {
+        inline.close();
+        return;
+      }
+      this.source = inline;
+      this.status = inline.status;
+      this.lastMs = 0;
+    } catch (err) {
+      inline.close();
+      if (!this.closed && this.sourceVersion === version && !this.source) {
+        this.status = { kind: 'unavailable', reason: `Vision models unavailable: ${String(err)}` };
+      }
+    } finally {
+      this.fallingBack = false;
     }
   }
 
@@ -223,13 +308,19 @@ export class PerceptionPump {
    * responsive and the HUD explains what is missing.
    */
   async attach(): Promise<void> {
+    const version = this.sourceVersion;
     const source = await this.build();
+    if (!source) return;
+    if (this.closed || this.sourceVersion !== version) {
+      source.close();
+      return;
+    }
     try {
       await source.init();
       // A scripted source may have been injected while the models loaded
       // (the headless suite does exactly this), and it must win — otherwise a
       // slow load silently overwrites the test's perception mid-run.
-      if (this.source !== null) {
+      if (this.closed || this.sourceVersion !== version || this.source !== null) {
         source.close();
         return;
       }
@@ -237,6 +328,10 @@ export class PerceptionPump {
       this.offThread = source instanceof WorkerPerception;
       this.status = source.status;
     } catch (err) {
+      if (this.closed || this.sourceVersion !== version) {
+        source.close();
+        return;
+      }
       const reason = `Vision models unavailable: ${String(err)}`;
       console.warn(`[aether] ${reason}`);
       this.status = { kind: 'unavailable', reason };
@@ -251,12 +346,15 @@ export class PerceptionPump {
    * perception entirely, leaving the model-free optical-flow path in charge.
    */
   setSource(source: PerceptionSource | null): void {
+    this.sourceVersion++;
     this.source?.close();
     this.source = source;
     this.status = source?.status ?? { kind: 'unavailable', reason: 'detached' };
     this.deps.engine.clear_perception();
     this.hands = null;
     this.lastMs = 0;
+    this.lastResultMs = 0;
+    this.resultHz = 0;
     this.offThread = source instanceof WorkerPerception;
     // A scripted source has nothing to do with the real one's cost, so the
     // adaptive cadence has to start over or a slow MediaPipe load would leave
@@ -264,9 +362,16 @@ export class PerceptionPump {
     this.intervalMs = PERCEPTION_MIN_INTERVAL_MS;
     this.costMs = 0;
     this.strikes = 0;
+    this.firstHandAtMs = null;
+    this.decodeMs = 0;
+    this.modelMs = 0;
+    this.workerOverheadMs = 0;
   }
 
   close(): void {
+    this.closed = true;
+    this.sourceVersion++;
     this.source?.close();
+    this.source = null;
   }
 }

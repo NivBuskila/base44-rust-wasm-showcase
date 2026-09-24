@@ -26,6 +26,10 @@ import type { MaskFrame, PerceptionFrame, PerceptionSource, PerceptionStatus } f
  * above the models' own input size, so the landmarks do not move.
  */
 const INFERENCE_WIDTH = 480;
+/** Model downloads can be slow, but a silent worker must not hang forever. */
+const INIT_TIMEOUT_MS = 60_000;
+const FRAME_TIMEOUT_MS = 5_000;
+const MAX_DECODE_FAILURES = 3;
 
 export class WorkerPerception implements PerceptionSource {
   private readonly worker: Worker;
@@ -40,6 +44,11 @@ export class WorkerPerception implements PerceptionSource {
   /** True while `createImageBitmap` is still resolving. */
   private decoding = false;
   private lastVideoTime = -1;
+  private decodeMs = 0;
+  private submittedAt = 0;
+  private initTimer: ReturnType<typeof setTimeout> | null = null;
+  private decodeFailures = 0;
+  private rejectInit: ((reason: Error) => void) | null = null;
 
   /** Result waiting to be handed to the caller; null once consumed. */
   private pending: PerceptionFrame | null = null;
@@ -64,40 +73,53 @@ export class WorkerPerception implements PerceptionSource {
     });
     this.worker.onmessage = (event: MessageEvent<FromWorker>) => this.receive(event.data);
     this.worker.onerror = (event) => {
-      // A worker that cannot even parse its module never answers `init`, so
-      // without this the boot would hang on the loading status forever.
-      this.state = {
-        kind: 'unavailable',
-        reason: `Perception worker failed: ${event.message || 'unknown error'}`,
-      };
-      this.inFlight = false;
+      this.fail(`Perception worker failed: ${event.message || 'unknown error'}`);
     };
+    this.worker.onmessageerror = () => this.fail('Perception worker sent an unreadable message.');
   }
 
   get status(): PerceptionStatus {
     return this.state;
   }
 
-  /** Resolves once the worker reports a terminal status; rejects if unusable. */
+  /** Resolves on readiness; rejects on errors, cancellation or a silent boot. */
   init(): Promise<void> {
+    if (this.closed) return Promise.reject(new Error('Perception was closed.'));
     this.booting ??= new Promise<void>((resolve, reject) => {
-      const settle = () => {
-        if (this.state.kind === 'loading') return false;
-        if (this.state.kind === 'ready') resolve();
-        else reject(new Error(this.state.reason));
-        return true;
-      };
-
-      this.onStatusChange = settle;
-      this.post({ type: 'init' });
+      this.rejectInit = reject;
+      this.resolveInit = resolve;
+      this.initTimer = setTimeout(() => this.fail('Perception worker timed out loading models.'), INIT_TIMEOUT_MS);
+      try {
+        this.post({ type: 'init' });
+      } catch (err) {
+        this.fail(`Perception worker could not start: ${String(err)}`);
+      }
     });
     return this.booting;
   }
 
-  /** Set by `init` to notice the status the worker reports back. */
-  private onStatusChange: (() => boolean) | null = null;
+  private resolveInit: (() => void) | null = null;
+
+  private finishInit(): void {
+    if (this.initTimer !== null) clearTimeout(this.initTimer);
+    this.initTimer = null;
+    this.resolveInit = null;
+    this.rejectInit = null;
+  }
+
+  private fail(reason: string): void {
+    if (this.closed) return;
+    this.state = { kind: 'unavailable', reason };
+    this.rejectInit?.(new Error(reason));
+    this.finishInit();
+    this.inFlight = false;
+    this.worker.terminate();
+  }
 
   process(video: HTMLVideoElement, timestampMs: number): PerceptionFrame | null {
+    if (this.inFlight && performance.now() - this.submittedAt > FRAME_TIMEOUT_MS) {
+      this.fail('Perception worker stopped responding to frames.');
+    }
     this.submit(video, timestampMs);
 
     // Handing the same result out twice would make the engine re-apply a
@@ -131,6 +153,7 @@ export class WorkerPerception implements PerceptionSource {
     this.lastVideoTime = video.currentTime;
 
     this.decoding = true;
+    const decodeStarted = performance.now();
     const scale = Math.min(1, INFERENCE_WIDTH / video.videoWidth);
     createImageBitmap(video, {
       resizeWidth: Math.round(video.videoWidth * scale),
@@ -141,30 +164,49 @@ export class WorkerPerception implements PerceptionSource {
     })
       .then((bitmap) => {
         this.decoding = false;
-        if (this.closed) {
+        if (this.closed || this.state.kind !== 'ready') {
           bitmap.close();
           return;
         }
+        this.decodeFailures = 0;
+        this.decodeMs = performance.now() - decodeStarted;
         this.inFlight = true;
+        this.submittedAt = performance.now();
         const spare = this.spareMask;
         this.spareMask = null;
-        this.post({ type: 'frame', bitmap, timestampMs, maskBuf: spare }, [
-          bitmap,
-          ...(spare ? [spare] : []),
-        ]);
+        try {
+          this.post({ type: 'frame', bitmap, timestampMs, maskBuf: spare }, [
+            bitmap,
+            ...(spare ? [spare] : []),
+          ]);
+        } catch (err) {
+          bitmap.close();
+          this.fail(`Perception worker rejected a frame: ${String(err)}`);
+        }
       })
       .catch((err) => {
         this.decoding = false;
-        // A decode failure is a dropped frame, not a dead source: it happens
-        // when the track ends or the tab is hidden mid-call.
-        console.warn('[aether] could not decode a camera frame', err);
+        if (this.closed || this.state.kind !== 'ready') return;
+        // A transient decode failure can happen when a tab is hidden. Repeated
+        // failures with a live video need the inline path instead.
+        if (++this.decodeFailures >= MAX_DECODE_FAILURES) {
+          this.fail(`Camera frame decode failed repeatedly: ${String(err)}`);
+        } else {
+          console.warn('[aether] could not decode a camera frame', err);
+        }
       });
   }
 
   private receive(message: FromWorker): void {
+    if (this.closed || this.state.kind === 'unavailable') return;
     if (message.type === 'status') {
-      this.state = message.status;
-      if (this.onStatusChange?.()) this.onStatusChange = null;
+      if (message.status.kind === 'unavailable') {
+        this.fail(message.status.reason);
+      } else if (message.status.kind === 'ready') {
+        this.state = message.status;
+        this.resolveInit?.();
+        this.finishInit();
+      }
       return;
     }
 
@@ -196,18 +238,20 @@ export class WorkerPerception implements PerceptionSource {
       mask,
       latencyMs: message.latencyMs,
       anyHand: message.anyHand,
+      decodeMs: this.decodeMs,
+      workerRoundTripMs: performance.now() - this.submittedAt,
     };
   }
 
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    if (this.state.kind === 'ready') {
-      this.state = { kind: 'unavailable', reason: 'Perception was closed.' };
-    }
-    // Asks the worker to release the two WASM graphs before it goes away;
-    // `terminate` alone would drop them without closing their GL contexts.
-    this.post({ type: 'close' });
+    this.state = { kind: 'unavailable', reason: 'Perception was closed.' };
+    this.rejectInit?.(new Error(this.state.reason));
+    this.finishInit();
+    // Termination also works when the worker is stuck in a synchronous pass;
+    // the browser releases its graphs and GL context with the worker.
+    this.worker.terminate();
     this.pending = null;
   }
 
