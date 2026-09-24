@@ -20,6 +20,15 @@ import { watchHand, type HandWatch } from './landing-hand';
 const SEEN_KEY = 'aether.landing.seen';
 /** Must match the exit animation's duration in `landing.css`. */
 const EXIT_MS = 1150;
+/**
+ * Calibration has no real progress to report, so the fill eases toward
+ * `CALIBRATE_CEILING` with this time constant and completes on `ready`.
+ * A cold start takes ~10 s, which this puts at ~80%.
+ */
+const CALIBRATE_TAU_MS = 5000;
+const CALIBRATE_CEILING = 0.92;
+/** How long the full bar holds before the hand-charge takes it over. */
+const CALIBRATED_HOLD_MS = 600;
 
 export interface ReadyOptions {
   /** Hands in view, when a camera is running: lets a raised hand enter. */
@@ -30,7 +39,13 @@ export interface ReadyOptions {
 
 export interface Intro {
   status(text: string): void;
-  /** The engine is running: unfold the welcome (or open, on a return visit). */
+  /**
+   * The engine is running but hand tracking is still warming: on a first visit
+   * the welcome unfolds now with the button calibrating (its fill creeps up),
+   * so the wait reads as part of the entrance. Return visits stay compact.
+   */
+  reveal(): void;
+  /** Everything is warm: arm the button (or open, on a return visit). */
   ready(options?: ReadyOptions): void;
   fail(message: string): void;
 }
@@ -203,8 +218,11 @@ export function mountIntro(resumed = false): Intro {
   const full = isFirstRun();
   const ui = build(root, full);
   let opened = false;
+  let revealed = false;
+  let calibrating = 0;
   let onOpen: (() => void) | undefined;
   let watch: HandWatch | null = null;
+  const charge = root.querySelector<HTMLElement>('.landing-enter-charge');
 
   /** Bursts the console open from (x, y), surging the stage behind it. */
   const open = (x: number, y: number) => {
@@ -245,7 +263,7 @@ export function mountIntro(resumed = false): Intro {
 
   /** A held hand fills the button and opens it — the first gesture is the way in. */
   const watchForHand = (hands: () => number) => {
-    const fill = root.querySelector<HTMLElement>('.landing-enter-charge');
+    const fill = charge;
     const hint = root.querySelector<HTMLElement>('.landing-hand');
     if (!fill || !hint) return;
     root.classList.add('hand-ready');
@@ -270,19 +288,41 @@ export function mountIntro(resumed = false): Intro {
     status(text) {
       ui.statusEl.textContent = text;
     },
+    reveal() {
+      if (revealed || !ui.label) return;
+      revealed = true;
+      // The field wakes behind the console while tracking calibrates.
+      root.classList.add('awake');
+      ui.state.textContent = 'CALIBRATING';
+      // The console stays centred: the header and log only glide up to make
+      // room for the lede and the button.
+      glide(ui.anchors, () => root.classList.add('revealed'));
+      scramble(ui.label, 'CALIBRATING');
+      const start = performance.now();
+      // A timer, not rAF: frames are exactly what is stuttering right now.
+      calibrating = window.setInterval(() => {
+        const p = 1 - Math.exp(-(performance.now() - start) / CALIBRATE_TAU_MS);
+        charge?.style.setProperty('--charge', String(p * CALIBRATE_CEILING));
+      }, 100);
+    },
     ready(options = {}) {
       onOpen = options.onOpen;
       root.classList.add('ready');
       ui.state.textContent = 'ONLINE';
       ui.statusEl.textContent = 'field stable — all systems nominal';
       if (ui.enter && ui.label) {
-        // The console stays centred: the header and log only glide up to make
-        // room for the lede and the button, while the field wakes behind.
-        glide(ui.anchors, () => root.classList.add('revealed'));
+        this.reveal();
+        window.clearInterval(calibrating);
+        charge?.style.setProperty('--charge', '1');
         ui.enter.disabled = false;
         ui.enter.focus();
         scramble(ui.label, 'ENTER THE FIELD');
-        if (options.hands) watchForHand(options.hands);
+        // Let the full bar land before the hand-charge (or nothing) takes it.
+        window.setTimeout(() => {
+          if (opened) return;
+          charge?.style.setProperty('--charge', '0');
+          if (options.hands) watchForHand(options.hands);
+        }, CALIBRATED_HOLD_MS);
       } else {
         window.setTimeout(() => open(innerWidth / 2, innerHeight / 2), 450);
       }
