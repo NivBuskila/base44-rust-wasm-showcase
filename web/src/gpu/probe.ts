@@ -1,7 +1,7 @@
 /**
  * The luminance probe: a 16x16 reduction of the finished frame, read back
- * asynchronously so `sampleLuminance` costs no queue stall. The value is one
- * frame behind by design.
+ * asynchronously so `sampleLuminance` costs no queue stall. Sample at 10 Hz:
+ * this diagnostic does not need a GPU pass and readback every render frame.
  *
  * The copy is skipped while a read is in flight — a submission touching a
  * mapped buffer is dropped whole by the driver — which is `Readback`'s rule,
@@ -16,6 +16,8 @@ import { Target } from "./target";
 const PROBE = 16;
 /** `copyTextureToBuffer` wants rows aligned to 256 bytes. */
 const PROBE_ROW_BYTES = 256;
+/** Diagnostics only: one read per six 60 Hz frames is enough. */
+const PROBE_EVERY_FRAMES = 6;
 
 /** Mean Rec.709 luminance of the probe readback, `[0, 1]`, rows 256-aligned. */
 export function meanLuminance(px: Uint8Array): number {
@@ -36,6 +38,8 @@ export class LuminanceProbe {
   private readonly read: Readback;
   private bind: GPUBindGroup | null = null;
   private value = 0;
+  private framesUntilRead = 0;
+  private copied = false;
 
   constructor(
     private readonly device: GPUDevice,
@@ -68,8 +72,12 @@ export class LuminanceProbe {
     });
   }
 
-  /** Reduces the frame and queues the copy, unless a read is still pending. */
+  /** Reduces the frame periodically, unless a read is still pending. */
   record(encoder: GPUCommandEncoder, pass: FullscreenPass): void {
+    if (this.framesUntilRead > 0) {
+      this.framesUntilRead--;
+      return;
+    }
     if (!this.read.idle || !this.bind) return;
     pass(encoder, this.target.view!, this.pipe, this.bind);
     encoder.copyTextureToBuffer(
@@ -81,10 +89,14 @@ export class LuminanceProbe {
       },
       { width: PROBE, height: PROBE },
     );
+    this.framesUntilRead = PROBE_EVERY_FRAMES - 1;
+    this.copied = true;
   }
 
-  /** Must run after the submit, never before it. */
+  /** Map only after an actual copy; never remap the previous frame's buffer. */
   poll(): void {
+    if (!this.copied) return;
+    this.copied = false;
     this.read.poll((bytes) => {
       this.value = meanLuminance(new Uint8Array(bytes));
     });
