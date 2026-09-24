@@ -10,14 +10,20 @@
  * it, and x is flipped here because the stage shows a mirrored camera.
  */
 
-import { HAND_LANDMARKS, HAND_STRIDE } from './constants';
+import { HAND_LANDMARKS, HAND_STRIDE, HANDS } from './constants';
 import { fit, HandSkeleton } from './hand-skeleton';
 
-/** Landmark x/y for one hand slot, or null when that slot is empty. */
-function slotPoints(hands: Float32Array | null, slot = 0): number[][] | null {
+/**
+ * Landmark x/y for the first hand in frame, or null when there is none. Slots are
+ * sticky by handedness (slot 0 = left), so a lone right hand sits in slot 1 —
+ * reading slot 0 only left the mirror empty for right-handed casters.
+ */
+function slotPoints(hands: Float32Array | null): number[][] | null {
   if (!hands) return null;
+  let slot = 0;
+  while (slot < HANDS && !(hands.length >= (slot + 1) * HAND_STRIDE && hands[slot * HAND_STRIDE] > 0)) slot++;
+  if (slot >= HANDS) return null;
   const base = slot * HAND_STRIDE;
-  if (hands.length < base + HAND_STRIDE || hands[base] <= 0) return null;
   const pts: number[][] = [];
   for (let i = 0; i < HAND_LANDMARKS; i++) {
     const o = base + 4 + i * 3;
