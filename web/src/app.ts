@@ -307,7 +307,7 @@ export class App {
       ...this.timings.rows,
       cameraAvailable: this.cameraAvailable,
       perception: this.perception.status,
-      stats: Array.from(this.views.stats()),
+      stats: Array.from(this.views.lastStats()),
       spells: [this.engine.spell_name(0), this.engine.spell_name(1)] as [string, string],
       particleCount: this.engine.particle_count(),
       mode: this.mode,
@@ -349,7 +349,7 @@ export class App {
 
   /** Hands the engine sees this frame; cheap enough to poll at 20 Hz. */
   get handsPresent(): number {
-    return this.views.stats()[STAT.HANDS_PRESENT] ?? 0;
+    return this.views.lastStats()[STAT.HANDS_PRESENT] ?? 0;
   }
 
   /** The session record so far, without waiting for the next storage write. */
