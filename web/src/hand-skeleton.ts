@@ -11,7 +11,8 @@
  * charge.
  */
 
-import { ICON_BOX } from './hand-icons';
+/** The drawing's square canvas; every skeleton is fitted into it. */
+export const ICON_BOX = 32;
 
 /** MediaPipe hand topology, as polylines: one line per finger plus the palm arch. */
 export const CHAINS: readonly (readonly number[])[] = [
