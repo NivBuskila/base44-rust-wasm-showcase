@@ -330,6 +330,20 @@ export class App {
     this.hud.stage();
   }
 
+  /**
+   * Resolves once the vision models have loaded and delivered a first result,
+   * or after `maxMs` — the boot screen waits on this so the user doesn't enter
+   * during MediaPipe's cold start, when frames stutter. Without a camera (or
+   * with perception off) nothing is warming and it resolves at once.
+   */
+  async settled(maxMs = 30000): Promise<void> {
+    const deadline = performance.now() + maxMs;
+    while (this.perception.warming && performance.now() < deadline) {
+      // A timer, not rAF: a hidden tab pauses frames, and boot must still finish.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
   /** Hands the engine sees this frame; cheap enough to poll at 20 Hz. */
   get handsPresent(): number {
     return this.engine.stats()[STAT.HANDS_PRESENT] ?? 0;
