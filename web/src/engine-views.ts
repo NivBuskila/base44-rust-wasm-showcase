@@ -17,6 +17,7 @@ export class EngineViews {
   luma!: Uint8Array;
   mask!: Float32Array;
   private statsView!: Float32Array;
+  private particleView: Float32Array | null = null;
 
   constructor(
     private readonly engine: AetherEngine,
@@ -32,6 +33,7 @@ export class EngineViews {
     this.luma = new Uint8Array(buffer, this.engine.luma_ptr(), this.engine.luma_len());
     this.mask = new Float32Array(buffer, this.engine.mask_ptr(), this.engine.mask_capacity());
     this.statsView = new Float32Array(buffer, this.engine.stats_ptr(), STATS_LEN);
+    this.particleView = null;
   }
 
   /** Refreshes and returns the packed HUD values without copying across WASM. */
@@ -46,15 +48,16 @@ export class EngineViews {
     if (this.buffer !== this.memory.buffer || this.dye.length === 0) this.rebuild();
   }
 
-  /** A fresh particle view; its length tracks the live particle count. */
+  /** Reuses the particle view until the pool, pointer or WASM memory changes. */
   particles(): Float32Array {
     // `step` can grow memory after the frame's first `refresh`.
     this.refresh();
-    return new Float32Array(
-      this.buffer,
-      this.engine.particle_ptr(),
-      this.engine.particle_count() * PARTICLE_STRIDE,
-    );
+    const ptr = this.engine.particle_ptr();
+    const length = this.engine.particle_count() * PARTICLE_STRIDE;
+    const view = this.particleView;
+    if (view && view.buffer === this.buffer && view.byteOffset === ptr && view.length === length)
+      return view;
+    return (this.particleView = new Float32Array(this.buffer, ptr, length));
   }
 
   debug(): Uint8Array {
