@@ -19,7 +19,7 @@ impl Fluid {
     pub fn step(&mut self, dt: f32, params: &Params) {
         let dt = sane_dt(dt);
 
-        self.refresh_solid();
+        // The wall mask was refreshed by set_obstacle (or at construction).
         // A silhouette cell that only just turned solid still holds the
         // velocity it had as fluid, and every stage below assumes otherwise.
         self.enforce_boundaries();
@@ -88,9 +88,7 @@ impl Fluid {
         for y in 0..self.h {
             for x in 0..self.w {
                 let i = y * self.w + x;
-                let solid = self.obstacle.data[i] >= 0.5;
-                let border = x == 0 || y == 0 || x == self.w - 1 || y == self.h - 1;
-                if solid || border {
+                if self.solid.data[i] >= 0.5 {
                     self.vel.u.data[i] = 0.0;
                     self.vel.v.data[i] = 0.0;
                 }
