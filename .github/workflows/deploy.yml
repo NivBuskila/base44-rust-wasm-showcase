@@ -43,10 +43,9 @@ jobs:
       - run: npm run build
         working-directory: web
         env:
-          # Absolute URL for the link-preview tags. Pages suffixed the project
-          # subdomain (`aether` was taken), so it can't be derived from the
-          # name; set repo variable SITE_URL to override (e.g. custom domain).
-          VITE_SITE_URL: ${{ vars.SITE_URL || 'https://aether-86s.pages.dev' }}
+          # Absolute URL for the link-preview tags: the custom domain attached
+          # to the Pages project. Set repo variable SITE_URL to override.
+          VITE_SITE_URL: ${{ vars.SITE_URL || 'https://aether-physics.xyz' }}
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
