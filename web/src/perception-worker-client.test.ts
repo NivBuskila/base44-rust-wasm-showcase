@@ -73,10 +73,39 @@ it('marks a stalled frame unavailable so the pump can switch sources', async () 
   source.process(video, now);
   await Promise.resolve();
   expect(worker.postMessage).toHaveBeenCalledTimes(2);
+  // The first pass compiles shaders; a cold cache made it take ~18 s.
+  now += 18_000;
+  source.process(video, now);
+  expect(source.status.kind).toBe('ready');
+  worker.emit({ type: 'skip', maskBuf: null });
+
+  (video as { currentTime: number }).currentTime = 2;
+  source.process(video, now);
+  await Promise.resolve();
+  expect(worker.postMessage).toHaveBeenCalledTimes(3);
   now += 5001;
   source.process(video, now);
   expect(source.status.kind).toBe('unavailable');
   expect(worker.terminate).toHaveBeenCalledOnce();
+});
+
+it('still gives up on a first frame that never answers', async () => {
+  vi.stubGlobal('Worker', class extends FakeWorker {
+    constructor() { super(); worker = this; }
+  });
+  let now = 1000;
+  vi.spyOn(performance, 'now').mockImplementation(() => now);
+  const source = new WorkerPerception();
+  const boot = source.init();
+  worker.emit({ type: 'status', status: { kind: 'ready', delegate: 'GPU' } });
+  await boot;
+  const video = { readyState: 2, videoWidth: 640, videoHeight: 480, currentTime: 1 } as HTMLVideoElement;
+  vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ close: vi.fn() }));
+  source.process(video, now);
+  await Promise.resolve();
+  now += 60_001;
+  source.process(video, now);
+  expect(source.status.kind).toBe('unavailable');
 });
 
 it('handles an unreadable worker reply after boot', async () => {
