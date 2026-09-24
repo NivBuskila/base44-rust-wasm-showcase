@@ -14,6 +14,9 @@ into combos and cast with both hands for duets.
 Everything runs locally in the browser. No server, no upload, no video leaving
 the machine.
 
+**Live demo: [aether-physics.xyz](https://aether-physics.xyz)** — open it in its own tab in a current Chrome, Edge
+or Firefox and allow camera access.
+
 ## Why it is built this way
 
 The interesting constraint is that this has a **33 ms budget end to end** —
@@ -344,6 +347,28 @@ an existing Chromium with `AETHER_CHROMIUM=/path/to/chromium`.
 CI (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `cargo clippy
 -D warnings`, `cargo test --workspace`, both WASM builds, the typecheck and the
 unit suite on every pull request.
+
+## Deploying
+
+The site is fully static and ships to Cloudflare Pages from
+`.github/workflows/deploy.yml` on every push to `main` (or by hand from the
+Actions tab). The workflow builds both WASM engines itself — Cloudflare's own
+build image cannot run the nightly threaded build — self-hosts the MediaPipe
+runtime and models, and uploads `web/dist`.
+
+One-time setup, in the GitHub repository settings:
+
+| Setting | Kind | Value |
+| --- | --- | --- |
+| `CLOUDFLARE_API_TOKEN` | secret | an API token with *Cloudflare Pages: Edit* |
+| `CLOUDFLARE_ACCOUNT_ID` | secret | from the Cloudflare dashboard sidebar |
+| `CLOUDFLARE_PAGES_PROJECT` | variable, optional | Pages project name (default `aether`) |
+| `SITE_URL` | variable, optional | public origin for link previews, e.g. a custom domain (default `https://aether-physics.xyz`) |
+
+The first run creates the Pages project. `web/public/_headers` sends the COOP
+and COEP headers, so production is cross-origin isolated and the multithreaded
+engine starts without the Service Worker fallback. Pages caps a single file at
+25 MB; the largest one today is about 12 MB.
 
 ## License
 
