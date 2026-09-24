@@ -14,7 +14,7 @@ into combos and cast with both hands for duets.
 Everything runs locally in the browser. No server, no upload, no video leaving
 the machine.
 
-**Live demo: [aether-86s.pages.dev](https://aether-86s.pages.dev)** — open it in its own tab in a current Chrome, Edge
+**Live demo: [aether-physics.xyz](https://aether-physics.xyz)** — open it in its own tab in a current Chrome, Edge
 or Firefox and allow camera access.
 
 ## Why it is built this way
@@ -363,7 +363,7 @@ One-time setup, in the GitHub repository settings:
 | `CLOUDFLARE_API_TOKEN` | secret | an API token with *Cloudflare Pages: Edit* |
 | `CLOUDFLARE_ACCOUNT_ID` | secret | from the Cloudflare dashboard sidebar |
 | `CLOUDFLARE_PAGES_PROJECT` | variable, optional | Pages project name (default `aether`) |
-| `SITE_URL` | variable, optional | public origin for link previews, e.g. a custom domain (default `https://aether-86s.pages.dev`) |
+| `SITE_URL` | variable, optional | public origin for link previews, e.g. a custom domain (default `https://aether-physics.xyz`) |
 
 The first run creates the Pages project. `web/public/_headers` sends the COOP
 and COEP headers, so production is cross-origin isolated and the multithreaded
