@@ -79,7 +79,7 @@ export const LM = {
 } as const;
 
 /**
- * Indices into the packed array returned by `AetherEngine.stats()`.
+ * Indices into the packed array returned by `AetherEngine.stats()` or `EngineViews.stats()`.
  * Mirrors the doc comment on `aether_wasm::AetherEngine::stats`.
  */
 export const STAT = {
