@@ -46,3 +46,29 @@ describe('EngineViews particle storage', () => {
     expect(views.particles()).not.toBe(grown);
   });
 });
+
+describe('EngineViews stats storage', () => {
+  it('recomputes only through stats(); lastStats() reads the same view', () => {
+    const memory = new WebAssembly.Memory({ initial: 1 });
+    let refreshes = 0;
+    const engine = {
+      dye_ptr: () => 0,
+      dye_len: () => 4,
+      luma_ptr: () => 4,
+      luma_len: () => 4,
+      mask_ptr: () => 8,
+      mask_capacity: () => 1,
+      stats_ptr: () => {
+        refreshes++;
+        return 64;
+      },
+    } as unknown as AetherEngine;
+    const views = new EngineViews(engine, memory);
+    const afterBuild = refreshes;
+
+    const frame = views.stats();
+    expect(refreshes).toBe(afterBuild + 1);
+    expect(views.lastStats()).toBe(frame);
+    expect(refreshes).toBe(afterBuild + 1);
+  });
+});

@@ -36,9 +36,21 @@ export class EngineViews {
     this.particleView = null;
   }
 
-  /** Refreshes and returns the packed HUD values without copying across WASM. */
+  /**
+   * Recomputes the packed HUD values in place and returns them. Call once per
+   * frame, after `step`.
+   *
+   * The result is a LIVE view: the next `stats()` overwrites it and a memory
+   * growth detaches it. Never keep it across frames — copy what must be kept.
+   */
   stats(): Float32Array {
     this.engine.stats_ptr();
+    this.refresh();
+    return this.statsView;
+  }
+
+  /** The values the last `stats()` produced, read without touching the engine. */
+  lastStats(): Float32Array {
     this.refresh();
     return this.statsView;
   }
