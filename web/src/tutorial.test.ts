@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { handArt } from './hand-art';
 import { HOLD_MS, STEPS, TutorialProgress } from './tutorial';
 import { HOW_TO } from './tutorial-steps';
 
@@ -28,10 +27,9 @@ describe('TutorialProgress', () => {
     }
   });
 
-  it('has a how-to line and a drawing for every step', () => {
+  it('has a how-to line for every step', () => {
     for (const step of STEPS) {
       expect(HOW_TO[step.spell], step.spell).toBeTruthy();
-      expect(handArt(step.spell), step.spell).toContain('<svg');
     }
   });
 

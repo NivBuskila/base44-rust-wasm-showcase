@@ -164,51 +164,6 @@
   color: var(--accent);
 }
 
-.ha {
-  transform-origin: 50% 65%;
-}
-
-/* The glyph is a filled hand, so the glow comes from the shape itself. */
-.ha-hand {
-  fill: currentColor;
-  transform-origin: 50% 65%;
-}
-
-/* Two stacked frames, rest and pose, cross-fading half a period apart: the card
-   shows the movement into the pose instead of a shape to decode. */
-.ha-f1,
-.ha-f2 {
-  animation: ha-frame 2.6s ease-in-out infinite;
-}
-
-/* Resting state (also what `prefers-reduced-motion` leaves): the taught pose. */
-.ha-f1 {
-  opacity: 0;
-}
-
-.ha-f2 {
-  animation-delay: -1.3s;
-}
-
-@keyframes ha-frame {
-  0%,
-  100% {
-    opacity: 0;
-    transform: scale(0.9);
-  }
-
-  12%,
-  42% {
-    opacity: 1;
-    transform: scale(1);
-  }
-
-  54% {
-    opacity: 0;
-    transform: scale(0.9);
-  }
-}
-
 /* your hand → the pose to reach, on one row. */
 .tut-pair {
   display: flex;
@@ -363,62 +318,6 @@
   stroke-dashoffset: calc(1 - var(--vn, 0));
   transition: stroke-dashoffset 90ms linear;
   filter: drop-shadow(0 0 5px rgba(var(--accent-rgb), 0.7));
-}
-
-/* Each pose hints at what it does, so the drawing is never quite static. */
-.ha-pull {
-  animation: ha-pull 2.6s ease-in-out infinite;
-}
-
-.ha-push {
-  animation: ha-push 2.6s ease-in-out infinite;
-}
-
-.ha-spin {
-  animation: ha-spin 3.4s ease-in-out infinite;
-}
-
-.ha-trail,
-.ha-pop,
-.ha-burst {
-  animation: ha-breathe 2.4s ease-in-out infinite;
-}
-
-@keyframes ha-pull {
-  50% {
-    transform: scale(0.94);
-  }
-}
-
-@keyframes ha-push {
-  50% {
-    transform: scale(1.06);
-  }
-}
-
-@keyframes ha-spin {
-  50% {
-    transform: rotate(-9deg);
-  }
-}
-
-@keyframes ha-breathe {
-  50% {
-    opacity: 0.72;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ha-f1,
-  .ha-f2,
-  .ha-pull,
-  .ha-push,
-  .ha-spin,
-  .ha-trail,
-  .ha-pop,
-  .ha-burst {
-    animation: none;
-  }
 }
 
 .tut-text {
