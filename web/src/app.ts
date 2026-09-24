@@ -206,6 +206,7 @@ export class App {
       this.engine.set_particles_alive(this.renderer.particlesAlive?.() ?? 0);
     }
 
+    this.governor.setHold(this.perception.warming);
     this.governor.update(this.clock.fps, realDt * 1000);
     this.overdrive.update(stats, this.clock.fps, t.stepMs);
     t.measure('hudMs', () =>
