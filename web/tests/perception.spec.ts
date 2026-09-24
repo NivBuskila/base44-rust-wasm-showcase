@@ -105,20 +105,20 @@ test('inference never reclaims the frame budget', async ({ page }) => {
       const d = window.__aether?.diagnostics();
       if (!d) return false;
       if (d.perception.kind !== 'ready') return true;
-      return (d.inferenceCostMs * d.perceptionHz) / 1000 <= limit;
+      return (d.inferenceCostMs * d.perceptionBudgetHz) / 1000 <= limit;
     },
     0.55,
     { timeout: 120_000 },
   );
 
   const diag = await page.evaluate(() => window.__aether!.diagnostics());
-  const duty = (diag.inferenceCostMs * diag.perceptionHz) / 1000;
+  const duty = (diag.inferenceCostMs * diag.perceptionBudgetHz) / 1000;
 
   if (diag.perception.kind === 'ready') {
     expect(
       duty,
       `inference is consuming ${(duty * 100).toFixed(0)}% of wall time ` +
-        `(${diag.inferenceCostMs.toFixed(0)} ms at ${diag.perceptionHz.toFixed(2)} Hz) ` +
+        `(${diag.inferenceCostMs.toFixed(0)} ms at ${diag.perceptionBudgetHz.toFixed(2)} Hz) ` +
         `while still reporting ready`,
     ).toBeLessThan(0.55);
   } else {

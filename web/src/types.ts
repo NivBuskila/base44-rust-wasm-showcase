@@ -24,6 +24,10 @@ export interface PerceptionFrame {
   latencyMs: number;
   /** True when at least one hand was detected. */
   anyHand: boolean;
+  /** Worker path only: asynchronous bitmap decode time (not render-loop work). */
+  decodeMs?: number;
+  /** Worker path only: time from posting the bitmap to receiving the result. */
+  workerRoundTripMs?: number;
 }
 
 /** Why perception is not running, for the HUD to explain to the user. */

@@ -11,8 +11,8 @@
  * 4. **overlay** — the hand skeleton (lines + instanced joint quads).
  * 5. **bloom** — 13-tap downsample chain, 9-tap tent fold-back.
  * 6. **composite** — grade, fringe, vignette, dither into an 8-bit frame
- *    texture, which is then blitted to the canvas and sampled down to a 16x16
- *    probe for `sampleLuminance`.
+ *    texture, which is then blitted to the canvas and periodically sampled by
+ *    a 16x16 probe for `sampleLuminance`.
  *
  * Invariants, matching the WebGL2 chain:
  * - nothing is allocated per frame on the steady-state path; textures, targets
@@ -23,7 +23,7 @@
  * - the engine stays the source of truth: the fluid, the spells and the pool
  *   size are its, and the only thing coming back is the live particle count.
  *
- * `sampleLuminance` and the alive count are one frame behind: GPU readback is
+ * `sampleLuminance` (periodic) and the alive count lag behind: GPU readback is
  * asynchronous and stalling the queue for either would cost more than they are
  * worth.
  */
