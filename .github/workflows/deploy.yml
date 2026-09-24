@@ -42,6 +42,10 @@ jobs:
         working-directory: web
       - run: npm run build
         working-directory: web
+        env:
+          # Absolute URL for the link-preview tags: the custom domain attached
+          # to the Pages project. Set repo variable SITE_URL to override.
+          VITE_SITE_URL: ${{ vars.SITE_URL || 'https://aether-physics.xyz' }}
       - uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
