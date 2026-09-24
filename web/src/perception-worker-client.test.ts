@@ -83,7 +83,11 @@ it('marks a stalled frame unavailable so the pump can switch sources', async () 
   source.process(video, now);
   await Promise.resolve();
   expect(worker.postMessage).toHaveBeenCalledTimes(3);
-  now += 5001;
+  // A hand first entering the frame compiles the landmark shaders mid-session.
+  now += 20_000;
+  source.process(video, now);
+  expect(source.status.kind).toBe('ready');
+  now += 40_001;
   source.process(video, now);
   expect(source.status.kind).toBe('unavailable');
   expect(worker.terminate).toHaveBeenCalledOnce();
