@@ -6,7 +6,7 @@ resolver = "2"
 edition = "2021"
 version = "0.1.0"
 license = "MIT"
-repository = "https://github.com/nivbuskila/base44test"
+repository = "https://github.com/NivBuskila/base44-rust-wasm-showcase"
 
 [profile.release]
 opt-level = 3
