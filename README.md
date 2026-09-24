@@ -1,5 +1,13 @@
 # Aether
 
+[![CI](https://github.com/NivBuskila/base44-rust-wasm-showcase/actions/workflows/ci.yml/badge.svg)](https://github.com/NivBuskila/base44-rust-wasm-showcase/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Rust 1.90](https://img.shields.io/badge/rust-1.90-orange.svg?logo=rust)
+![WebAssembly](https://img.shields.io/badge/WebAssembly-SIMD%20%2B%20threads-654ff0.svg?logo=webassembly&logoColor=white)
+[![Live demo](https://img.shields.io/badge/demo-aether--physics.xyz-2ee6a8.svg)](https://aether-physics.xyz)
+
+[![Aether](web/public/og.png)](https://aether-physics.xyz)
+
 A gesture-driven fluid reality engine. Stand in front of a webcam and move smoke
 with your hands.
 
@@ -115,19 +123,16 @@ What you should see:
 Without a camera (or with permission denied) the app still runs: the fluid
 drives itself and the HUD says why perception is off.
 
-### Running with Docker instead
-
-If you would rather not install Rust or Node, the repository ships a Compose
-file that builds everything from the mounted source and serves it on port 3000:
+<details>
+<summary>No local Rust or Node? Run it in Docker</summary>
 
 ```bash
 docker compose -f docker-compose.base44.yml up -d --build
 # then open http://localhost:3000
 ```
 
-The `wasm` service compiles the engines (and rebuilds when Rust sources
-change); the `web` service runs Vite. The first boot takes a few minutes while
-the toolchains download.
+The first boot takes a few minutes while the toolchains download.
+</details>
 
 ### Useful URL switches
 
