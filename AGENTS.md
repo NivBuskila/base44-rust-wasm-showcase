@@ -15,7 +15,7 @@ Non-obvious findings only — what the manifests and the README do not say. Grou
 ## Deploying (Cloudflare Pages)
 
 - `.github/workflows/deploy.yml` builds both WASM variants in GitHub Actions (Cloudflare's build image can't do the nightly threaded build), self-hosts the MediaPipe runtime + models, and runs `wrangler pages deploy web/dist` on every push to `main` (or manually). Needs repo secrets `CLOUDFLARE_API_TOKEN` (Pages: Edit) and `CLOUDFLARE_ACCOUNT_ID`; project name defaults to `aether`, override with repo variable `CLOUDFLARE_PAGES_PROJECT`.
-- Link-preview (`og:*`/`twitter:*`) tags in `web/index.html` use `%VITE_SITE_URL%` because crawlers need absolute URLs. `web/.env` gives the dev default; the deploy workflow sets it from repo variable `SITE_URL`, else `https://<project>.pages.dev`. The share image is `web/public/og.png` (1200×630, rendered with Pillow in the app's palette, not a screenshot).
+- Link-preview (`og:*`/`twitter:*`) tags in `web/index.html` use `%VITE_SITE_URL%` because crawlers need absolute URLs. `web/.env` gives the dev default; the deploy workflow sets it from repo variable `SITE_URL`, else the live production URL `https://aether-86s.pages.dev` (Pages suffixed the subdomain because `aether` was taken, so it can't be derived from the project name). The share image is `web/public/og.png` (1200×630, rendered with Pillow in the app's palette, not a screenshot).
 - `web/public/_headers` sends COOP/COEP in production so the threaded engine activates without the service-worker fallback. Largest dist file is ~11.8 MB, under Pages' 25 MB per-file cap — keep it that way.
 
 ## Verifying and QA evidence
