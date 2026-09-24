@@ -38,6 +38,7 @@ const PERSIST_MS = 2000;
  * was doing recently.
  */
 const MAX_SAMPLES = 1800;
+const RECENT_MS = 30_000;
 
 /** Cap on recorded events, so a flapping governor cannot grow the record. */
 const MAX_EVENTS = 60;
@@ -72,6 +73,10 @@ export interface QaDiagnostics {
   stepMs: number;
   renderMs: number;
   inferenceMs: number;
+  decodeMs: number;
+  modelMs: number;
+  workerOverheadMs: number;
+  firstHandAtMs: number | null;
   cameraMs: number;
   hudMs: number;
   frameMs: number;
@@ -115,6 +120,22 @@ export interface QaSession {
   /** Frame time the callback did not account for — see `App.outsideMs`. */
   outsideMs: { median: number; p95: number };
   perceptionHz: { median: number; min: number };
+  /** Time since page navigation until a detected hand first reached the engine; null if none. */
+  firstHandMs: number | null;
+  decodeMs: { median: number; p95: number };
+  modelMs: { median: number; p95: number };
+  workerOverheadMs: { median: number; p95: number };
+  /** Last 30 seconds only; lastSampleAgeMs identifies stale/paused sessions. */
+  recent: {
+    windowMs: number;
+    samples: number;
+    lastSampleAtMs: number | null;
+    lastSampleAgeMs: number | null;
+    fps: { median: number; p5: number };
+    frameMs: { median: number; p95: number };
+    cameraMs: { median: number; p95: number };
+    perceptionHz: { median: number; min: number };
+  };
   qualityTier: { start: number; worst: number; end: number };
   particleCount: { min: number; max: number; end: number };
   /** WebGPU errors this tab hit, each with its repeat count. Empty is healthy. */
@@ -168,6 +189,11 @@ export class QaRecorder {
   private lastPersist = 0;
 
   private readonly fps: number[] = [];
+  private readonly recentSamples: Array<{ at: number; fps: number; frameMs: number; cameraMs: number; hz: number }> = [];
+  private readonly decodeMs: number[] = [];
+  private readonly modelMs: number[] = [];
+  private readonly workerOverheadMs: number[] = [];
+  private firstHandMs: number | null = null;
   private readonly stepMs: number[] = [];
   private readonly renderMs: number[] = [];
   private readonly inferenceMs: number[] = [];
@@ -188,15 +214,27 @@ export class QaRecorder {
   private isolated = false;
   private cameraSeen = false;
 
-  sample(diag: QaDiagnostics): void {
+  sample(input: QaDiagnostics | (() => QaDiagnostics)): void {
     const now = performance.now();
     if (now - this.lastSample < SAMPLE_MS) return;
     this.lastSample = now;
+    const diag = typeof input === 'function' ? input() : input;
 
     // The first second is boot: the smoothed fps is still climbing out of its
     // seed value and would drag every percentile down.
     if (now - this.t0 > 1000 && Number.isFinite(diag.fps) && diag.fps > 0) {
       push(this.fps, diag.fps);
+      this.recentSamples.push({
+        at: now, fps: diag.fps, frameMs: diag.frameMs,
+        cameraMs: diag.cameraMs,
+        hz: diag.perception.kind === 'ready' ? diag.perceptionHz : 0,
+      });
+      while (this.recentSamples.length > 0 && this.recentSamples[0].at < now - RECENT_MS) {
+        this.recentSamples.shift();
+      }
+      push(this.decodeMs, diag.decodeMs);
+      push(this.modelMs, diag.modelMs);
+      push(this.workerOverheadMs, diag.workerOverheadMs);
       push(this.stepMs, diag.stepMs);
       push(this.renderMs, diag.renderMs);
       push(this.inferenceMs, diag.inferenceMs);
@@ -204,7 +242,9 @@ export class QaRecorder {
       push(this.hudMs, diag.hudMs);
       push(this.frameMs, diag.frameMs);
       push(this.outsideMs, diag.outsideMs);
-      push(this.perceptionHz, diag.perceptionHz);
+      if (diag.perception.kind === 'ready' && diag.perceptionHz > 0) {
+        push(this.perceptionHz, diag.perceptionHz);
+      }
     }
 
     if (this.previous === null) this.tierStart = diag.qualityTier;
@@ -219,6 +259,9 @@ export class QaRecorder {
     this.engineReason = diag.engine.reason;
     this.isolated = Boolean(globalThis.crossOriginIsolated);
     this.cameraSeen = this.cameraSeen || diag.cameraAvailable;
+    if (this.firstHandMs === null && diag.firstHandAtMs !== null) {
+      this.firstHandMs = Math.max(0, Math.round(diag.firstHandAtMs));
+    }
 
     this.recordTransitions(diag, now - this.t0);
     this.previous = diag;
@@ -235,6 +278,11 @@ export class QaRecorder {
     const hz = [...this.perceptionHz].sort((a, b) => a - b);
     const slow = this.fps.filter((f) => f < SLOW_FRAME_FPS).length;
     const last = this.previous;
+    const now = performance.now();
+    const recent = this.recentSamples.filter((sample) => sample.at >= now - RECENT_MS);
+    const recentFps = recent.map((sample) => sample.fps).sort((a, b) => a - b);
+    const recentHz = recent.map((sample) => sample.hz).filter((hz) => hz > 0).sort((a, b) => a - b);
+    const lastSampleAt = recent.at(-1)?.at ?? null;
     return {
       startedAt: this.startedAt,
       durationMs: Math.round(performance.now() - this.t0),
@@ -259,6 +307,20 @@ export class QaRecorder {
       frameMs: msStats(this.frameMs),
       outsideMs: msStats(this.outsideMs),
       perceptionHz: { median: round(quantile(hz, 0.5)), min: round(quantile(hz, 0)) },
+      firstHandMs: this.firstHandMs,
+      decodeMs: msStats(this.decodeMs),
+      modelMs: msStats(this.modelMs),
+      workerOverheadMs: msStats(this.workerOverheadMs),
+      recent: {
+        windowMs: RECENT_MS,
+        samples: recent.length,
+        lastSampleAtMs: lastSampleAt === null ? null : Math.round(lastSampleAt - this.t0),
+        lastSampleAgeMs: lastSampleAt === null ? null : Math.round(now - lastSampleAt),
+        fps: { median: round(quantile(recentFps, 0.5)), p5: round(quantile(recentFps, 0.05)) },
+        frameMs: msStats(recent.map((sample) => sample.frameMs)),
+        cameraMs: msStats(recent.map((sample) => sample.cameraMs)),
+        perceptionHz: { median: round(quantile(recentHz, 0.5)), min: round(quantile(recentHz, 0)) },
+      },
       qualityTier: {
         start: this.tierStart,
         worst: this.tierWorst,
@@ -288,9 +350,11 @@ export class QaRecorder {
   persist(): void {
     if (this.fps.length === 0) return;
     if (isEmbedded()) return;
-    this.upload();
+    const summary = this.summary();
+    const body = JSON.stringify(summary);
+    this.upload(body);
     try {
-      localStorage.setItem(QA_SESSION_KEY, JSON.stringify(this.summary()));
+      localStorage.setItem(QA_SESSION_KEY, body);
     } catch {
       /* private mode or quota — never break the session over telemetry */
     }
@@ -303,12 +367,11 @@ export class QaRecorder {
    * origin matches. `sendBeacon` because this also runs from `pagehide`, where a
    * `fetch` is not guaranteed to be flushed; failure is ignored, as with storage.
    */
-  private upload(): void {
+  private upload(body: string): void {
     // The endpoint is a dev-server plugin; a static host answers 405.
     if (!import.meta.env.DEV) return;
     try {
-      const body = new Blob([JSON.stringify(this.summary())], { type: 'application/json' });
-      navigator.sendBeacon(QA_SESSION_ENDPOINT, body);
+      navigator.sendBeacon(QA_SESSION_ENDPOINT, new Blob([body], { type: 'application/json' }));
     } catch {
       /* dev-server absent (a production build) — never break the session */
     }
