@@ -43,6 +43,19 @@
   .hud-hint .chips {
     display: none;
   }
+
+  /* The panel spans the top on a phone, so the tutorial card moves to the
+     bottom; the spellbook it would cover is idle anyway (practice mode). */
+  .tut {
+    top: auto;
+    left: max(var(--gut), env(safe-area-inset-left));
+    bottom: max(14px, env(safe-area-inset-bottom));
+    width: auto;
+  }
+
+  #hud:has(.tut:not([hidden])) .hud-combos {
+    display: none;
+  }
 }
 
 /* A short viewport (phone in landscape) has no room for the legend. */
