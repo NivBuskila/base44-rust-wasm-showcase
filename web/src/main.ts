@@ -89,6 +89,11 @@ async function boot(): Promise<void> {
     window.addEventListener('pagehide', () => app.flushQaSession());
 
     await app.start(setStatus);
+    // Unfold the welcome now, but arm it only once hand tracking is warm, so
+    // nobody enters mid-stutter and the wait reads as calibration.
+    intro.reveal();
+    setStatus('calibrating hand tracking…');
+    await app.settled();
     intro.ready({
       hands: app.diagnostics.cameraAvailable ? () => app.handsPresent : undefined,
       onOpen: () => app.stage(),
