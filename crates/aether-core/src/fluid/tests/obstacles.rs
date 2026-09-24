@@ -24,6 +24,33 @@ fn obstacle_cells_are_exactly_at_rest_after_a_step() {
 }
 
 #[test]
+fn replacing_an_obstacle_updates_the_cached_walls_before_the_next_step() {
+    let (w, h) = (32, 24);
+    let mut f = Fluid::new(w, h);
+    let left = 12 * w + 8;
+    let right = 12 * w + 22;
+    let mut mask = Grid::new(w, h);
+    mask.data[left] = 1.0;
+    f.set_obstacle(&mask);
+    assert!(f.has_obstacle);
+    assert_eq!(f.solid.data[left], 1.0);
+
+    mask.data[left] = 0.0;
+    mask.data[right] = 1.0;
+    f.set_obstacle(&mask);
+    assert_eq!(f.solid.data[left], 0.0);
+    assert_eq!(f.solid.data[right], 1.0);
+    f.vel.u.data[right] = 10.0;
+    f.step(DT, &inert_params());
+    assert_eq!(f.vel.u.data[right], 0.0);
+
+    f.set_obstacle(&Grid::new(w, h));
+    assert!(!f.has_obstacle);
+    assert_eq!(f.solid.data[right], 0.0);
+    assert_eq!(f.solid.data[0], 1.0); // The domain border stays solid.
+}
+
+#[test]
 fn fluid_does_not_leak_through_a_solid_wall() {
     let (w, h) = (64, 48);
     let mut f = Fluid::new(w, h);

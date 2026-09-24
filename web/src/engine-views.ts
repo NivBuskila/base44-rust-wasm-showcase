@@ -8,7 +8,7 @@
  */
 
 import type { AetherEngine } from './wasm/aether';
-import { FLUID_H, FLUID_W, PARTICLE_OP_STRIDE, PARTICLE_STRIDE } from './constants';
+import { FLUID_H, FLUID_W, PARTICLE_OP_STRIDE, PARTICLE_STRIDE, STATS_LEN } from './constants';
 import type { GpuSimFrame } from './types';
 
 export class EngineViews {
@@ -16,6 +16,8 @@ export class EngineViews {
   dye!: Uint8Array;
   luma!: Uint8Array;
   mask!: Float32Array;
+  private statsView!: Float32Array;
+  private particleView: Float32Array | null = null;
 
   constructor(
     private readonly engine: AetherEngine,
@@ -30,6 +32,27 @@ export class EngineViews {
     this.dye = new Uint8Array(buffer, this.engine.dye_ptr(), this.engine.dye_len());
     this.luma = new Uint8Array(buffer, this.engine.luma_ptr(), this.engine.luma_len());
     this.mask = new Float32Array(buffer, this.engine.mask_ptr(), this.engine.mask_capacity());
+    this.statsView = new Float32Array(buffer, this.engine.stats_ptr(), STATS_LEN);
+    this.particleView = null;
+  }
+
+  /**
+   * Recomputes the packed HUD values in place and returns them. Call once per
+   * frame, after `step`.
+   *
+   * The result is a LIVE view: the next `stats()` overwrites it and a memory
+   * growth detaches it. Never keep it across frames — copy what must be kept.
+   */
+  stats(): Float32Array {
+    this.engine.stats_ptr();
+    this.refresh();
+    return this.statsView;
+  }
+
+  /** The values the last `stats()` produced, read without touching the engine. */
+  lastStats(): Float32Array {
+    this.refresh();
+    return this.statsView;
   }
 
   /** Rebuilds only when the memory grew or a view detached. */
@@ -37,15 +60,16 @@ export class EngineViews {
     if (this.buffer !== this.memory.buffer || this.dye.length === 0) this.rebuild();
   }
 
-  /** A fresh particle view; its length tracks the live particle count. */
+  /** Reuses the particle view until the pool, pointer or WASM memory changes. */
   particles(): Float32Array {
     // `step` can grow memory after the frame's first `refresh`.
     this.refresh();
-    return new Float32Array(
-      this.buffer,
-      this.engine.particle_ptr(),
-      this.engine.particle_count() * PARTICLE_STRIDE,
-    );
+    const ptr = this.engine.particle_ptr();
+    const length = this.engine.particle_count() * PARTICLE_STRIDE;
+    const view = this.particleView;
+    if (view && view.buffer === this.buffer && view.byteOffset === ptr && view.length === length)
+      return view;
+    return (this.particleView = new Float32Array(this.buffer, ptr, length));
   }
 
   debug(): Uint8Array {
