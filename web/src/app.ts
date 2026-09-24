@@ -46,6 +46,8 @@ export class App {
    * this is the only trace a QA pass leaves behind.
    */
   private readonly qa = new QaRecorder();
+  /** Reused callback: diagnostics are built only when the recorder takes a sample. */
+  private readonly qaDiagnostics = () => this.diagnostics;
   /** Every pool resize goes through here; see `engine-pool.ts`. */
   private readonly pool: EnginePool;
   private readonly camera = new Camera();
@@ -137,6 +139,11 @@ export class App {
    * up, and perception attaches itself whenever it is ready.
    */
   async start(setStatus: (text: string) => void): Promise<void> {
+    // Let the worker load the vision graphs while camera permission and the
+    // first video frame are pending, instead of waiting for both to finish.
+    const disabled = new URLSearchParams(location.search).get('perception') === 'off';
+    if (!disabled) void this.perception.attach();
+
     setStatus('opening the camera…');
     try {
       await this.camera.start();
@@ -150,24 +157,17 @@ export class App {
             : 'No camera found — running in ambient mode.'
           : `Camera failed: ${String(err)}`;
       console.warn(`[aether] ${message}`);
+      this.perception.close();
       this.perception.status = { kind: 'unavailable', reason: message };
     }
 
-    if (this.cameraAvailable) {
-      // `?perception=off` runs the app on the model-free path only. The headless
-      // suite uses it for everything that is not specifically about MediaPipe:
-      // on software rasterisation one inference costs ~770 ms, which would make
-      // every unrelated assertion wait on a model it does not care about.
-      const disabled = new URLSearchParams(location.search).get('perception') === 'off';
-      if (disabled) {
-        this.perception.status = {
-          kind: 'unavailable',
-          reason: 'Disabled by ?perception=off — optical flow only.',
-        };
-      } else {
-        this.perception.status = { kind: 'loading' };
-        void this.perception.attach();
-      }
+    // `?perception=off` keeps model loading out of the headless optical-flow
+    // suite, where a software inference would stall unrelated assertions.
+    if (this.cameraAvailable && disabled) {
+      this.perception.status = {
+        kind: 'unavailable',
+        reason: 'Disabled by ?perception=off — optical flow only.',
+      };
     }
 
     this.renderer.setVideo(this.cameraAvailable ? this.camera.video : null);
@@ -190,8 +190,10 @@ export class App {
     t.begin(this.clock.outside(t.frameMs));
 
     t.measure('cameraMs', () => {
-      this.pumpCamera(nowMs);
+      // Start the worker's asynchronous bitmap decode before the synchronous
+      // luma readback; both inputs still reach the engine before step().
       this.perception.pump(nowMs);
+      this.pumpCamera(nowMs);
     });
     t.measure('stepMs', () => this.engine.step(simDt));
 
@@ -226,7 +228,7 @@ export class App {
 
     // Last in the frame: the recorder reads the values this frame just produced,
     // and it rate-limits itself to 2 Hz internally.
-    this.qa.sample(this.diagnostics);
+    this.qa.sample(this.qaDiagnostics);
   };
 
   /** Feeds the luma plane, but only when the camera produced a new frame. */
@@ -306,9 +308,15 @@ export class App {
       particleCount: this.engine.particle_count(),
       mode: this.mode,
       engine: this.tier,
-      /** Effective inference cadence in Hz, after adaptive throttling. */
-      perceptionHz: this.perception.hz,
+      /** Measured rate at which inference results reach the engine. */
+      perceptionHz: this.perception.actualHz,
+      /** Inline inference budget cadence (not the measured result rate). */
+      perceptionBudgetHz: this.perception.hz,
       inferenceCostMs: this.perception.costMs,
+      firstHandAtMs: this.perception.firstHandAtMs,
+      decodeMs: this.perception.decodeMs,
+      modelMs: this.perception.modelMs,
+      workerOverheadMs: this.perception.workerOverheadMs,
       /** Adaptive quality rung; 0 is full quality. */
       qualityTier: this.governor.level,
       /** Which graphics API drew the last frame, and who owns the pool. */

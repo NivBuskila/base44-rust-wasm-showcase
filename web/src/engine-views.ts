@@ -39,6 +39,8 @@ export class EngineViews {
 
   /** A fresh particle view; its length tracks the live particle count. */
   particles(): Float32Array {
+    // `step` can grow memory after the frame's first `refresh`.
+    this.refresh();
     return new Float32Array(
       this.buffer,
       this.engine.particle_ptr(),
@@ -59,6 +61,7 @@ export class EngineViews {
    * reallocates, and a retained view would silently read freed memory.
    */
   gpuSim(): GpuSimFrame {
+    this.refresh();
     const buffer = this.buffer;
     const cells = FLUID_W * FLUID_H;
     const info = this.engine.obstacle_info();
