@@ -1,37 +1,29 @@
 /* Gesture tutorial ------------------------------------------------------- */
 
-/* Turns the card into a mode: the live stage stays visible through it, the rest
-   of the interface recedes behind a vignette. */
-.tut-scrim {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(
-    90deg,
-    rgba(4, 8, 14, 0.9) 0%,
-    rgba(4, 8, 14, 0.7) 26%,
-    rgba(4, 8, 14, 0.12) 52%,
-    rgba(4, 8, 14, 0) 72%
-  );
-  animation: tut-fade 420ms ease both;
-}
-
 @keyframes tut-fade {
   from {
     opacity: 0;
   }
 }
 
+/* A compact card pinned top-right (the panel owns top-left, the spellbook
+   bottom-right): the field stays fully lit so each pose is seen acting on the
+   particles while it is learned. Same glass as the spellbook. */
 .tut {
   --v: 0%;
   position: absolute;
-  inset: 0;
-  display: grid;
-  grid-template-rows: auto auto 1fr auto auto;
-  grid-template-columns: min(420px, 46vw);
-  justify-content: start;
-  gap: 10px;
-  padding: clamp(18px, 4vh, 44px) var(--gut);
+  top: max(var(--gut), env(safe-area-inset-top));
+  right: max(var(--gut), env(safe-area-inset-right));
+  width: min(290px, calc(100vw - 2 * var(--gut)));
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px 14px 12px;
+  background: rgba(7, 10, 18, 0.58);
+  border: 1px solid var(--edge);
+  border-radius: var(--r);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   pointer-events: auto;
 }
 
@@ -83,9 +75,9 @@
 /* The step number, set oversized behind the lesson: cinematic chapter marker. */
 .tut-num {
   position: absolute;
-  left: -0.06em;
-  top: -0.3em;
-  font-size: clamp(120px, 26vh, 240px);
+  right: 0;
+  top: -0.12em;
+  font-size: 64px;
   font-weight: 300;
   line-height: 0.8;
   letter-spacing: -0.04em;
@@ -153,7 +145,7 @@
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
-  gap: clamp(12px, 2.4vh, 22px);
+  gap: 10px;
   text-align: left;
 }
 
@@ -162,8 +154,8 @@
   flex: none;
   display: grid;
   place-items: center;
-  width: clamp(112px, 16vh, 156px);
-  height: clamp(112px, 16vh, 156px);
+  width: 78px;
+  height: 78px;
   border-radius: 50%;
   background:
     radial-gradient(90% 80% at 50% 20%, rgba(var(--accent-rgb), 0.1), transparent 70%),
@@ -221,7 +213,7 @@
 .tut-pair {
   display: flex;
   align-items: center;
-  gap: clamp(6px, 1.2vw, 14px);
+  gap: 8px;
 }
 
 .tut-arrow {
@@ -233,8 +225,8 @@
 }
 
 .tut-arrow svg {
-  width: clamp(22px, 3.4vh, 34px);
-  height: clamp(22px, 3.4vh, 34px);
+  width: 18px;
+  height: 18px;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
@@ -262,8 +254,8 @@
   flex: none;
   display: grid;
   place-items: center;
-  width: clamp(92px, 13vh, 128px);
-  height: clamp(92px, 13vh, 128px);
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
   background: var(--well);
   border: 1px solid var(--edge);
@@ -350,7 +342,7 @@
 
 .tut-ring {
   position: absolute;
-  inset: 8px;
+  inset: 3px;
   transform: rotate(-90deg);
   pointer-events: none;
 }
@@ -433,30 +425,29 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 8px;
-  max-width: 30ch;
+  gap: 5px;
 }
 
 .tut-text b {
-  font-size: clamp(26px, 4.4vh, 40px);
+  font-size: 19px;
   font-weight: 300;
   letter-spacing: 0.14em;
   text-transform: lowercase;
   line-height: 1;
   color: var(--ink);
-  text-shadow: 0 0 26px rgba(var(--accent-rgb), 0.35);
+  text-shadow: 0 0 16px rgba(var(--accent-rgb), 0.35);
 }
 
 .tut-effect {
-  font-size: 11px;
-  letter-spacing: 0.22em;
+  font-size: 9.5px;
+  letter-spacing: 0.2em;
   text-transform: uppercase;
   color: var(--accent);
 }
 
 .tut-how {
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 12px;
+  line-height: 1.5;
   letter-spacing: 0.02em;
   color: var(--dim);
 }
@@ -513,10 +504,6 @@
   gap: 14px;
 }
 
-.tut-dots {
-  margin-top: 10px;
-}
-
 .tut-note {
   flex: 1;
   font-size: 8.5px;
@@ -531,8 +518,7 @@
   color: var(--dim);
 }
 
-#hud.is-hidden .tut,
-#hud.is-hidden .tut-scrim {
+#hud.is-hidden .tut {
   display: none;
 }
 
