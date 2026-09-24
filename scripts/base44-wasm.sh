@@ -9,11 +9,12 @@ if ! command -v wasm-pack >/dev/null 2>&1; then
 fi
 
 touch /tmp/aether-wasm-built
-# Baseline first so the healthcheck passes as soon as the app can run at all;
-# the threaded engine (nightly, build-std) follows and is optional.
+# Baseline first; the threaded engine (nightly, build-std) follows and is
+# optional. Report ready only after both so Vite never starts while
+# `engine-loader.ts`'s `./wasm-mt/aether.js` import is still missing.
 bash scripts/build-wasm.sh release
-touch /tmp/aether-wasm-ready
 bash scripts/build-wasm.sh release --threads || echo 'threaded engine build failed; running single-threaded' >&2
+touch /tmp/aether-wasm-ready
 
 while sleep 2; do
   if find crates Cargo.toml Cargo.lock scripts/build-wasm.sh -type f \
