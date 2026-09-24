@@ -19,25 +19,14 @@ impl AetherEngine {
     /// `10` pose present, `11` time scale, `12` bursts, `13` NaN repairs,
     /// `14` frame, `15` ambient mode.
     pub fn stats(&self) -> Vec<f32> {
-        let s = self.inner.stats();
-        vec![
-            s.fluid_energy,
-            s.fluid_max_speed,
-            s.fluid_divergence,
-            s.motion_energy,
-            s.flow_dx,
-            s.flow_dy,
-            s.particles_alive as f32,
-            s.mask_coverage,
-            if s.mask_present { 1.0 } else { 0.0 },
-            s.hands_present as f32,
-            if s.pose_present { 1.0 } else { 0.0 },
-            s.time_scale,
-            s.bursts as f32,
-            s.nan_repairs as f32,
-            s.frame as f32,
-            if s.ambient { 1.0 } else { 0.0 },
-        ]
+        self.stats_values().to_vec()
+    }
+
+    /// Refreshes the reusable stats storage and returns its pointer. JS must
+    /// rebuild its view after WASM memory grows, like the other output buffers.
+    pub fn stats_ptr(&mut self) -> usize {
+        self.stats_buffer = self.stats_values();
+        self.stats_buffer.as_ptr() as usize
     }
 
     /// Latched spell name for hand slot 0 or 1.
@@ -99,5 +88,29 @@ impl AetherEngine {
     pub fn rush_state(&self) -> Vec<f32> {
         let r = self.inner.rush_state();
         vec![r.at[0], r.at[1], r.progress, r.power, r.kind.as_f32()]
+    }
+}
+
+impl AetherEngine {
+    fn stats_values(&self) -> [f32; crate::STATS_LEN] {
+        let s = self.inner.stats();
+        [
+            s.fluid_energy,
+            s.fluid_max_speed,
+            s.fluid_divergence,
+            s.motion_energy,
+            s.flow_dx,
+            s.flow_dy,
+            s.particles_alive as f32,
+            s.mask_coverage,
+            if s.mask_present { 1.0 } else { 0.0 },
+            s.hands_present as f32,
+            if s.pose_present { 1.0 } else { 0.0 },
+            s.time_scale,
+            s.bursts as f32,
+            s.nan_repairs as f32,
+            s.frame as f32,
+            if s.ambient { 1.0 } else { 0.0 },
+        ]
     }
 }

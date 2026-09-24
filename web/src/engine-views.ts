@@ -8,7 +8,7 @@
  */
 
 import type { AetherEngine } from './wasm/aether';
-import { FLUID_H, FLUID_W, PARTICLE_OP_STRIDE, PARTICLE_STRIDE } from './constants';
+import { FLUID_H, FLUID_W, PARTICLE_OP_STRIDE, PARTICLE_STRIDE, STATS_LEN } from './constants';
 import type { GpuSimFrame } from './types';
 
 export class EngineViews {
@@ -16,6 +16,7 @@ export class EngineViews {
   dye!: Uint8Array;
   luma!: Uint8Array;
   mask!: Float32Array;
+  private statsView!: Float32Array;
 
   constructor(
     private readonly engine: AetherEngine,
@@ -30,6 +31,14 @@ export class EngineViews {
     this.dye = new Uint8Array(buffer, this.engine.dye_ptr(), this.engine.dye_len());
     this.luma = new Uint8Array(buffer, this.engine.luma_ptr(), this.engine.luma_len());
     this.mask = new Float32Array(buffer, this.engine.mask_ptr(), this.engine.mask_capacity());
+    this.statsView = new Float32Array(buffer, this.engine.stats_ptr(), STATS_LEN);
+  }
+
+  /** Refreshes and returns the packed HUD values without copying across WASM. */
+  stats(): Float32Array {
+    this.engine.stats_ptr();
+    this.refresh();
+    return this.statsView;
   }
 
   /** Rebuilds only when the memory grew or a view detached. */
