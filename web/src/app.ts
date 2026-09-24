@@ -200,7 +200,7 @@ export class App {
     });
     t.measure('stepMs', () => this.engine.step(simDt));
 
-    const stats = this.engine.stats();
+    const stats = this.views.stats();
     t.measure('renderMs', () => this.renderer.render(this.buildFrame(stats)));
 
     // The GPU owns the pool, so its own count is the only true one. It lags a
@@ -307,7 +307,7 @@ export class App {
       ...this.timings.rows,
       cameraAvailable: this.cameraAvailable,
       perception: this.perception.status,
-      stats: Array.from(this.engine.stats()),
+      stats: Array.from(this.views.stats()),
       spells: [this.engine.spell_name(0), this.engine.spell_name(1)] as [string, string],
       particleCount: this.engine.particle_count(),
       mode: this.mode,
@@ -349,7 +349,7 @@ export class App {
 
   /** Hands the engine sees this frame; cheap enough to poll at 20 Hz. */
   get handsPresent(): number {
-    return this.engine.stats()[STAT.HANDS_PRESENT] ?? 0;
+    return this.views.stats()[STAT.HANDS_PRESENT] ?? 0;
   }
 
   /** The session record so far, without waiting for the next storage write. */
