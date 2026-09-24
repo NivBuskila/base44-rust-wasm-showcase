@@ -44,6 +44,7 @@ pub const STATS_LEN: usize = 16;
 #[wasm_bindgen]
 pub struct AetherEngine {
     inner: Engine,
+    stats_buffer: [f32; STATS_LEN],
 }
 
 #[wasm_bindgen]
@@ -53,6 +54,7 @@ impl AetherEngine {
     pub fn new(seed: f64) -> AetherEngine {
         AetherEngine {
             inner: Engine::new(seed.abs() as u64),
+            stats_buffer: [0.0; STATS_LEN],
         }
     }
 
@@ -96,6 +98,18 @@ mod tests {
     fn stats_array_length_matches_the_constant() {
         let e = AetherEngine::new(1.0);
         assert_eq!(e.stats().len(), STATS_LEN);
+    }
+
+    #[test]
+    fn stats_pointer_reuses_storage_and_tracks_each_step() {
+        let mut e = AetherEngine::new(1.0);
+        let ptr = e.stats_ptr();
+        assert_eq!(ptr, e.stats_ptr());
+        assert_eq!(e.stats_buffer.to_vec(), e.stats());
+        e.step(1.0 / 60.0);
+        assert_eq!(ptr, e.stats_ptr());
+        assert_eq!(e.stats_buffer.to_vec(), e.stats());
+        assert_eq!(e.stats_buffer[14], 1.0);
     }
 
     #[test]
