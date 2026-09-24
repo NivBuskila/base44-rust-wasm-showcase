@@ -28,6 +28,9 @@ import { QaRecorder, type QaSession } from './qa-recorder';
 import { STAT, assertOpLayout } from './constants';
 import type { PerceptionSource, RenderFrame, SceneRenderer, ViewMode } from './types';
 
+// WebGPU renders from its own pool; it never reads the Rust particle stream.
+const NO_CPU_PARTICLES = new Float32Array(0);
+
 export class App {
   private readonly engine: AetherEngine;
   /** The engine's gesture-sequence book. Static for the session. */
@@ -256,7 +259,7 @@ export class App {
 
     return {
       dye: this.views.dye,
-      particles: this.views.particles(),
+      particles: this.renderer.backend === 'webgpu' ? NO_CPU_PARTICLES : this.views.particles(),
       particleCount: this.engine.particle_count(),
       debug: this.mode === 'debug' ? this.views.debug() : null,
       video: this.cameraAvailable ? this.camera.video : null,
