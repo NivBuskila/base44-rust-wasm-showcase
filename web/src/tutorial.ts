@@ -7,8 +7,8 @@
  * for {@link HOLD_MS}; `release` is a one-frame event in `spells.rs`, so it
  * passes on sight.
  *
- * It is a *mode*, not a tooltip: opening it dims the stage, brings up a large
- * drawn hand for the pose (`hand-art.ts`), and puts the engine into practice
+ * It is a *mode*, not a tooltip: a compact corner card over the live, undimmed
+ * stage shows the pose to reach beside the caster's own hand, and puts the engine into practice
  * mode through {@link TutorialCallbacks.onMode} so that going from one taught
  * pose straight into the next cannot cast a combo. Nothing is asked of the
  * caster between steps — no resting, no lowering the hand.
@@ -107,7 +107,6 @@ export class TutorialProgress {
 
 export class GestureTutorial {
   private readonly el: HTMLElement;
-  private readonly scrim: HTMLElement;
   private readonly count: HTMLElement;
   private readonly dots: HTMLElement;
   private readonly num: HTMLElement;
@@ -132,14 +131,8 @@ export class GestureTutorial {
     parent: HTMLElement,
     private readonly cb: TutorialCallbacks = { onMode: () => {} },
   ) {
-    // The scrim is what turns the card into a mode: the stage stays visible and
-    // live behind it (the caster has to see what the pose does) but everything
-    // else recedes.
-    this.scrim = document.createElement('div');
-    this.scrim.className = 'tut-scrim';
-    this.scrim.hidden = true;
-    parent.appendChild(this.scrim);
-
+    // A small card in the corner, never a curtain: the field stays fully lit so
+    // the caster watches each pose act on the particles while learning it.
     this.el = document.createElement('aside');
     this.el.className = 'tut';
     this.el.hidden = true;
@@ -216,7 +209,6 @@ export class GestureTutorial {
     this.doneAt = 0;
     this.on = true;
     this.autoStarted = true;
-    this.scrim.hidden = false;
     this.el.hidden = false;
     this.el.classList.remove('is-in');
     void this.el.offsetWidth;
@@ -231,7 +223,6 @@ export class GestureTutorial {
     this.goal.stop();
     this.on = false;
     this.el.hidden = true;
-    this.scrim.hidden = true;
     remember();
   }
 
