@@ -28,14 +28,19 @@ import type { MaskFrame, PerceptionFrame, PerceptionSource, PerceptionStatus } f
 const INFERENCE_WIDTH = 480;
 /** Model downloads can be slow, but a silent worker must not hang forever. */
 const INIT_TIMEOUT_MS = 60_000;
-const FRAME_TIMEOUT_MS = 5_000;
 /**
- * The first pass compiles the GPU delegate's shaders, which on a cold browser
- * cache took ~18 s on a machine whose warm passes take ~30 ms. Timing it out at
- * `FRAME_TIMEOUT_MS` threw away a working worker and ran inference on the main
- * thread for the rest of the session, so it gets the boot allowance instead.
+ * How long one frame may stay unanswered before the worker is given up on.
+ *
+ * MediaPipe compiles GPU shaders lazily, per subgraph: the hand-landmark and
+ * pose-landmark stages first run when a hand or body first *appears*, not on
+ * the first frame. On a cold browser cache each of those passes took ~20 s on a
+ * machine whose warm passes take ~30 ms. A short timeout after the first answer
+ * killed a healthy worker the moment the user raised a hand, and inference then
+ * ran on the main thread for the whole session (~20 fps). A stalled worker only
+ * delays gestures; the fallback costs frames forever, so every frame gets the
+ * boot allowance.
  */
-const FIRST_FRAME_TIMEOUT_MS = INIT_TIMEOUT_MS;
+const FRAME_TIMEOUT_MS = INIT_TIMEOUT_MS;
 const MAX_DECODE_FAILURES = 3;
 
 export class WorkerPerception implements PerceptionSource {
@@ -47,9 +52,6 @@ export class WorkerPerception implements PerceptionSource {
 
   /** True from submitting a frame until the worker answers about it. */
   private inFlight = false;
-
-  /** False until the worker has answered a frame; the first pass is the slow one. */
-  private answered = false;
 
   /** True while `createImageBitmap` is still resolving. */
   private decoding = false;
@@ -127,8 +129,7 @@ export class WorkerPerception implements PerceptionSource {
   }
 
   process(video: HTMLVideoElement, timestampMs: number): PerceptionFrame | null {
-    const limit = this.answered ? FRAME_TIMEOUT_MS : FIRST_FRAME_TIMEOUT_MS;
-    if (this.inFlight && performance.now() - this.submittedAt > limit) {
+    if (this.inFlight && performance.now() - this.submittedAt > FRAME_TIMEOUT_MS) {
       this.fail('Perception worker stopped responding to frames.');
     }
     this.submit(video, timestampMs);
@@ -222,7 +223,6 @@ export class WorkerPerception implements PerceptionSource {
     }
 
     this.inFlight = false;
-    this.answered = true;
 
     if (message.type === 'skip') {
       if (message.maskBuf) this.spareMask = message.maskBuf;
