@@ -168,6 +168,30 @@ describe('PerformanceGovernor', () => {
     expect(governor.level).toBe(1);
   });
 
+  it('a warm-up hold keeps the tier through slow frames, then settles before judging', () => {
+    const { knobs, governor, feed } = settled();
+    governor.setHold(true);
+    // ~10 s of a cold MediaPipe start at 20 fps: would otherwise hit the bottom rung.
+    feed(20, framesFor(10_000, 20));
+    expect(governor.level).toBe(0);
+    expect(knobs.setRenderScale).not.toHaveBeenCalled();
+
+    governor.setHold(false);
+    feed(40, settleAt(40) + framesFor(DOWN_MS, 40) - 1);
+    expect(governor.level).toBe(0);
+    feed(40, 1);
+    expect(governor.level).toBe(1);
+  });
+
+  it('a warm-up hold is bounded, so a device that never finishes still adapts', () => {
+    const { governor, feed } = settled();
+    governor.setHold(true);
+    feed(20, framesFor(30_000, 20));
+    expect(governor.level).toBe(0);
+    feed(20, settleAt(20) + framesFor(DOWN_MS, 20));
+    expect(governor.level).toBe(2);
+  });
+
   it('rebasing re-applies the current tier on top of the new 100%', () => {
     const { knobs, governor, feed } = settled();
     feed(20, framesFor(DOWN_MS, 20));
