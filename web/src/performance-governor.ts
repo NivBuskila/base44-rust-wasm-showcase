@@ -12,9 +12,9 @@
  *
  * So they move at runtime. The governor watches the smoothed frame rate and
  * walks a short ladder of quality tiers: down quickly when frames are being
- * missed (a stutter is the one thing the user always notices), up slowly and
- * only from sustained headroom, so it settles instead of oscillating between
- * two tiers. Tier 0 is exactly the app's own defaults, so a machine that keeps
+ * missed (a stutter is the one thing the user always notices; two rungs at
+ * once when they are badly missed), up slowly and only from sustained
+ * headroom, so it settles instead of oscillating between two tiers. Tier 0 is exactly the app's own defaults, so a machine that keeps
  * up never sees the governor at all.
  *
  * Deliberately not governed: overdrive. That mode exists to show the engine's
@@ -57,14 +57,24 @@ const TIERS: readonly Tier[] = [
 
 /** Below this smoothed fps the current tier is not holding. */
 const DOWN_FPS = 50;
+/** Below this the tier is hopeless: skip a rung instead of walking it. */
+const SEVERE_FPS = 30;
 /** Above this there is room for the tier above. */
 const UP_FPS = 58;
-/** Frames under `DOWN_FPS` before dropping a tier (~0.5 s at 60 Hz). */
-const DOWN_FRAMES = 30;
-/** Frames over `UP_FPS` before climbing one (~4 s), so it settles. */
-const UP_FRAMES = 240;
-/** Frames ignored after a change, while the fps average catches up. */
-const SETTLE_FRAMES = 45;
+
+// The windows are wall-clock time, not frame counts. Counted in frames, a
+// device at 15 fps needed ~18 s to walk down the ladder — the whole first
+// impression spent at a quality it could never hold.
+/** Time under `DOWN_FPS` before dropping. */
+const DOWN_MS = 500;
+/** Time over `UP_FPS` before climbing one, so it settles. */
+const UP_MS = 4000;
+/** Time ignored after a change, while the fps average catches up... */
+const SETTLE_MS = 750;
+/** ...and at least this many frames, since the average moves per frame. */
+const SETTLE_FRAMES = 20;
+/** One stalled frame (tab switch, GC) counts for no more than this. */
+const MAX_DT_MS = 250;
 
 export class PerformanceGovernor {
   private readonly knobs: QualityKnobs;
@@ -74,9 +84,10 @@ export class PerformanceGovernor {
   private baseParticles: number;
 
   private tier = 0;
-  private below = 0;
-  private above = 0;
-  private settle = SETTLE_FRAMES;
+  private belowMs = 0;
+  private aboveMs = 0;
+  private settleMs = SETTLE_MS;
+  private settleFrames = SETTLE_FRAMES;
   private paused = false;
 
   constructor(knobs: QualityKnobs, basePressure: number, baseParticles: number) {
@@ -100,7 +111,7 @@ export class PerformanceGovernor {
   rebase(pressure: number, particles: number): void {
     this.basePressure = pressure;
     this.baseParticles = particles;
-    this.settle = SETTLE_FRAMES;
+    this.resetWindows();
     // The caller has just set the knobs to 100%; a device already down the
     // ladder must not run at full cost until the next tier change.
     if (this.tier !== 0) this.apply(this.tier);
@@ -115,44 +126,52 @@ export class PerformanceGovernor {
     if (paused === this.paused) return;
     this.paused = paused;
     if (paused && this.tier !== 0) this.apply(0);
-    this.below = 0;
-    this.above = 0;
-    this.settle = SETTLE_FRAMES;
+    this.resetWindows();
   }
 
-  /** Once per frame, with the loop's smoothed frame rate. */
-  update(fps: number): void {
+  /** Once per frame, with the loop's smoothed frame rate and the real delta. */
+  update(fps: number, dtMs: number): void {
     if (this.paused) return;
+    const dt = Math.min(MAX_DT_MS, Math.max(0, dtMs));
     // The first frames of a session are dominated by shader compilation and
-    // the first WASM step; judging quality on them drops two tiers for nothing.
-    if (this.settle > 0) {
-      this.settle--;
+    // the first WASM step; judging quality on them drops tiers for nothing.
+    if (this.settleMs > 0 || this.settleFrames > 0) {
+      this.settleMs -= dt;
+      this.settleFrames--;
       return;
     }
     if (!Number.isFinite(fps) || fps <= 0) return;
 
     if (fps < DOWN_FPS) {
-      this.above = 0;
-      if (++this.below >= DOWN_FRAMES && this.tier < TIERS.length - 1) {
-        this.apply(this.tier + 1);
+      this.aboveMs = 0;
+      this.belowMs += dt;
+      if (this.belowMs >= DOWN_MS && this.tier < TIERS.length - 1) {
+        const step = fps < SEVERE_FPS ? 2 : 1;
+        this.apply(Math.min(TIERS.length - 1, this.tier + step));
       }
       return;
     }
 
-    this.below = 0;
+    this.belowMs = 0;
     if (fps > UP_FPS) {
-      if (++this.above >= UP_FRAMES && this.tier > 0) this.apply(this.tier - 1);
+      this.aboveMs += dt;
+      if (this.aboveMs >= UP_MS && this.tier > 0) this.apply(this.tier - 1);
     } else {
-      this.above = 0;
+      this.aboveMs = 0;
     }
+  }
+
+  private resetWindows(): void {
+    this.belowMs = 0;
+    this.aboveMs = 0;
+    this.settleMs = SETTLE_MS;
+    this.settleFrames = SETTLE_FRAMES;
   }
 
   private apply(tier: number): void {
     const next = TIERS[tier]!;
     this.tier = tier;
-    this.below = 0;
-    this.above = 0;
-    this.settle = SETTLE_FRAMES;
+    this.resetWindows();
 
     this.knobs.setRenderScale(next.render);
     this.knobs.setPressureIters(Math.max(10, Math.round(this.basePressure * next.pressure)));
