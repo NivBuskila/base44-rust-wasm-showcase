@@ -89,6 +89,9 @@ async function boot(): Promise<void> {
     window.addEventListener('pagehide', () => app.flushQaSession());
 
     await app.start(setStatus);
+    // Hold the loader until hand tracking is warm, so nobody enters mid-stutter.
+    setStatus('warming up hand tracking…');
+    await app.settled();
     intro.ready({
       hands: app.diagnostics.cameraAvailable ? () => app.handsPresent : undefined,
       onOpen: () => app.stage(),
