@@ -28,6 +28,9 @@ import { QaRecorder, type QaSession } from './qa-recorder';
 import { STAT, assertOpLayout } from './constants';
 import type { PerceptionSource, RenderFrame, SceneRenderer, ViewMode } from './types';
 
+// WebGPU renders from its own pool; it never reads the Rust particle stream.
+const NO_CPU_PARTICLES = new Float32Array(0);
+
 export class App {
   private readonly engine: AetherEngine;
   /** The engine's gesture-sequence book. Static for the session. */
@@ -197,7 +200,7 @@ export class App {
     });
     t.measure('stepMs', () => this.engine.step(simDt));
 
-    const stats = this.engine.stats();
+    const stats = this.views.stats();
     t.measure('renderMs', () => this.renderer.render(this.buildFrame(stats)));
 
     // The GPU owns the pool, so its own count is the only true one. It lags a
@@ -256,7 +259,7 @@ export class App {
 
     return {
       dye: this.views.dye,
-      particles: this.views.particles(),
+      particles: this.renderer.backend === 'webgpu' ? NO_CPU_PARTICLES : this.views.particles(),
       particleCount: this.engine.particle_count(),
       debug: this.mode === 'debug' ? this.views.debug() : null,
       video: this.cameraAvailable ? this.camera.video : null,
@@ -304,7 +307,7 @@ export class App {
       ...this.timings.rows,
       cameraAvailable: this.cameraAvailable,
       perception: this.perception.status,
-      stats: Array.from(this.engine.stats()),
+      stats: Array.from(this.views.lastStats()),
       spells: [this.engine.spell_name(0), this.engine.spell_name(1)] as [string, string],
       particleCount: this.engine.particle_count(),
       mode: this.mode,
@@ -346,7 +349,7 @@ export class App {
 
   /** Hands the engine sees this frame; cheap enough to poll at 20 Hz. */
   get handsPresent(): number {
-    return this.engine.stats()[STAT.HANDS_PRESENT] ?? 0;
+    return this.views.lastStats()[STAT.HANDS_PRESENT] ?? 0;
   }
 
   /** The session record so far, without waiting for the next storage write. */
