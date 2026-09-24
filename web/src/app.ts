@@ -182,7 +182,7 @@ export class App {
 
     // See `frame-clock.ts`: `simDt` is clamped for the integrator, `realDt` is
     // what actually elapsed and is the only honest input to an fps number.
-    const { simDt } = this.clock.tick(nowMs);
+    const { simDt, realDt } = this.clock.tick(nowMs);
 
     this.views.refresh();
 
@@ -206,7 +206,7 @@ export class App {
       this.engine.set_particles_alive(this.renderer.particlesAlive?.() ?? 0);
     }
 
-    this.governor.update(this.clock.fps);
+    this.governor.update(this.clock.fps, realDt * 1000);
     this.overdrive.update(stats, this.clock.fps, t.stepMs);
     t.measure('hudMs', () =>
       this.hud.update({
