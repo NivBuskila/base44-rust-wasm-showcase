@@ -75,6 +75,14 @@ const SETTLE_MS = 750;
 const SETTLE_FRAMES = 20;
 /** One stalled frame (tab switch, GC) counts for no more than this. */
 const MAX_DT_MS = 250;
+/**
+ * Longest a warm-up hold is honoured. MediaPipe's cold start (model load plus
+ * lazy GPU shader compilation) steals frames for ~10 s on a first visit; judged
+ * on those, the governor dropped to the bottom rung and then spent 4 s per rung
+ * climbing back, so first-time visitors saw ~15 s of degraded frames. The cap
+ * keeps a device whose perception never finishes from going unadapted.
+ */
+const MAX_HOLD_MS = 30000;
 
 export class PerformanceGovernor {
   private readonly knobs: QualityKnobs;
@@ -89,6 +97,8 @@ export class PerformanceGovernor {
   private settleMs = SETTLE_MS;
   private settleFrames = SETTLE_FRAMES;
   private paused = false;
+  private held = false;
+  private heldMs = 0;
 
   constructor(knobs: QualityKnobs, basePressure: number, baseParticles: number) {
     this.knobs = knobs;
@@ -129,10 +139,27 @@ export class PerformanceGovernor {
     this.resetWindows();
   }
 
+  /**
+   * Holds judgment (without changing the tier) while a transient load such as
+   * the vision models' warm-up is stealing frames. Bounded by `MAX_HOLD_MS`.
+   */
+  setHold(hold: boolean): void {
+    if (hold === this.held) return;
+    this.held = hold;
+    // Releasing starts a fresh settle window, so the fps average left over
+    // from the warm-up is not judged.
+    if (!hold) this.resetWindows();
+  }
+
   /** Once per frame, with the loop's smoothed frame rate and the real delta. */
   update(fps: number, dtMs: number): void {
     if (this.paused) return;
     const dt = Math.min(MAX_DT_MS, Math.max(0, dtMs));
+    if (this.held && this.heldMs < MAX_HOLD_MS) {
+      this.heldMs += dt;
+      this.resetWindows();
+      return;
+    }
     // The first frames of a session are dominated by shader compilation and
     // the first WASM step; judging quality on them drops tiers for nothing.
     if (this.settleMs > 0 || this.settleFrames > 0) {

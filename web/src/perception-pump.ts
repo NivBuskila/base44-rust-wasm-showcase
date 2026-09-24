@@ -109,6 +109,15 @@ export class PerceptionPump {
     return this.source !== null;
   }
 
+  /**
+   * True until the first result arrives: model load and MediaPipe's first-pass
+   * GPU shader compilation, which contend with the render loop for seconds.
+   */
+  get warming(): boolean {
+    return this.status.kind === 'loading'
+      || (this.status.kind === 'ready' && this.lastResultMs === 0);
+  }
+
   /** Effective inline inference budget cadence, not the delivered result rate. */
   get hz(): number {
     return 1000 / this.intervalMs;
