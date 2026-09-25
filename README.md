@@ -287,7 +287,7 @@ in a pipeline like this:
 - The user sees a **mirrored** camera view, so landmarks and the luma plane are
   mirrored to match. Otherwise moving your hand right would push the fluid left.
 
-The fluid grid is 192 × 108 for a 16:9 frame, so cells are square in screen
+The fluid grid is 256 × 144 for a 16:9 frame, so cells are square in screen
 space and no anisotropic correction is needed anywhere.
 
 ## Measured
@@ -297,14 +297,16 @@ Native release, on a 4-core container, from
 
 | stage | cost |
 | --- | --- |
-| fluid step (advect, diffuse, vorticity, project) | 5.1 ms |
-| + 120k particles | 13.6 ms |
-| optical flow, per camera frame | 1.5 ms |
-| one 60 fps frame | 16.7 ms |
+| fluid step (advect, diffuse, vorticity, project) | 9.0 ms |
+| + 120k particles | 17.3 ms |
+| + optical-flow drive | 18.6 ms |
+| optical flow, per camera frame | 1.4 ms |
+| one 60 fps frame, for reference | 16.7 ms |
 
-In-browser engine step: **17.8 ms** with 120k particles, 9.7 ms with none
-(single-threaded, WebGL2 path; on the WebGPU path the particles leave the CPU
-entirely).
+These are single-threaded on the 256 × 144 grid. In the browser the baseline
+engine step is about 28 ms with 120k particles, which is why the performance
+governor exists; the threaded engine spreads the fluid kernels and the particle
+lanes across cores, and on the WebGPU path the particles leave the CPU entirely.
 
 Two numbers that are *not* the engine, recorded so they are not misread:
 
