@@ -69,7 +69,7 @@ jobs:
     name: Browser (Playwright, headless)
     needs: web
     runs-on: ubuntu-latest
-    # ~7 minutes of SwiftShader when healthy; the cap catches a hang.
+    # 7-12 minutes of SwiftShader when healthy; the cap catches a hang.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
