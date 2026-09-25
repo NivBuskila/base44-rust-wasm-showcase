@@ -366,7 +366,9 @@ On a machine where Playwright's own browser download is unavailable, point it at
 an existing Chromium with `AETHER_CHROMIUM=/path/to/chromium`.
 
 CI (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `cargo clippy
--D warnings`, `cargo test --workspace`, both WASM builds, the typecheck and the
+-D warnings`, `cargo test --workspace`, the same clippy and tests again with
+`--features parallel` (the threaded engine, including a check that the solver
+is bit-identical on any thread count), both WASM builds, the typecheck and the
 unit suite on every pull request.
 
 ## Deploying

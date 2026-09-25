@@ -42,8 +42,11 @@ impl Fluid {
             .zip(advector.fwd.cells.chunks_mut(w))
             .take(rows)
             .collect();
-        par::chunks_mut(&mut lanes, par::chunk_len(rows, 4), |band, lanes| {
-            let per = lanes.len();
+        // Rows are placed by the band length asked for, never by `lanes.len()`:
+        // the last band is usually shorter, and its own length would drop it
+        // over rows an earlier band owns, leaving the bottom rows untraced.
+        let per = par::chunk_len(rows, 4);
+        par::chunks_mut(&mut lanes, per, |band, lanes| {
             for (k, (back, fwd)) in lanes.iter_mut().enumerate() {
                 let y = band * per + k;
                 let fy = y as f32;

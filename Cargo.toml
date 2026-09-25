@@ -13,6 +13,12 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 
+# The solver tests step real grids hundreds of times, which unoptimised code
+# makes a 60 s wait. Level 1 brings the suite to ~9 s and keeps what makes a
+# test build a test build: debug assertions and overflow checks stay on.
+[profile.test]
+opt-level = 1
+
 # Profile used for the wasm artifact shipped to the browser.
 [profile.wasm-release]
 inherits = "release"

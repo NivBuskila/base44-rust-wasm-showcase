@@ -6,3 +6,5 @@ mod kernels;
 mod obstacles;
 mod stability;
 mod support;
+#[cfg(feature = "parallel")]
+mod threads;
