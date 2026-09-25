@@ -15,7 +15,8 @@ Non-obvious rules only: what the README and the manifests do not say. Each bulle
 
 ## Verifying
 
-- Commands: `docker compose -f docker-compose.base44.yml exec -T wasm cargo test --workspace`, plus `... exec -T web npm run typecheck` and `... exec -T web npm run test:unit`. Test counts: Rust 229, vitest 204, Playwright 35. Playwright is not run in CI or in the container. Update the README's Testing section when these counts change.
+- Commands: `docker compose -f docker-compose.base44.yml exec -T wasm cargo test --workspace`, plus `... exec -T web npm run typecheck` and `... exec -T web npm run test:unit`. Test counts: Rust 237, vitest 206, Playwright 36. Playwright is not run in CI. It runs against `vite preview` of `web/dist`, so rebuild before a run. `npm run typecheck` also typechecks the specs (`tests/tsconfig.json`), which is the only thing that catches a spec importing a moved module. Update the README's Testing section when these counts change.
+- vitest runs in the `node` environment by default. A suite that needs a DOM starts with `// @vitest-environment jsdom`, as four do today.
 - CI pins toolchain `1.90.0`, the same as `rust-toolchain.toml`; otherwise rustfmt/clippy go missing. CI also runs the threaded build, because the typecheck follows `engine-loader.ts`'s dynamic import into `web/src/wasm-mt`. Run fmt/clippy before pushing. The two `needless_range_loop` allows in `fluid/` are deliberate.
 - Browser readiness: `#boot.ready` = engine running and perception warmed (capped at 30 s). `.done` is invisible, so wait for attachment rather than visibility. `window.__aether.diagnostics()` reports frames, camera/perception status, `renderBackend` and `qualityTier`. Only a canvas screenshot proves rendering.
 - Welcome flow state lives in `localStorage` (`aether.landing.seen`, `aether.tutorial.done`). Clear it to replay the welcome, or pass `?welcome`.
@@ -24,6 +25,7 @@ Non-obvious rules only: what the README and the manifests do not say. Each bulle
 ## Deploying (Cloudflare Pages)
 
 - `.github/workflows/deploy.yml` builds both WASM variants in Actions, because Cloudflare's image can't run the nightly build. It self-hosts the MediaPipe runtime and models, then deploys `web/dist`. The README lists the settings it needs.
+- Deploy runs on `workflow_run` of the workflow named `CI`, only after it succeeds on a push to `main`. Renaming `ci.yml`'s `name:` silently stops deploys, so rename both.
 - The `og:*`/`twitter:*` tags in `web/index.html` use `%VITE_SITE_URL%`, because crawlers need absolute URLs. `web/.env` holds the dev default, and the deploy workflow overrides it.
 - Production-only pitfall: the minifier turns an indirect `eval` into a direct one, which breaks the perception worker ("ModuleFactory not set"). `worker-import-scripts.ts` therefore calls `globalThis.eval`. After a build, check with `grep responseText web/dist/assets/perception.worker-*.js`.
 - `web/public/_headers` sends COOP/COEP. Pages caps files at 25 MB, and the largest dist file is about 12 MB.
@@ -67,4 +69,6 @@ Non-obvious rules only: what the README and the manifests do not say. Each bulle
 - `fluid/kernels/scalar.rs` is compiled everywhere so it can be cross-checked against `simd.rs`, the only `cfg(wasm32 + simd)` module.
 - Test folders follow a fixed layout: `mod.rs` holds only the `mod` list, `support.rs` holds the fixtures (all `pub(super)`) and re-exports, and each theme file starts with `use super::support::*;`.
 - `visual.rs` scores the dye field for tuning. `contrast` is brightness-normalised, and `divergence` is absolute, so compare it with `max_speed`.
+- Threading: `Engine::step` enters the rayon pool once through `par::install`, the Jacobi sweeps run serially (`sweep_rows`), and particle lanes are several per thread (`par::balanced_len`). All three were measured faster in the browser, with a 4 ms gap between steps. Compare a threading change against `?engine=single` before keeping it, because on a 256×144 grid a fork/join can cost more than it saves.
+- CI also runs `cargo test -p aether-core --features parallel`. `fluid/tests/threads.rs` requires the solver to be bit-identical on 1, 2, 3, 5 and 7 threads. Index a band's rows by the requested chunk length, never by the chunk's own `len()`, because the last band is shorter.
 - `aether-wasm` spreads `#[wasm_bindgen] impl` blocks across `lib.rs`, `buffers.rs`, `gpu.rs` and `reports.rs`, and holds no logic.

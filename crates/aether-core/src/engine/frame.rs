@@ -10,6 +10,7 @@
 use super::{sane_dt, Engine, AMBIENT_AFTER, SANITIZE_EVERY};
 use crate::config::{FLUID_H, FLUID_W};
 use crate::math::hue_to_rgb;
+use crate::par;
 use crate::spells;
 
 impl Engine {
@@ -17,6 +18,12 @@ impl Engine {
 
     /// Advances the whole engine by `dt` real seconds.
     pub fn step(&mut self, dt: f32) {
+        // One handoff into the thread pool per frame rather than one per
+        // parallel region; see `par::install`. Serial builds call straight in.
+        par::install(|| self.advance(dt));
+    }
+
+    fn advance(&mut self, dt: f32) {
         let real_dt = sane_dt(dt);
         self.time += real_dt;
         self.frame = self.frame.wrapping_add(1);
@@ -38,24 +45,25 @@ impl Engine {
         }
 
         // Re-uploading the obstacle is a full grid resample plus a wall-mask
-        // rebuild. The mask arrives at 30 Hz against a 60 Hz render loop, so
-        // half these calls would hand the solver bytes it already has. During a
-        // fade the field does change every frame, hence the staleness test.
+        // rebuild, so it is skipped while no body is in view. With one in view
+        // the field changes every frame, not just when a mask lands: the fade
+        // envelope starts the moment each mask arrives (`BodyMask::decay`), so
+        // the frames between masks carry a slightly dimmer copy. The dirty flag
+        // carries one upload past `present()` dropping, the one that empties
+        // the solver's copy.
         if self.obstacle_dirty || self.body.present() {
             self.fluid.set_obstacle(self.body.obstacle());
             self.obstacle_dirty = self.body.present();
         }
 
+        // A borrow of `self.body` alone, so it can be held across the `&mut`
+        // borrows of `fluid` and `particles` that `spells::apply` takes below.
         let body_edge = if self.body.present() {
-            // Borrowed separately from `fluid`, hence the clone-free dance of
-            // pulling the reference out before the mutable borrow below.
             self.body.edge_velocity()
         } else {
             &self.idle_field
         };
 
-        // `spells::apply` needs &mut fluid and &mut particles at once, so the
-        // immutable borrows above are resolved into raw references first.
         // Sequences are recognised before the spell layer runs, so a combo
         // that completes this frame lands in the same step as the gesture that
         // completed it.

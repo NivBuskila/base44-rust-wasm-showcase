@@ -110,6 +110,14 @@ export class PerceptionPump {
   }
 
   /**
+   * Whether the models run on the worker. Then the loop pays only the bitmap
+   * handoff and `costMs`/`hz` stay idle; on the inline fallback they pace it.
+   */
+  get onWorker(): boolean {
+    return this.offThread;
+  }
+
+  /**
    * True until the first result arrives: model load and MediaPipe's first-pass
    * GPU shader compilation, which contend with the render loop for seconds.
    */

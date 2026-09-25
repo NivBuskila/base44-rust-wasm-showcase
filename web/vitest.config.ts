@@ -18,6 +18,9 @@ export default defineConfig({
   },
   test: {
     include: ['src/**/*.test.ts'],
-    environment: 'jsdom',
+    // Most suites are DOM-free, and building a jsdom per file was ~90% of the
+    // run. A suite that needs one says so in its first line with
+    // `// @vitest-environment jsdom`.
+    environment: 'node',
   },
 });

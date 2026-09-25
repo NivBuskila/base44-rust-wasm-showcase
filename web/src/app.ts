@@ -264,7 +264,7 @@ export class App {
       debug: this.mode === 'debug' ? this.views.debug() : null,
       video: this.cameraAvailable ? this.camera.video : null,
       hands: stats[STAT.HANDS_PRESENT] > 0 ? this.perception.hands : null,
-      time: this.clock.frames / 60,
+      time: this.clock.elapsed,
       intensity,
       mode: this.mode,
       showCamera: this.showCamera && this.cameraAvailable,
@@ -316,6 +316,8 @@ export class App {
       perceptionHz: this.perception.actualHz,
       /** Inline inference budget cadence (not the measured result rate). */
       perceptionBudgetHz: this.perception.hz,
+      /** The models run on the worker; the inline pacing fields then stay idle. */
+      perceptionWorker: this.perception.onWorker,
       inferenceCostMs: this.perception.costMs,
       firstHandAtMs: this.perception.firstHandAtMs,
       decodeMs: this.perception.decodeMs,

@@ -23,11 +23,16 @@ interface AetherDiagnostics {
   spells: [string, string];
   particleCount: number;
   mode: 'aether' | 'camera' | 'debug' | 'particles';
-  /** Effective inference cadence in Hz, after adaptive throttling. */
+  /** Measured rate at which inference results reach the engine, in Hz. */
   perceptionHz: number;
+  /** Inline path only: the cadence the duty budget allows, in Hz. */
   perceptionBudgetHz: number;
-  /** Smoothed wall time one inference costs the render loop, in ms. */
+  /** Inline path only: smoothed wall time one inference costs the loop, in ms. */
   inferenceCostMs: number;
+  /** The model's own latency for the last completed result, in ms. */
+  modelMs: number;
+  /** The models run on the worker rather than inline. */
+  perceptionWorker: boolean;
 }
 
 interface AetherTestHooks {
@@ -46,6 +51,11 @@ interface AetherTestHooks {
   luminance(): number;
   forceMode(mode: 'aether' | 'camera' | 'debug' | 'particles'): void;
   reset(): void;
+  /** The running app; only the parts a spec drives directly are declared. */
+  app: {
+    stop(): void;
+    rawEngine: { step(dt: number): void };
+  };
 }
 
 interface Window {

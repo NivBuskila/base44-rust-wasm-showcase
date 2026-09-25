@@ -13,11 +13,11 @@ use crate::par;
 /// so the bounds check collapses to one per corner group. Packing the three
 /// fields into one struct rather than three parallel arrays cuts the trace
 /// build from six write streams to two, which is worth ~15% of the stage.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::fluid) struct Stencil {
-    corner: u32,
-    fx: f32,
-    fy: f32,
+    pub(super) corner: u32,
+    pub(super) fx: f32,
+    pub(super) fy: f32,
 }
 
 impl Stencil {

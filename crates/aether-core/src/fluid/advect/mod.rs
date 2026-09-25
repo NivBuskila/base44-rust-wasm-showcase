@@ -2,8 +2,10 @@
 //! velocity and the three dye channels, and the dye is faded where it meets the
 //! body.
 
+mod reach;
 mod sampling;
 
+pub(in crate::fluid) use reach::Reach;
 pub(in crate::fluid) use sampling::{corner_of, fetch, Advector, Stencil};
 
 use super::*;
@@ -29,6 +31,18 @@ impl Fluid {
     /// one obstacle walk and one clamp-floor-fraction conversion.
     pub(super) fn build_traces(&mut self, dt: f32) {
         let (w, h) = (self.w, self.h);
+        // With a body in frame every trace endpoint is tested against it, and
+        // many cells are nowhere near it. `reach` marks the cells some wall is
+        // close enough for a trace this step to touch; the rest skip the test,
+        // whose answer for them is already known to be "clear".
+        let skip_far = self.has_obstacle
+            && match self.trace_reach(dt) {
+                Some(radius) => {
+                    self.reach.build(&self.obstacle.data, w, h, radius);
+                    true
+                }
+                None => false,
+            };
         // The trace maps are written while the rest of `self` is read through
         // `integrate`, so they are taken out for the duration: `Advector::new(0)`
         // allocates nothing.
@@ -42,8 +56,11 @@ impl Fluid {
             .zip(advector.fwd.cells.chunks_mut(w))
             .take(rows)
             .collect();
-        par::chunks_mut(&mut lanes, par::chunk_len(rows, 4), |band, lanes| {
-            let per = lanes.len();
+        // Rows are placed by the band length asked for, never by `lanes.len()`:
+        // the last band is usually shorter, and its own length would drop it
+        // over rows an earlier band owns, leaving the bottom rows untraced.
+        let per = par::chunk_len(rows, 4);
+        par::chunks_mut(&mut lanes, per, |band, lanes| {
             for (k, (back, fwd)) in lanes.iter_mut().enumerate() {
                 let y = band * per + k;
                 let fy = y as f32;
@@ -57,18 +74,65 @@ impl Fluid {
                     // swipe produces, first-order backtracing rounds the dye
                     // off into mush inside a second and no number of pressure
                     // iterations brings the structure back.
+                    let near = !skip_far || this.reach.near(i);
                     let (bx, by) = this.integrate(fx, fy, -dt, u0, v0);
-                    let (bx, by) = this.trace_to_fluid(fx, fy, bx, by);
-                    back[x] = Stencil::at(bx, by, w, h);
+                    back[x] = this.clear_stencil(fx, fy, bx, by, near);
 
                     let (gx, gy) = this.integrate(fx, fy, dt, u0, v0);
-                    let (gx, gy) = this.trace_to_fluid(fx, fy, gx, gy);
-                    fwd[x] = Stencil::at(gx, gy, w, h);
+                    fwd[x] = this.clear_stencil(fx, fy, gx, gy, near);
                 }
             }
         });
         drop(lanes);
         self.advector = advector;
+    }
+
+    /// The backward and forward trace maps the last `build_traces` produced.
+    #[cfg(test)]
+    pub(in crate::fluid) fn trace_stencils(&self) -> (&[Stencil], &[Stencil]) {
+        (&self.advector.back.cells, &self.advector.fwd.cells)
+    }
+
+    /// Chebyshev radius, in cells, within which every stencil corner of every
+    /// trace this step must fall; `None` when the field holds a non-finite
+    /// value and no bound can be promised.
+    ///
+    /// A trace moves `hs * um` per substep with `|hs|` summing to `|dt|`, and a
+    /// bilinear fetch never exceeds the largest component it blends, so each
+    /// axis of the endpoint lies within `|dt| * max|component|` of the start.
+    /// The stencil adds one cell for its `+1` corner; one more absorbs rounding.
+    pub(super) fn trace_reach(&self, dt: f32) -> Option<usize> {
+        let mut largest = 0.0f32;
+        for &c in self.vel.u.data.iter().chain(&self.vel.v.data) {
+            if !c.is_finite() {
+                return None;
+            }
+            largest = largest.max(c.abs());
+        }
+        let span = dt.abs() * largest;
+        if !span.is_finite() {
+            return None;
+        }
+        // The cast saturates, so a huge finite speed still yields a radius
+        // covering the whole grid rather than wrapping round to a small one.
+        Some((span.ceil() as usize).saturating_add(2))
+    }
+
+    /// [`Stencil::at`] for a trace from `(x0, y0)` to `(tx, ty)`, backed out
+    /// of the walls as [`Fluid::trace_to_fluid`] does.
+    ///
+    /// `near == false` promises no wall is within the trace's reach, so the
+    /// obstacle test is a known miss and is skipped. Otherwise the stencil the
+    /// endpoint needs anyway doubles as the test, instead of resolving the same
+    /// clamp-floor-fraction twice.
+    #[inline]
+    pub(super) fn clear_stencil(&self, x0: f32, y0: f32, tx: f32, ty: f32, near: bool) -> Stencil {
+        let s = Stencil::at(tx, ty, self.w, self.h);
+        if !near || !self.has_obstacle || !self.stencil_hits_obstacle(s) {
+            return s;
+        }
+        let (px, py) = self.trace_to_fluid(x0, y0, tx, ty);
+        Stencil::at(px, py, self.w, self.h)
     }
 
     /// Traces `(x, y)` along the velocity field for `dt` seconds — negative to
@@ -117,10 +181,8 @@ impl Fluid {
 
     /// Fades dye in the band of fluid cells around the body silhouette.
     ///
-    /// The band is the obstacle mask dilated by [`BODY_CONTACT_BAND`], computed
-    /// separably (a horizontal max pass into `scratch`, then a vertical max read
-    /// while the fade is applied) so the cost is `O(band)` per cell rather than
-    /// `O(band^2)`.
+    /// The band is the obstacle mask dilated by [`BODY_CONTACT_BAND`], built
+    /// by [`Reach`] with running counts, so its cost does not depend on the band.
     ///
     /// Only runs while a body is in frame; with none the obstacle mask is empty
     /// and the whole sweep would be a no-op.
@@ -135,39 +197,21 @@ impl Fluid {
             return;
         }
 
-        // scratch[i] = 1 when any cell within `band` on this row is solid.
-        for y in 0..h {
-            for x in 0..w {
-                let lo = x.saturating_sub(band);
-                let hi = (x + band).min(w - 1);
-                let row = y * w;
-                let hit = self.obstacle.data[row + lo..=row + hi]
-                    .iter()
-                    .any(|&o| o >= 0.5);
-                self.scratch.data[row + x] = if hit { 1.0 } else { 0.0 };
-            }
-        }
-
-        for y in 0..h {
-            let lo = y.saturating_sub(band);
-            let hi = (y + band).min(h - 1);
-            for x in 0..w {
-                let i = y * w + x;
-                if self.obstacle.data[i] >= 0.5 {
-                    // Dye that ended up inside the silhouette can never advect
-                    // out again, so it is cleared outright instead of faded.
-                    for channel in &mut self.dye {
-                        channel.data[i] = 0.0;
-                    }
-                    continue;
-                }
-                let near = (lo..=hi).any(|k| self.scratch.data[k * w + x] >= 0.5);
-                if !near {
-                    continue;
-                }
+        self.reach.build(&self.obstacle.data, w, h, band);
+        for i in 0..w * h {
+            if self.obstacle.data[i] >= 0.5 {
+                // Dye that ended up inside the silhouette can never advect
+                // out again, so it is cleared outright instead of faded.
                 for channel in &mut self.dye {
-                    channel.data[i] *= fade;
+                    channel.data[i] = 0.0;
                 }
+                continue;
+            }
+            if !self.reach.near(i) {
+                continue;
+            }
+            for channel in &mut self.dye {
+                channel.data[i] *= fade;
             }
         }
     }
@@ -212,9 +256,14 @@ impl Fluid {
     /// whether a body happens to be in frame.
     #[inline]
     pub(super) fn obstacle_in_stencil(&self, x: f32, y: f32) -> bool {
-        let (ix, fx) = corner_of(x, self.w);
-        let (iy, fy) = corner_of(y, self.h);
-        let c = iy * self.w + ix;
+        self.stencil_hits_obstacle(Stencil::at(x, y, self.w, self.h))
+    }
+
+    /// [`Fluid::obstacle_in_stencil`] for an already resolved stencil.
+    #[inline]
+    pub(super) fn stencil_hits_obstacle(&self, s: Stencil) -> bool {
+        let c = s.corner as usize;
+        let (fx, fy) = (s.fx, s.fy);
         let o = &self.obstacle.data;
         let (gx, gy) = (1.0 - fx, 1.0 - fy);
         (gx * gy > MIN_STENCIL_WEIGHT && o[c] >= 0.5)

@@ -1,7 +1,11 @@
 name: Deploy (Cloudflare Pages)
 
+# Deploys only a main commit that passed CI. `workflow_run` names CI by its
+# `name:`, so renaming that workflow silently stops deploys; rename both.
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -16,11 +20,20 @@ jobs:
   deploy:
     name: Build and deploy
     runs-on: ubuntu-latest
+    # A push to main whose CI succeeded. `branches` alone would also admit a
+    # pull request whose head branch happens to be called main.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push')
     permissions:
       contents: read
       deployments: write
     steps:
+      # The commit CI tested, not whatever main points at by the time this runs.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       # Must match rust-toolchain.toml (see ci.yml).
       - uses: dtolnay/rust-toolchain@1.90.0
       - uses: Swatinem/rust-cache@v2

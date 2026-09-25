@@ -14,7 +14,7 @@
     "dev": "bash ../scripts/build-wasm.sh release --if-missing --both && vite",
     "build": "bash ../scripts/build-wasm.sh release --if-missing --both && tsc --noEmit && vite build",
     "preview": "vite preview --port 4173 --strictPort",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tests",
     "test": "cd .. && cargo test --workspace",
     "test:unit": "vitest run",
     "test:e2e": "node ../scripts/make-fixture-video.mjs && playwright test"
