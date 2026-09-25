@@ -2,6 +2,10 @@
 
 Non-obvious rules only: what the README and the manifests do not say. Each bullet stands alone.
 
+## Commits and pull requests
+
+- Never put a link to an AI chat or session (such as `claude.ai/code/session_…`, or a `Claude-Session:` trailer) in a commit message, a PR title or description, a code comment or any file. The repository is public.
+
 ## Local environment (Docker)
 
 - Browser-only app: no API, database or credentials. Without camera permission it runs an ambient simulation by design.
