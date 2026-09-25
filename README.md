@@ -325,7 +325,7 @@ Two numbers that are *not* the engine, recorded so they are not misread:
 ```bash
 cargo test --workspace     # 229 tests: the simulation, on the host
 cd web && npm run typecheck
-cd web && npm run test:unit # 204 tests: the TypeScript that needs no browser (vitest)
+cd web && npm run test:unit # 206 tests: the TypeScript that needs no browser (vitest)
 cd web && npm run test:e2e  # 35 tests: the browser, headless, no webcam (Playwright)
 ```
 
@@ -358,10 +358,11 @@ unit suite on every pull request.
 ## Deploying
 
 The site is fully static and ships to Cloudflare Pages from
-`.github/workflows/deploy.yml` on every push to `main` (or by hand from the
-Actions tab). The workflow builds both WASM engines itself — Cloudflare's own
-build image cannot run the nightly threaded build — self-hosts the MediaPipe
-runtime and models, and uploads `web/dist`.
+`.github/workflows/deploy.yml` once CI has passed on a push to `main` (or by
+hand from the Actions tab); a push that fails CI is never deployed. The
+workflow builds both WASM engines itself — Cloudflare's own build image cannot
+run the nightly threaded build — self-hosts the MediaPipe runtime and models,
+and uploads `web/dist`.
 
 One-time setup, in the GitHub repository settings:
 

@@ -15,7 +15,7 @@ Non-obvious rules only: what the README and the manifests do not say. Each bulle
 
 ## Verifying
 
-- Commands: `docker compose -f docker-compose.base44.yml exec -T wasm cargo test --workspace`, plus `... exec -T web npm run typecheck` and `... exec -T web npm run test:unit`. Test counts: Rust 229, vitest 204, Playwright 35. Playwright is not run in CI or in the container. Update the README's Testing section when these counts change.
+- Commands: `docker compose -f docker-compose.base44.yml exec -T wasm cargo test --workspace`, plus `... exec -T web npm run typecheck` and `... exec -T web npm run test:unit`. Test counts: Rust 229, vitest 206, Playwright 35. Playwright is not run in CI or in the container. Update the README's Testing section when these counts change.
 - CI pins toolchain `1.90.0`, the same as `rust-toolchain.toml`; otherwise rustfmt/clippy go missing. CI also runs the threaded build, because the typecheck follows `engine-loader.ts`'s dynamic import into `web/src/wasm-mt`. Run fmt/clippy before pushing. The two `needless_range_loop` allows in `fluid/` are deliberate.
 - Browser readiness: `#boot.ready` = engine running and perception warmed (capped at 30 s). `.done` is invisible, so wait for attachment rather than visibility. `window.__aether.diagnostics()` reports frames, camera/perception status, `renderBackend` and `qualityTier`. Only a canvas screenshot proves rendering.
 - Welcome flow state lives in `localStorage` (`aether.landing.seen`, `aether.tutorial.done`). Clear it to replay the welcome, or pass `?welcome`.
@@ -24,6 +24,7 @@ Non-obvious rules only: what the README and the manifests do not say. Each bulle
 ## Deploying (Cloudflare Pages)
 
 - `.github/workflows/deploy.yml` builds both WASM variants in Actions, because Cloudflare's image can't run the nightly build. It self-hosts the MediaPipe runtime and models, then deploys `web/dist`. The README lists the settings it needs.
+- Deploy runs on `workflow_run` of the workflow named `CI`, only after it succeeds on a push to `main`. Renaming `ci.yml`'s `name:` silently stops deploys, so rename both.
 - The `og:*`/`twitter:*` tags in `web/index.html` use `%VITE_SITE_URL%`, because crawlers need absolute URLs. `web/.env` holds the dev default, and the deploy workflow overrides it.
 - Production-only pitfall: the minifier turns an indirect `eval` into a direct one, which breaks the perception worker ("ModuleFactory not set"). `worker-import-scripts.ts` therefore calls `globalThis.eval`. After a build, check with `grep responseText web/dist/assets/perception.worker-*.js`.
 - `web/public/_headers` sends COOP/COEP. Pages caps files at 25 MB, and the largest dist file is about 12 MB.
