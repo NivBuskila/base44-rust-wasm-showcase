@@ -12,6 +12,9 @@
 //! the host verifies the same code the browser runs, and a run with
 //! `--features parallel` verifies that the chunking itself is sound.
 
+/// Parallel tasks per thread for work that does not split evenly.
+const TASKS_PER_THREAD: usize = 4;
+
 /// Number of worker threads the pool will spread work over. `1` when the
 /// serial fallback is compiled in.
 #[inline]
@@ -33,6 +36,45 @@ pub fn threads() -> usize {
 pub fn chunk_len(total: usize, min: usize) -> usize {
     let per_thread = total.div_ceil(threads().max(1));
     per_thread.max(min).max(1)
+}
+
+/// Like [`chunk_len`], but cut into several chunks per thread, for work whose
+/// cost per element is uneven (a dead particle is cheap, a respawn is not) or
+/// whose threads do not all start at once (a worker woken from sleep starts
+/// late). A thread that finishes early then steals a chunk instead of idling
+/// until the slowest one is done. The serial fallback still gets one chunk.
+#[inline]
+pub fn balanced_len(total: usize, min: usize) -> usize {
+    let tasks = match threads() {
+        1 => 1,
+        t => t * TASKS_PER_THREAD,
+    };
+    total.div_ceil(tasks).max(min).max(1)
+}
+
+/// Runs `f` on a pool thread and waits for it, so every parallel region `f`
+/// opens forks from a worker rather than from the calling thread.
+///
+/// A region opened from outside the pool is injected into it while the caller
+/// blocks, idle, until the region drains, and that handoff is paid per region.
+/// A region opened from inside the pool is a work-stealing join that the
+/// opening thread works on too. The engine step opens a few dozen regions a
+/// frame, so it enters the pool once and opens them all from inside. The
+/// serial fallback just calls `f`.
+#[inline]
+pub fn install<R, F>(f: F) -> R
+where
+    R: Send,
+    F: FnOnce() -> R + Send,
+{
+    #[cfg(feature = "parallel")]
+    {
+        rayon::scope(|_| f())
+    }
+    #[cfg(not(feature = "parallel"))]
+    {
+        f()
+    }
 }
 
 /// Runs `f(chunk_index, chunk)` over consecutive `size`-long chunks of `data`.
@@ -142,6 +184,31 @@ mod tests {
     fn sum_counts_across_items() {
         let mut items: Vec<usize> = (0..100).collect();
         assert_eq!(sum_mut(&mut items, |x| *x % 2), 50);
+    }
+
+    #[test]
+    fn balanced_len_is_one_chunk_serially_and_several_per_thread_otherwise() {
+        let total = 1_000_000usize;
+        let chunks = total.div_ceil(balanced_len(total, 16));
+        if threads() == 1 {
+            assert_eq!(chunks, 1);
+        } else {
+            assert!(chunks > threads());
+        }
+        assert!(balanced_len(10, 64) >= 64);
+        assert!(balanced_len(0, 0) >= 1);
+    }
+
+    #[test]
+    fn regions_opened_inside_install_still_cover_every_element() {
+        let v = install(|| {
+            let mut v = vec![0usize; 1003];
+            chunks_mut(&mut v, 17, |i, c| c.fill(i + 1));
+            v
+        });
+        for (k, x) in v.iter().enumerate() {
+            assert_eq!(*x, k / 17 + 1);
+        }
     }
 
     #[test]

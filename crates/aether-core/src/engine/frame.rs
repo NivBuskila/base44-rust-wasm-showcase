@@ -10,6 +10,7 @@
 use super::{sane_dt, Engine, AMBIENT_AFTER, SANITIZE_EVERY};
 use crate::config::{FLUID_H, FLUID_W};
 use crate::math::hue_to_rgb;
+use crate::par;
 use crate::spells;
 
 impl Engine {
@@ -17,6 +18,12 @@ impl Engine {
 
     /// Advances the whole engine by `dt` real seconds.
     pub fn step(&mut self, dt: f32) {
+        // One handoff into the thread pool per frame rather than one per
+        // parallel region; see `par::install`. Serial builds call straight in.
+        par::install(|| self.advance(dt));
+    }
+
+    fn advance(&mut self, dt: f32) {
         let real_dt = sane_dt(dt);
         self.time += real_dt;
         self.frame = self.frame.wrapping_add(1);

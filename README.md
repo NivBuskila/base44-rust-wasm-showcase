@@ -148,10 +148,12 @@ The first boot takes a few minutes while the toolchains download.
 `npm run dev` builds two engines from the same crate through
 `scripts/build-wasm.sh release --if-missing --both`: the baseline
 (single-threaded, SIMD128, into `web/src/wasm`) and a threaded one (the
-`parallel` feature, into `web/src/wasm-mt`), where the fluid kernels and the
-particle system run on a [rayon](https://github.com/rayon-rs/rayon) pool of Web
-Workers over shared WASM linear memory. The engine picks the threaded build at
-boot whenever the page is cross-origin isolated and falls back to the baseline
+`parallel` feature, into `web/src/wasm-mt`), where the fluid's advection and
+force stages and the particle system run on a
+[rayon](https://github.com/rayon-rs/rayon) pool of Web Workers over shared WASM
+linear memory. The pressure sweeps stay serial on purpose: each is too small to
+pay for waking the workers. The engine picks the threaded build at boot
+whenever the page is cross-origin isolated and falls back to the baseline
 otherwise, so nothing breaks in an embedded frame or an old browser. The HUD
 shows the tier and thread count either way.
 
@@ -303,10 +305,22 @@ Native release, on a 4-core container, from
 | optical flow, per camera frame | 1.4 ms |
 | one 60 fps frame, for reference | 16.7 ms |
 
-These are single-threaded on the 256 × 144 grid. In the browser the baseline
-engine step is about 28 ms with 120k particles, which is why the performance
-governor exists; the threaded engine spreads the fluid kernels and the particle
-lanes across cores, and on the WebGPU path the particles leave the CPU entirely.
+These are single-threaded on the 256 × 144 grid. In the browser the engine step
+costs more, which is why the performance governor exists. Measured as
+`engine.step` alone in headless Chromium on the same 4-core container, with a
+4 ms gap between steps standing in for the render:
+
+| pool | baseline | threaded (4 workers) |
+| --- | --- | --- |
+| fluid only | 18 ms | 19 ms |
+| 120k particles | 30 ms | 28 ms |
+| 400k particles | 56 ms | 39 ms |
+| 1M particles (overdrive) | 109 ms | 62 ms |
+
+At the default pool the threaded engine is roughly even with the baseline: the
+fluid grid is too small to amortise handing work to other cores, so the
+threads pay off with a large pool. On the WebGPU path the particles leave the
+CPU entirely.
 
 Two numbers that are *not* the engine, recorded so they are not misread:
 
@@ -323,7 +337,7 @@ Two numbers that are *not* the engine, recorded so they are not misread:
 ## Testing
 
 ```bash
-cargo test --workspace     # 229 tests: the simulation, on the host
+cargo test --workspace     # 231 tests: the simulation, on the host
 cd web && npm run typecheck
 cd web && npm run test:unit # 206 tests: the TypeScript that needs no browser (vitest)
 cd web && npm run test:e2e  # 35 tests: the browser, headless, no webcam (Playwright)

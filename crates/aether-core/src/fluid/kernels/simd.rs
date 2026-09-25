@@ -5,9 +5,8 @@
 //! forbids it. The arithmetic below is still genuine packed f32x4 work, which is
 //! where the time goes.
 
-use super::{kernel_unusable, zero_walls, StencilRows};
+use super::{kernel_unusable, sweep_rows, zero_walls, StencilRows};
 use crate::fluid::PRESSURE_OMEGA;
-use crate::par;
 
 use core::arch::wasm32::{
     f32x4, f32x4_add, f32x4_extract_lane, f32x4_ge, f32x4_mul, f32x4_splat, f32x4_sub, v128,
@@ -52,7 +51,7 @@ pub(in crate::fluid) fn jacobi_pressure_simd(
     let omega = f32x4_splat(PRESSURE_OMEGA);
 
     zero_walls(out, w, h);
-    par::rows_mut(&mut out[w..(h - 1) * w], w, h - 2, |k, o| {
+    sweep_rows(out, w, h, |k, o| {
         let rows = StencilRows::new(p, solid, div, w, k + 1);
         let mut x = 1;
         // A row is contiguous, so the left/right neighbour vectors are just
@@ -98,7 +97,7 @@ pub(in crate::fluid) fn jacobi_diffuse_simd(
     let inv = f32x4_splat(inv_scalar);
 
     zero_walls(out, w, h);
-    par::rows_mut(&mut out[w..(h - 1) * w], w, h - 2, |k, o| {
+    sweep_rows(out, w, h, |k, o| {
         let rows = StencilRows::new(x, solid, rhs, w, k + 1);
         let mut i = 1;
         while i + 4 <= w - 1 {

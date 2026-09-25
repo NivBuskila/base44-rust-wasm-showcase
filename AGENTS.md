@@ -15,7 +15,7 @@ Non-obvious rules only: what the README and the manifests do not say. Each bulle
 
 ## Verifying
 
-- Commands: `docker compose -f docker-compose.base44.yml exec -T wasm cargo test --workspace`, plus `... exec -T web npm run typecheck` and `... exec -T web npm run test:unit`. Test counts: Rust 229, vitest 206, Playwright 35. Playwright is not run in CI or in the container. Update the README's Testing section when these counts change.
+- Commands: `docker compose -f docker-compose.base44.yml exec -T wasm cargo test --workspace`, plus `... exec -T web npm run typecheck` and `... exec -T web npm run test:unit`. Test counts: Rust 231, vitest 206, Playwright 35. Playwright is not run in CI or in the container. Update the README's Testing section when these counts change.
 - CI pins toolchain `1.90.0`, the same as `rust-toolchain.toml`; otherwise rustfmt/clippy go missing. CI also runs the threaded build, because the typecheck follows `engine-loader.ts`'s dynamic import into `web/src/wasm-mt`. Run fmt/clippy before pushing. The two `needless_range_loop` allows in `fluid/` are deliberate.
 - Browser readiness: `#boot.ready` = engine running and perception warmed (capped at 30 s). `.done` is invisible, so wait for attachment rather than visibility. `window.__aether.diagnostics()` reports frames, camera/perception status, `renderBackend` and `qualityTier`. Only a canvas screenshot proves rendering.
 - Welcome flow state lives in `localStorage` (`aether.landing.seen`, `aether.tutorial.done`). Clear it to replay the welcome, or pass `?welcome`.
@@ -68,4 +68,6 @@ Non-obvious rules only: what the README and the manifests do not say. Each bulle
 - `fluid/kernels/scalar.rs` is compiled everywhere so it can be cross-checked against `simd.rs`, the only `cfg(wasm32 + simd)` module.
 - Test folders follow a fixed layout: `mod.rs` holds only the `mod` list, `support.rs` holds the fixtures (all `pub(super)`) and re-exports, and each theme file starts with `use super::support::*;`.
 - `visual.rs` scores the dye field for tuning. `contrast` is brightness-normalised, and `divergence` is absolute, so compare it with `max_speed`.
+- Threading: `Engine::step` enters the rayon pool once through `par::install`, the Jacobi sweeps run serially (`sweep_rows`), and particle lanes are several per thread (`par::balanced_len`). All three were measured faster in the browser, with a 4 ms gap between steps. Compare a threading change against `?engine=single` before keeping it, because on a 256×144 grid a fork/join can cost more than it saves.
+- `cargo test -p aether-core --features parallel` fails `velocity_dissipation_trades_swirl_against_blowout`, and it failed before the threading changes too. CI runs only the serial build.
 - `aether-wasm` spreads `#[wasm_bindgen] impl` blocks across `lib.rs`, `buffers.rs`, `gpu.rs` and `reports.rs`, and holds no logic.

@@ -78,11 +78,12 @@ impl Particles {
         let credit = (self.respawn_credit + per_frame).min(per_frame + 1.0);
 
         // The pool is cut into lanes — contiguous bands of every SoA stream —
-        // and each lane is advanced independently, on its own thread when the
-        // `parallel` feature is on. Nothing is shared between lanes: each gets
-        // its own RNG stream seeded from the pool's, and an equal slice of the
-        // respawn budget. With one thread this is exactly the old single pass.
-        let lane_len = par::chunk_len(self.active, LANE_MIN);
+        // and each lane is advanced independently, several per thread when the
+        // `parallel` feature is on so a thread that finishes early can steal.
+        // Nothing is shared between lanes: each gets its own RNG stream seeded
+        // from the pool's, and an equal slice of the respawn budget. With one
+        // thread this is exactly the old single pass.
+        let lane_len = par::balanced_len(self.active, LANE_MIN);
         let mut lanes = self.lanes(lane_len, credit);
         let alive = par::sum_mut(&mut lanes, |lane| lane.run(&frame));
 

@@ -134,6 +134,24 @@ where
     });
 }
 
+/// Runs `f(k, row)` over the interior rows of one Jacobi sweep's output, where
+/// row `k` is grid row `k + 1`, on the calling thread.
+///
+/// Serial in the threaded build too, on purpose. One pressure sweep is ~50 µs
+/// of work (all 28 cost ~1.3 ms native), which is about what a fork/join costs
+/// in worker wake-ups, and the sweeps are the one stage that pays it dozens of
+/// times a frame. Measured in the browser on 4 threads, sweeping serially was
+/// as fast or faster at every pool size, and most so with a large pool.
+#[inline]
+pub(super) fn sweep_rows<F>(out: &mut [f32], w: usize, h: usize, mut f: F)
+where
+    F: FnMut(usize, &mut [f32]),
+{
+    for (k, row) in out[w..(h - 1) * w].chunks_mut(w).enumerate() {
+        f(k, row);
+    }
+}
+
 #[inline]
 pub(super) fn zero_walls(out: &mut [f32], w: usize, h: usize) {
     if w < 2 || h < 2 || out.len() < w * h {
