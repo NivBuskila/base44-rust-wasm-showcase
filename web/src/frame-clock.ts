@@ -17,6 +17,13 @@ const FPS_SMOOTHING = 0.9;
 const MIN_SIM_DT = 1 / 480;
 const MAX_SIM_DT = 0.05;
 
+/**
+ * Longest single gap the animation clock counts. Far above any real frame, so
+ * the shader animation keeps wall-clock speed down to a few fps, but a hidden
+ * tab or a debugger pause resumes the look instead of jumping it forward.
+ */
+const MAX_ANIM_DT = 0.25;
+
 export interface FrameTick {
   /** Wall-clock seconds since the previous callback. */
   realDt: number;
@@ -29,6 +36,7 @@ export class FrameClock {
   private realDt = 0;
   private smoothedFps = 0;
   private count = 0;
+  private animSeconds = 0;
 
   /** Call once at `start`, so the first delta is not the page's whole age. */
   reset(nowMs: number): void {
@@ -42,6 +50,7 @@ export class FrameClock {
     this.smoothedFps =
       this.smoothedFps * FPS_SMOOTHING + (1 / realDt) * (1 - FPS_SMOOTHING);
     this.count++;
+    this.animSeconds += Math.min(MAX_ANIM_DT, realDt);
     return {
       realDt,
       simDt: Math.min(MAX_SIM_DT, Math.max(MIN_SIM_DT, realDt)),
@@ -54,6 +63,15 @@ export class FrameClock {
 
   get frames(): number {
     return this.count;
+  }
+
+  /**
+   * Seconds the shader animation has advanced. Wall-clock, not a frame count:
+   * `frames / 60` ran the noise twice as fast on a 120 Hz display and at half
+   * speed once the machine fell to 30 fps.
+   */
+  get elapsed(): number {
+    return this.animSeconds;
   }
 
   /**

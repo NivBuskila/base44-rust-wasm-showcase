@@ -264,7 +264,7 @@ export class App {
       debug: this.mode === 'debug' ? this.views.debug() : null,
       video: this.cameraAvailable ? this.camera.video : null,
       hands: stats[STAT.HANDS_PRESENT] > 0 ? this.perception.hands : null,
-      time: this.clock.frames / 60,
+      time: this.clock.elapsed,
       intensity,
       mode: this.mode,
       showCamera: this.showCamera && this.cameraAvailable,
