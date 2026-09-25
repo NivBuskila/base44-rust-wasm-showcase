@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { resolveModel, resolveWasmPath } from '../src/perception';
+import { resolveModel, resolveWasmPath } from '../src/perception/assets';
 
 /**
  * Unit coverage for the two asset resolvers, run in Node with an injected

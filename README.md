@@ -340,7 +340,7 @@ Two numbers that are *not* the engine, recorded so they are not misread:
 cargo test --workspace     # 237 tests: the simulation, on the host
 cd web && npm run typecheck
 cd web && npm run test:unit # 206 tests: the TypeScript that needs no browser (vitest)
-cd web && npm run test:e2e  # 35 tests: the browser, headless, no webcam (Playwright)
+cd web && npm run test:e2e  # 36 tests: the browser, headless, no webcam (Playwright)
 ```
 
 The unit suite covers what used to be reachable only through a canvas: the
@@ -362,8 +362,13 @@ no GPU**:
   needing a real hand in front of a real camera.
 - WebGL2 runs on SwiftShader.
 
-On a machine where Playwright's own browser download is unavailable, point it at
-an existing Chromium with `AETHER_CHROMIUM=/path/to/chromium`.
+The suite runs against the production build (`vite preview`), so build first
+(`npx vite build`, after the WASM engines). The perception suite also needs the
+vendored runtime (`npm run sync:mp`, part of `npm install`) and the models
+(`npm run fetch:models`). A full run takes about 15 minutes on a 4-core machine,
+most of it SwiftShader. On a machine where Playwright's own browser download is
+unavailable, point it at an existing Chromium with
+`AETHER_CHROMIUM=/path/to/chromium`.
 
 CI (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `cargo clippy
 -D warnings`, `cargo test --workspace`, the same clippy and tests again with
