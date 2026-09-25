@@ -374,7 +374,10 @@ CI (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `cargo clippy
 -D warnings`, `cargo test --workspace`, the same clippy and tests again with
 `--features parallel` (the threaded engine, including a check that the solver
 is bit-identical on any thread count), both WASM builds, the typecheck and the
-unit suite on every pull request.
+unit suite on every pull request. A third job then runs the Playwright suite
+against a production build of those same engines, in headless Chromium on
+SwiftShader with the real models; it takes about 7 minutes, and a push to
+`main` deploys only once it has passed too.
 
 ## Deploying
 
