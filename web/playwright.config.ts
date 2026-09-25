@@ -34,6 +34,10 @@ export default defineConfig({
   use: {
     baseURL: 'http://127.0.0.1:4173',
     headless: true,
+    // The full Chromium build in its new headless mode, not the separate
+    // headless shell Playwright defaults to: that is the browser the suite is
+    // verified on, and the one `npx playwright install --no-shell` fetches.
+    ...(CHROMIUM ? {} : { channel: 'chromium' }),
     viewport: { width: 1280, height: 720 },
     screenshot: 'only-on-failure',
     permissions: ['camera'],

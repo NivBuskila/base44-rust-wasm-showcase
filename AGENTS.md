@@ -15,7 +15,7 @@ Non-obvious rules only: what the README and the manifests do not say. Each bulle
 
 ## Verifying
 
-- Commands: `docker compose -f docker-compose.base44.yml exec -T wasm cargo test --workspace`, plus `... exec -T web npm run typecheck` and `... exec -T web npm run test:unit`. Test counts: Rust 237, vitest 206, Playwright 36. Playwright is not run in CI. It runs against `vite preview` of `web/dist`, so rebuild before a run. `npm run typecheck` also typechecks the specs (`tests/tsconfig.json`), which is the only thing that catches a spec importing a moved module. Update the README's Testing section when these counts change.
+- Commands: `docker compose -f docker-compose.base44.yml exec -T wasm cargo test --workspace`, plus `... exec -T web npm run typecheck` and `... exec -T web npm run test:unit`. Test counts: Rust 237, vitest 206, Playwright 36. CI's `e2e` job runs Playwright (~12 min) on the engines the `web` job built, passed as an artifact. It runs against `vite preview` of `web/dist`, so rebuild before a local run. Retries are 0 on purpose, so fix a failing spec rather than retrying it. `npm run typecheck` also typechecks the specs (`tests/tsconfig.json`), which is the only thing that catches a spec importing a moved module. Update the README's Testing section when these counts change.
 - vitest runs in the `node` environment by default. A suite that needs a DOM starts with `// @vitest-environment jsdom`, as four do today.
 - CI pins toolchain `1.90.0`, the same as `rust-toolchain.toml`; otherwise rustfmt/clippy go missing. CI also runs the threaded build, because the typecheck follows `engine-loader.ts`'s dynamic import into `web/src/wasm-mt`. Run fmt/clippy before pushing. The two `needless_range_loop` allows in `fluid/` are deliberate.
 - Browser readiness: `#boot.ready` = engine running and perception warmed (capped at 30 s). `.done` is invisible, so wait for attachment rather than visibility. `window.__aether.diagnostics()` reports frames, camera/perception status, `renderBackend` and `qualityTier`. Only a canvas screenshot proves rendering.
@@ -25,7 +25,7 @@ Non-obvious rules only: what the README and the manifests do not say. Each bulle
 ## Deploying (Cloudflare Pages)
 
 - `.github/workflows/deploy.yml` builds both WASM variants in Actions, because Cloudflare's image can't run the nightly build. It self-hosts the MediaPipe runtime and models, then deploys `web/dist`. The README lists the settings it needs.
-- Deploy runs on `workflow_run` of the workflow named `CI`, only after it succeeds on a push to `main`. Renaming `ci.yml`'s `name:` silently stops deploys, so rename both.
+- Deploy runs on `workflow_run` of the workflow named `CI`, only after it succeeds on a push to `main`, so it also waits on the Playwright job. Renaming `ci.yml`'s `name:` silently stops deploys, so rename both.
 - The `og:*`/`twitter:*` tags in `web/index.html` use `%VITE_SITE_URL%`, because crawlers need absolute URLs. `web/.env` holds the dev default, and the deploy workflow overrides it.
 - Production-only pitfall: the minifier turns an indirect `eval` into a direct one, which breaks the perception worker ("ModuleFactory not set"). `worker-import-scripts.ts` therefore calls `globalThis.eval`. After a build, check with `grep responseText web/dist/assets/perception.worker-*.js`.
 - `web/public/_headers` sends COOP/COEP. Pages caps files at 25 MB, and the largest dist file is about 12 MB.
