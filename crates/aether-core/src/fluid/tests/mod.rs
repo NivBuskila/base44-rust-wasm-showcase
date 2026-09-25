@@ -4,6 +4,7 @@ mod advection;
 mod incompressible;
 mod kernels;
 mod obstacles;
+mod reach;
 mod stability;
 mod support;
 #[cfg(feature = "parallel")]

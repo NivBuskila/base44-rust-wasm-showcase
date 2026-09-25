@@ -87,7 +87,7 @@ mod step;
 #[cfg(test)]
 mod tests;
 
-use advect::Advector;
+use advect::{Advector, Reach};
 use kernels::*;
 
 /// Dye channel count (RGB).
@@ -196,7 +196,7 @@ const BODY_CONTACT_FADE: f32 = 22.0;
 ///
 /// A single-cell rim is not enough: the pile-up is as wide as the impulse
 /// driving it (`spells::MIN_RADIUS` is 4 cells), so fading only the cells that
-/// literally touch the body leaves a bright edge sitting one cell out. Three
+/// literally touch the body leaves a bright edge sitting one cell out. Five
 /// cells each way covers the stalled band and still leaves the rest of the
 /// frame untouched.
 const BODY_CONTACT_BAND: usize = 5;
@@ -219,6 +219,9 @@ pub struct Fluid {
     solid: Grid,
     /// Trace maps and workspace shared by all five advected channels.
     advector: Advector,
+    /// Cells with a wall within reach, rebuilt per use: of any trace this step
+    /// for the advection, of the contact band for the dye fade.
+    reach: Reach,
     /// Whether any *interior* cell is solid, i.e. whether a body is in frame.
     has_obstacle: bool,
     /// Absolute maximum divergence measured at the end of the last step; the
@@ -242,6 +245,7 @@ impl Fluid {
             scratch: Grid::new(w, h),
             solid: Grid::new(w, h),
             advector: Advector::new(w * h),
+            reach: Reach::new(w, h),
             has_obstacle: false,
             last_divergence: 0.0,
         };

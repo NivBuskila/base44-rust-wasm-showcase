@@ -1,5 +1,6 @@
 //! Fixtures: inert parameters, dye mass/centroid and curl measures, the bar mask and the reference Jacobi sweeps the kernels are checked against.
 
+pub(super) use crate::fluid::advect::{corner_of, Stencil};
 pub(super) use crate::fluid::*;
 
 pub(super) use crate::config::Params;

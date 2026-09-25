@@ -337,7 +337,7 @@ Two numbers that are *not* the engine, recorded so they are not misread:
 ## Testing
 
 ```bash
-cargo test --workspace     # 231 tests: the simulation, on the host
+cargo test --workspace     # 237 tests: the simulation, on the host
 cd web && npm run typecheck
 cd web && npm run test:unit # 206 tests: the TypeScript that needs no browser (vitest)
 cd web && npm run test:e2e  # 35 tests: the browser, headless, no webcam (Playwright)
