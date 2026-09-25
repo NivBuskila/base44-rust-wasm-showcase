@@ -16,6 +16,7 @@ Non-obvious rules only: what the README and the manifests do not say. Each bulle
 ## Verifying
 
 - Commands: `docker compose -f docker-compose.base44.yml exec -T wasm cargo test --workspace`, plus `... exec -T web npm run typecheck` and `... exec -T web npm run test:unit`. Test counts: Rust 237, vitest 206, Playwright 35. Playwright is not run in CI or in the container. Update the README's Testing section when these counts change.
+- vitest runs in the `node` environment by default. A suite that needs a DOM starts with `// @vitest-environment jsdom`, as four do today.
 - CI pins toolchain `1.90.0`, the same as `rust-toolchain.toml`; otherwise rustfmt/clippy go missing. CI also runs the threaded build, because the typecheck follows `engine-loader.ts`'s dynamic import into `web/src/wasm-mt`. Run fmt/clippy before pushing. The two `needless_range_loop` allows in `fluid/` are deliberate.
 - Browser readiness: `#boot.ready` = engine running and perception warmed (capped at 30 s). `.done` is invisible, so wait for attachment rather than visibility. `window.__aether.diagnostics()` reports frames, camera/perception status, `renderBackend` and `qualityTier`. Only a canvas screenshot proves rendering.
 - Welcome flow state lives in `localStorage` (`aether.landing.seen`, `aether.tutorial.done`). Clear it to replay the welcome, or pass `?welcome`.
