@@ -15,7 +15,7 @@
 
 import type { AetherEngine } from './wasm/aether';
 import { Camera, CameraError } from './camera';
-import { coarsePointer, inAppBrowser } from './device-hints';
+import { coarsePointer, inAppBrowser, touchDevice } from './device-hints';
 import { DEFAULT_PRESSURE_ITERS, EnginePool } from './engine-pool';
 import { EngineViews } from './engine-views';
 import { FrameClock } from './frame-clock';
@@ -287,8 +287,7 @@ export class App {
 
   /** No camera: the pointer's blob is the luma plane. */
   private pumpStir(nowMs: number): void {
-    const dt = this.stir.pump(nowMs, this.views.luma);
-    if (dt > 0) this.engine.push_luma(dt);
+    this.stir.pump(nowMs, this.views.luma, (dt) => this.engine.push_luma(dt));
   }
 
   private buildFrame(stats: Float32Array): RenderFrame {
@@ -329,9 +328,14 @@ export class App {
    * mid-spell. Best effort; the lock is dropped whenever the page is hidden.
    */
   private async keepAwake(): Promise<void> {
-    if (!('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
+    // A desktop display should still sleep on its own schedule.
+    if (!touchDevice() || !('wakeLock' in navigator)) return;
+    if (document.visibilityState !== 'visible') return;
     try {
-      this.wakeLock = await navigator.wakeLock.request('screen');
+      const lock = await navigator.wakeLock.request('screen');
+      // `stop()` may have run while the request was pending.
+      if (!this.running) void lock.release().catch(() => {});
+      else this.wakeLock = lock;
     } catch {
       /* Denied or unsupported (some webviews): the screen may dim, nothing else. */
     }

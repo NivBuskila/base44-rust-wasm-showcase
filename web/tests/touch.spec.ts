@@ -67,8 +67,13 @@ test('without a camera a drag stirs the fluid the way it moved, then lets go', a
   // Still: nothing has been pushed, so there is no flow at all.
   expect((await flow(page)).motion).toBe(0);
 
-  const samples: { motion: number; dx: number }[] = [];
+  // A pointer that appears somewhere new is a new stroke, not a stroke from
+  // wherever it last was: that jump must not splash.
   await page.mouse.move(width * 0.15, y);
+  await page.waitForTimeout(300);
+  expect((await flow(page)).motion, 'the pointer appearing splashed the fluid').toBeLessThan(1e-4);
+
+  const samples: { motion: number; dx: number }[] = [];
   for (let i = 1; i <= 30; i++) {
     await page.mouse.move(width * (0.15 + (0.7 * i) / 30), y);
     await page.waitForTimeout(40);

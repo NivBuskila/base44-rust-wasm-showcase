@@ -51,12 +51,12 @@ export async function ensureCrossOriginIsolation(): Promise<void> {
   // localhost cannot register one.
   if (!window.isSecureContext) return;
 
-  // The worker exists to restore a header a proxy stripped. If the header
-  // arrived and the page is still not isolated, the browser cannot honour it
-  // (Safari has no `credentialless`), and a reload would only cost every
-  // iPhone visitor a second boot for the same single-threaded result.
-  // Only without a controller: a controlling worker adds the header itself.
-  if (!navigator.serviceWorker.controller && (await embedderPolicyArrived())) return;
+  // The worker exists to restore headers a proxy stripped. If both arrived and
+  // the page is still not isolated, the browser cannot honour them (Safari has
+  // no `credentialless`), and a reload would only cost every iPhone visitor a
+  // second boot for the same single-threaded result. Only without a
+  // controller: a controlling worker adds the headers itself.
+  if (!navigator.serviceWorker.controller && (await isolationHeadersArrived())) return;
 
   try {
     const existing = await navigator.serviceWorker.getRegistration('/');
@@ -94,16 +94,25 @@ export async function ensureCrossOriginIsolation(): Promise<void> {
   }
 }
 
+/** The probe runs before the engine loads, so it may not hold the boot for long. */
+const PROBE_MS = 1500;
+
 /**
- * Whether this document's origin already sends `Cross-Origin-Embedder-Policy`.
- * A HEAD of the current URL is the only way to read response headers from the
- * page; any failure answers "no", which keeps the Service Worker path.
+ * Whether this document's origin already sends both isolation headers. A HEAD
+ * of the current URL is the only way to read response headers from the page;
+ * any failure or a slow answer means "no", which keeps the Service Worker path.
  */
-async function embedderPolicyArrived(): Promise<boolean> {
+async function isolationHeadersArrived(): Promise<boolean> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), PROBE_MS);
   try {
-    const res = await fetch(location.href, { method: 'HEAD', cache: 'no-store' });
-    return res.headers.has('cross-origin-embedder-policy');
+    const res = await fetch(location.href, { method: 'HEAD', cache: 'no-store', signal: abort.signal });
+    return (
+      res.headers.has('cross-origin-embedder-policy') && res.headers.has('cross-origin-opener-policy')
+    );
   } catch {
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }

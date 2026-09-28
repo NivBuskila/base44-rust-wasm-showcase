@@ -106,7 +106,7 @@
 }
 
 /* A portrait phone: the welcome takes the full width. */
-@media (max-width: 420px) {
+@media (max-width: 480px) {
   /* The hairline moves out with the content, or the lede would cross it. */
   #boot::before {
     inset: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))

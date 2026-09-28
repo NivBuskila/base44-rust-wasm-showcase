@@ -346,8 +346,8 @@ Two numbers that are *not* the engine, recorded so they are not misread:
 cargo test --workspace  # 237 tests: the simulation, on the host
 cd web
 npm run typecheck
-npm run test:unit       # 220 tests: the TypeScript that needs no browser (vitest)
-npm run test:e2e        # 42 tests: the browser, headless, no webcam (Playwright)
+npm run test:unit       # 222 tests: the TypeScript that needs no browser (vitest)
+npm run test:e2e        # 43 tests: the browser, headless, no webcam (Playwright)
 ```
 
 The unit suite covers what used to be reachable only through a canvas: the
@@ -368,9 +368,10 @@ no GPU**:
   exercises the whole chain from landmarks to latched spells to pixels without
   needing a real hand in front of a real camera.
 - WebGL2 runs on SwiftShader.
-- The phone suite runs the app at four iPhone sizes, upright and sideways, with
-  a touch screen: the welcome must fit, no overlay may leave the screen or
-  cover another, and a drag must stir the fluid when the camera is denied.
+- The phone suite runs the app on five iPhone-sized touch screens, upright and
+  sideways, with and without Safari's bars: the welcome must fit and Enter
+  must not wrap, and no overlay may leave the screen or cover another. With the
+  camera denied, a drag must stir the fluid the way it moved and let go.
 
 The suite runs against the production build (`vite preview`), so build first
 (`npx vite build`, after the WASM engines). The perception suite also needs the

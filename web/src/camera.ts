@@ -40,9 +40,10 @@ const DEFAULTS: CameraOptions = {
 };
 
 /**
- * How long an opened stream may take to show its first frame. Only the time
- * after the permission prompt is answered counts: someone deciding whether to
- * allow the camera is not a stalled camera.
+ * How long an opened stream may take to show its first frame. Only visible
+ * time after the permission prompt is answered counts: someone deciding
+ * whether to allow the camera, or who switched away before the first frame,
+ * is not a stalled camera.
  */
 const FIRST_FRAME_MS = 10_000;
 
@@ -112,10 +113,12 @@ export class Camera {
     // forever: past the deadline the app carries on as if there were no camera,
     // and the light goes off.
     this.video.srcObject = this.stream;
-    const deadline = performance.now() + FIRST_FRAME_MS;
+    let playFailed: unknown = null;
+    this.video.play().catch((err: unknown) => {
+      playFailed = err ?? new Error('play() failed');
+    });
     try {
-      await Promise.race([this.video.play(), expire(deadline, 'play()')]);
-      await this.waitForFrame(deadline);
+      await this.waitForFrame(() => playFailed);
     } catch (err) {
       this.stop();
       throw new CameraError(`The camera opened but showed no picture (${String(err)}).`, false);
@@ -125,15 +128,22 @@ export class Camera {
   /**
    * Resolves once the video actually has pixels. `play()` resolving is not
    * enough — the first frames can still be 0x0, and drawing one of those
-   * throws in some browsers. A timer rather than rAF, so a hidden tab still
-   * reaches the deadline.
+   * throws in some browsers. A timer rather than rAF, so a `play()` that never
+   * settles still reaches the deadline; the deadline restarts while the page
+   * is hidden, since a hidden page may get no frames at all.
    */
-  private waitForFrame(deadline: number): Promise<void> {
+  private waitForFrame(failed: () => unknown): Promise<void> {
     if (this.hasFrame) return Promise.resolve();
+    let deadline = performance.now() + FIRST_FRAME_MS;
     return new Promise((resolve, reject) => {
       const check = () => {
+        const err = failed();
         if (this.hasFrame) resolve();
-        else if (performance.now() >= deadline) reject(new Error('no frame arrived'));
+        else if (err) reject(err);
+        else if (typeof document !== 'undefined' && document.hidden) {
+          deadline = performance.now() + FIRST_FRAME_MS;
+          setTimeout(check, 100);
+        } else if (performance.now() >= deadline) reject(new Error('no frame arrived'));
         else setTimeout(check, 30);
       };
       check();
@@ -184,11 +194,4 @@ export class Camera {
     this.stream = null;
     this.video.srcObject = null;
   }
-}
-
-/** Rejects once `deadline` has passed; never resolves. */
-function expire(deadline: number, what: string): Promise<never> {
-  return new Promise((_, reject) => {
-    setTimeout(() => reject(new Error(`${what} did not settle`)), Math.max(0, deadline - performance.now()));
-  });
 }

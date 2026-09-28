@@ -5,8 +5,9 @@ import { expect, test, type Page } from '@playwright/test';
  *
  * Emulated with a touch screen, so `(pointer: coarse)` matches and the phone
  * paths run: WebGL2 by default, a lower starting quality tier, the touch copy
- * and the phone layout. The four sizes are an iPhone with a Dynamic Island in
- * each orientation, full screen and with Safari's bars taking their share.
+ * and the phone layout. The sizes are an iPhone with a Dynamic Island in each
+ * orientation, full screen and with Safari's bars taking their share, plus the
+ * widest iPhone upright, where the narrow-screen welcome rules must still hold.
  * Screenshots land in test-results/ for a human pass; the assertions are about
  * what must never happen on a small screen: the way in cut off below the fold,
  * a label wrapping, the page scrolling sideways, one overlay painted over
@@ -18,6 +19,7 @@ const PHONES = [
   { name: 'portrait-safari', width: 393, height: 698 },
   { name: 'landscape', width: 852, height: 393 },
   { name: 'landscape-safari', width: 852, height: 340 },
+  { name: 'portrait-max', width: 440, height: 956 },
 ] as const;
 
 interface Box {
@@ -78,19 +80,24 @@ for (const phone of PHONES) {
       await waitForEngine(page);
       const enter = page.locator('#boot .landing-enter');
       await expect(enter).toBeEnabled({ timeout: 60_000 });
-      // Let the label's scramble land before measuring the button.
-      await page.waitForTimeout(900);
+      // The armed button must end on its call to action, and it is measured
+      // with that label, the widest it gets.
+      await expect(page.locator('.landing-enter-label')).toHaveText('ENTER THE FIELD');
 
       const layout = await page.evaluate(() => {
         const boot = document.getElementById('boot')!;
         const label = document.querySelector<HTMLElement>('.landing-enter-label')!;
-        const lineHeight = parseFloat(getComputedStyle(label).lineHeight) || label.getBoundingClientRect().height;
+        // Line boxes, counted by their tops: `line-height` is `normal` here,
+        // so a height ratio would read one line whatever happened.
+        const range = document.createRange();
+        range.selectNodeContents(label);
+        const tops = new Set(Array.from(range.getClientRects(), (r) => Math.round(r.top)));
         const rotate = document.querySelector<HTMLElement>('.landing-rotate');
         return {
           coarse: matchMedia('(pointer: coarse)').matches,
           portrait: matchMedia('(orientation: portrait)').matches,
           bootOverflow: boot.scrollHeight - boot.clientHeight,
-          labelLines: label.getBoundingClientRect().height / lineHeight,
+          labelLines: tops.size,
           rotateShown: !!rotate && getComputedStyle(rotate).display !== 'none',
           note: document.querySelector('.landing-note')?.textContent ?? '',
         };
@@ -100,7 +107,7 @@ for (const phone of PHONES) {
       const box = (await enter.boundingBox())!;
       expect(inside(box, phone.width, phone.height), `Enter is off screen: ${JSON.stringify(box)}`).toBe(true);
       expect(layout.bootOverflow, 'the welcome scrolls').toBeLessThanOrEqual(1);
-      expect(layout.labelLines, 'ENTER THE FIELD wraps').toBeLessThan(1.5);
+      expect(layout.labelLines, 'ENTER THE FIELD wraps').toBe(1);
       expect(layout.rotateShown, 'the sideways hint belongs to portrait only').toBe(layout.portrait);
       expect(layout.note).toContain('drag to stir');
       await page.screenshot({ path: `test-results/mobile-${phone.name}-welcome.png` });

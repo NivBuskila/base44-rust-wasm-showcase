@@ -282,6 +282,8 @@ export class Hud {
   }
 
   private setCamera(on: boolean): void {
+    // No camera: the row stays "n/a" whatever the key says.
+    if (this.camBtn.disabled) return;
     this.cameraOn = on;
     this.camBtn.setAttribute("aria-pressed", on ? "true" : "false");
     const label = on ? "on" : "off";

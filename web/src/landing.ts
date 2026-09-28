@@ -78,8 +78,18 @@ function remember(): void {
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-/** Decodes `text` into `node` through a short glyph scramble. */
+/** The scramble running on each node; a newer one replaces it. */
+const scrambling = new WeakMap<HTMLElement, number>();
+
+/**
+ * Decodes `text` into `node` through a short glyph scramble. A second scramble
+ * on the same node cancels the first: on a slow main thread two overlapping
+ * intervals can land in either order, which left the armed button reading
+ * CALIBRATING.
+ */
 function scramble(node: HTMLElement, text: string, ms = 520): void {
+  window.clearInterval(scrambling.get(node));
+  scrambling.delete(node);
   if (reducedMotion()) {
     node.textContent = text;
     return;
@@ -95,8 +105,12 @@ function scramble(node: HTMLElement, text: string, ms = 520): void {
       out += text[i] === ' ' ? ' ' : glyphs[(Math.random() * glyphs.length) | 0];
     }
     node.textContent = out;
-    if (p === 1) window.clearInterval(timer);
+    if (p === 1) {
+      window.clearInterval(timer);
+      scrambling.delete(node);
+    }
   }, 30);
+  scrambling.set(node, timer);
 }
 
 /**

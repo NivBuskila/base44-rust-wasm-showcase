@@ -10,8 +10,12 @@
  *
  * The engine applies the last computed flow on every step, not only on the
  * step after a push, so after the pointer stops a few identical planes are
- * pushed to bring the flow back to zero. `push_luma` does not count as
- * perception, so the ambient drive keeps running underneath.
+ * pushed to bring the flow back to zero. A finger lifted and put down
+ * elsewhere (or a mouse back from the panel) would read as the blob vanishing
+ * in one place and appearing in another, a splash at both; that plane is
+ * pushed twice, so the second, identical one zeroes the flow before a step
+ * applies it. `push_luma` does not count as perception, so the ambient drive
+ * keeps running underneath.
  */
 
 import { FLOW_H, FLOW_W } from './constants';
@@ -61,6 +65,8 @@ export class PointerStir {
   private settle = 0;
   /** Nothing is pushed until the pointer has been seen once. */
   private seen = false;
+  /** The next plane puts the blob somewhere new rather than moving it. */
+  private jumped = false;
   private lastPushMs = 0;
 
   /** Starts listening. The stage covers the viewport, so window coordinates are stage coordinates. */
@@ -82,6 +88,8 @@ export class PointerStir {
     const w = window.innerWidth;
     const h = window.innerHeight;
     if (!w || !h) return;
+    // A new touch, or a pointer that had gone still, starts a new stroke.
+    if (event.type === 'pointerdown' || (!this.moved && this.settle === 0)) this.jumped = true;
     this.u = Math.min(1, Math.max(0, event.clientX / w));
     this.v = Math.min(1, Math.max(0, event.clientY / h));
     this.moved = true;
@@ -89,10 +97,11 @@ export class PointerStir {
   };
 
   /**
-   * Writes the next plane into `luma` when one is due and returns the time
-   * since the previous one in seconds, for `push_luma`; 0 when nothing is due.
+   * Writes the next plane into `luma` when one is due and hands `push` the
+   * time since the previous one, in seconds: once for a move, twice for a
+   * jump. Returns how many pushes it made.
    */
-  pump(nowMs: number, luma: Uint8Array): number {
+  pump(nowMs: number, luma: Uint8Array, push: (dt: number) => void): number {
     if (!this.enabled || !this.seen) return 0;
     if (!this.moved && this.settle === 0) return 0;
     if (this.lastPushMs !== 0 && nowMs - this.lastPushMs < PUSH_MS) return 0;
@@ -107,6 +116,10 @@ export class PointerStir {
     // A long pause since the last push is not motion: report one camera frame.
     const dt = this.lastPushMs === 0 || nowMs - this.lastPushMs > 250 ? 1 / 30 : (nowMs - this.lastPushMs) / 1000;
     this.lastPushMs = nowMs;
-    return dt;
+    push(dt);
+    if (!this.jumped) return 1;
+    this.jumped = false;
+    push(dt);
+    return 2;
   }
 }
