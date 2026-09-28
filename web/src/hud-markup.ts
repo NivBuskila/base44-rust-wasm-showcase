@@ -125,7 +125,7 @@ export function markup(): string {
     <header class="hud-head">
       <div class="hud-mark">
         <b>AETHER</b>
-        <span>fluid reality engine</span>
+        <span>fluid simulation</span>
       </div>
       <div class="hud-fps">
         <b data-fps data-tone="ok">—</b><span>fps</span>

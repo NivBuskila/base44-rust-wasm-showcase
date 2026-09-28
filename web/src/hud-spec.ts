@@ -12,8 +12,8 @@ import type { ViewMode } from './types';
 export const FRAME_BUDGET_MS = 1000 / 60;
 
 /**
- * Inference is allowed twice the frame budget: `main.ts` throttles it to 30 Hz,
- * so it competes with every other frame rather than every frame.
+ * Inference is allowed twice the frame budget: `perception-pump.ts` paces it at
+ * up to 30 Hz, so it competes with every other frame rather than every frame.
  */
 const INFERENCE_BUDGET_MS = FRAME_BUDGET_MS * 2;
 
@@ -156,7 +156,7 @@ export interface GestureSpec {
 
 /**
  * Abstract effect glyphs rather than little hands: the row already names the
- * hand shape, and a 18 px pictogram of a fist is unreadable while "everything
+ * hand shape, and an 18 px pictogram of a fist is unreadable while "everything
  * rushes inward" is not.
  */
 const ICONS: Record<string, string> = {

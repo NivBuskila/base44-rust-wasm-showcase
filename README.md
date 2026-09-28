@@ -8,7 +8,7 @@
 
 [![Aether](web/public/og.png)](https://aether-physics.xyz)
 
-A real-time fluid simulation in the browser, driven by hand tracking through
+A real-time fluid simulation that runs entirely in the browser, steered through
 your webcam.
 
 An incompressible Navier–Stokes solver and a particle system of 120,000 (up to
@@ -22,8 +22,9 @@ into combos and cast with both hands for duets.
 Everything runs locally in the browser. No server, no upload, no video leaving
 the machine.
 
-**Live demo: [aether-physics.xyz](https://aether-physics.xyz)** — open it in its own tab in a current Chrome, Edge
-or Firefox and allow camera access.
+**Live demo: [aether-physics.xyz](https://aether-physics.xyz)** — open it in its own tab in a current Chrome, Edge,
+Firefox or Safari and allow camera access. On a phone it works too; hold it
+sideways.
 
 ## Why it is built this way
 
@@ -33,10 +34,10 @@ fighting for the same frame.
 
 **The physics is in Rust, the perception is in the browser.** Neural inference
 is already a solved, GPU-accelerated problem in the browser via MediaPipe; the
-fluid solver is not, and it is the part that benefits from a real language with
-real control over memory layout. So `aether-core` is a dependency-free Rust
-crate holding the entire simulation, and the browser layer does capture,
-inference and rendering.
+fluid solver is not, and it is the part that benefits from a systems language
+with control over memory layout. So `aether-core` is a Rust crate with no
+dependencies by default (rayon only behind the `parallel` feature) holding the
+entire simulation, and the browser layer does capture, inference and rendering.
 
 **Two models, not four.** `GestureRecognizer` returns hand landmarks *and* a
 canned gesture label from one inference. `PoseLandmarker` with
@@ -48,10 +49,11 @@ pose, segmentation — and spend the whole frame budget on inference.
 with `ImageBitmap`s, so a slow inference costs latency, never a dropped frame.
 An inline fallback keeps the app working where the worker cannot start.
 
-**Nothing is serialised per frame.** Camera luma goes *into* a Rust-owned buffer
-and the dye texture and particle buffer come *out* of Rust-owned buffers, all as
-typed-array views over WASM linear memory. The only per-frame copies are the two
-the hardware forces: the camera readback and the texture upload.
+**No bulk data is serialised per frame.** Camera luma goes *into* a Rust-owned
+buffer and the dye texture and particle buffer come *out* of Rust-owned buffers,
+all as typed-array views over WASM linear memory. Past the camera readback and
+the texture upload, the per-frame copies are small: the luma plane into WASM,
+the packed landmarks, and a handful of scalars and spell names for the HUD.
 
 **The engine does not depend on the models.** A dense multi-scale Horn–Schunck
 optical flow solver runs over the camera's luma plane in Rust, so the fluid
@@ -68,7 +70,8 @@ backend. Phones and tablets stay on WebGL2 by default. `?gpu=off` / `?gpu=on`
 override the gate.
 
 **The simulation is testable on the host.** `aether-core` compiles for x86 and
-wasm32 from the same source with no `cfg` divergence in the algorithms, so the
+wasm32 from the same source with no `cfg` divergence in the algorithms (the
+SIMD128 kernels are cross-checked against their scalar twins), so the
 fluid solver's incompressibility, the optical flow's sign and scale, and the
 gesture state machine's hysteresis are all asserted by `cargo test` on the
 machine that built it — not eyeballed through a canvas. `visual.rs` even scores
@@ -118,7 +121,7 @@ What you should see:
   engine is running. Which renderer won is in
   `window.__aether.diagnostics().renderBackend` (`webgl2` or `webgpu`).
 - The moment a hand is seen, the gesture tutorial opens by itself and walks you
-  through each spell. Reopen it any time with `T` or the panel's book button;
+  through each spell. Reopen it any time with `T` or the panel's tutorial button;
   `?` shows the key reference and `H` hides the panel.
 
 Without a camera (or with permission denied) the app still runs: the fluid
@@ -161,10 +164,11 @@ otherwise, so nothing breaks in an embedded frame or an old browser. The HUD
 shows the tier and thread count either way.
 
 The threaded build needs the nightly toolchain, because `std` itself has to be
-recompiled with atomics. The script installs it on demand
-(`rustup toolchain install nightly -c rust-src -t wasm32-unknown-unknown`) and
+recompiled with atomics. The script installs a pinned nightly on demand
+(`nightly-2026-09-19` with `rust-src`, overridable with `AETHER_NIGHTLY`) and
 treats a failed threaded build as a warning, so a machine without it still gets
-a working app.
+a working app. Safari does not support the `credentialless` embedder policy the
+site uses, so there it runs the baseline engine.
 
 Isolation is the part that usually bites. `SharedArrayBuffer` requires both
 `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy`,
@@ -246,7 +250,7 @@ web/src/                          TypeScript, no framework
 ├── constants.ts                  mirror of the Rust layout, asserted at boot
 └── styles/                       CSS, one file per concern
 
-crates/aether-core/               zero dependencies, native + wasm32
+crates/aether-core/               no dependencies by default, native + wasm32
 ├── field/                        Grid / VecField, bilinear sampling
 ├── fluid/                        Stable Fluids: advect, diffuse, project, SIMD kernels
 ├── flow/                         multi-scale Horn–Schunck optical flow
@@ -268,8 +272,8 @@ Three clocks, deliberately decoupled — conflating them is what makes this clas
 of app stutter:
 
 - **Render, ~60 Hz.** `engine.step(dt)` then draw. Never waits on anything.
-- **Camera, ~30 Hz.** Luma readback for optical flow, and only when the video
-  element has actually advanced.
+- **Camera, 30–60 Hz, whatever the webcam delivers.** Luma readback for optical
+  flow, and only when the video element has actually advanced.
 - **Inference, adaptive.** Runs in the worker, one frame in flight at a time,
   so its cost never lands in a render frame. Where the worker is unavailable
   the inline fallback is synchronous, and its cadence is then derived from
@@ -291,7 +295,7 @@ in a pipeline like this:
   through `math::decay(rate, dt)`, so a 30 fps and a 144 fps session look
   identical.
 - Normalised `[0, 1]` coordinates appear **only** at the engine boundary, where
-  landmarks come in. Hand-relative distances (duets, bolts) are in hand widths.
+  landmarks come in. Hand-relative distances (duets) are in hand widths.
 - The user sees a **mirrored** camera view, so landmarks and the luma plane are
   mirrored to match. Otherwise moving your hand right would push the fluid left.
 
@@ -347,6 +351,8 @@ cargo test --workspace  # 237 tests: the simulation, on the host
 cd web
 npm run typecheck
 npm run test:unit       # 222 tests: the TypeScript that needs no browser (vitest)
+npx vite build          # the browser suite runs against the production build
+npx playwright install --no-shell chromium
 npm run test:e2e        # 43 tests: the browser, headless, no webcam (Playwright)
 ```
 
