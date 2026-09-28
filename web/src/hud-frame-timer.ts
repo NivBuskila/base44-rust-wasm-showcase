@@ -1,9 +1,13 @@
 /**
  * The panel's frame-time reading, without the DOM.
  *
- * `Hud.update` runs exactly once per rendered frame, so the interval between
- * calls *is* the frame period — and unlike `stats.fps` it is not floored by the
- * loop's own 50 ms dt clamp, which reports a hard stall as a tidy 20 fps.
+ * `Hud.update` runs exactly once per rendered frame and is handed that frame's
+ * `requestAnimationFrame` timestamp, so the interval between samples *is* the
+ * frame period — and unlike `stats.fps` it is not floored by the loop's own
+ * 50 ms dt clamp, which reports a hard stall as a tidy 20 fps. It must be the
+ * frame's timestamp, not `performance.now()` at the call: the call comes after
+ * the engine step, so its time drifts with the step's cost, and a peak-hold
+ * over that jitter read a steady 60 Hz loop as the high 40s.
  *
  * Two rules live here, both load-bearing for a readout that must not lie:
  * - **peak-hold, not the sample that landed on the paint tick**: a 40 ms hitch

@@ -123,7 +123,7 @@ export class Hud {
    * through {@link finite} and clamped.
    */
   update(s: HudStats): void {
-    const now = performance.now();
+    const now = s.frameTimeMs ?? performance.now();
     this.telemetry.sample(s, now);
 
     if (this.staged && this.hintStartMs === 0) this.hintStartMs = now;

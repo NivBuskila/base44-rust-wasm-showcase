@@ -51,6 +51,21 @@ describe('FrameTimer', () => {
     expect(t.read(60)).toBeCloseTo(16, 5);
   });
 
+  it('reads a steady 60 Hz display as 60 when fed frame timestamps, however long each frame\'s work', () => {
+    const vsync = 1000 / 60;
+    // Work inside each frame varies from 4 to 12 ms, as the engine step does.
+    const work = [4, 12, 5, 11, 4, 12];
+    const byFrame = new FrameTimer();
+    const byCall = new FrameTimer();
+    work.forEach((ms, i) => {
+      byFrame.sample(i * vsync);
+      byCall.sample(i * vsync + ms);
+    });
+    expect(1000 / byFrame.read(60)).toBeCloseTo(60, 5);
+    // Timing the calls instead would report the jitter as a slow frame.
+    expect(1000 / byCall.read(60)).toBeLessThan(45);
+  });
+
   it('drops a backgrounded gap', () => {
     const t = new FrameTimer();
     t.sample(0);

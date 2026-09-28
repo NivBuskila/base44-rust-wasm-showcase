@@ -172,6 +172,12 @@ export interface HudStats {
   /** Packed hand buffer, for the tutorial's live pose mirror; null when no hand. */
   hands?: Float32Array | null;
   perception: PerceptionStatus;
+  /**
+   * The frame's `requestAnimationFrame` timestamp. Frame periods are measured
+   * between these, not between `update` calls: the calls come after the engine
+   * step, so they drift with its cost while the display itself does not.
+   */
+  frameTimeMs?: number;
 }
 
 /** Controls the HUD exposes back to the app. */

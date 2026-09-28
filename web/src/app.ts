@@ -113,7 +113,12 @@ export class App {
       engine,
       frame: () =>
         this.cameraAvailable && this.camera.hasFrame ? this.camera.video : null,
-      mask: () => this.views.mask,
+      // `push_hands`/`push_pose` copy their arrays into WASM just before the
+      // mask is written, and that copy can grow memory.
+      mask: () => {
+        this.views.refresh();
+        return this.views.mask;
+      },
     });
     this.hud = new Hud(document.getElementById('hud')!, {
       onParam: (key, value) => {
@@ -249,6 +254,7 @@ export class App {
         duetProgress: this.engine.duet_progress(),
         hands: stats[STAT.HANDS_PRESENT] > 0 ? this.perception.hands : null,
         perception: this.perception.status,
+        frameTimeMs: nowMs,
       }),
     );
     t.end();
@@ -277,6 +283,8 @@ export class App {
 
     const luma = this.camera.readLuma(true);
     if (!luma) return;
+    // Perception ran earlier in this frame and may have grown memory.
+    this.views.refresh();
     this.views.luma.set(luma);
 
     const dt = this.lastCameraMs === 0 ? 1 / 30 : (nowMs - this.lastCameraMs) / 1000;
@@ -287,6 +295,7 @@ export class App {
 
   /** No camera: the pointer's blob is the luma plane. */
   private pumpStir(nowMs: number): void {
+    this.views.refresh();
     this.stir.pump(nowMs, this.views.luma, (dt) => this.engine.push_luma(dt));
   }
 
