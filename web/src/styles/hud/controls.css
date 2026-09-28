@@ -110,13 +110,17 @@
 .p-row {
   position: relative;
   display: grid;
-  grid-template-columns: 62px 1fr 48px;
+  /* Wide enough for the longest label plus its (?) on one line. */
+  grid-template-columns: 96px minmax(0, 1fr) 44px;
   align-items: center;
   gap: 8px;
   margin-top: 7px;
 }
 
 .p-key {
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
   font-size: 9.5px;
   letter-spacing: 0.04em;
   color: var(--dim);
