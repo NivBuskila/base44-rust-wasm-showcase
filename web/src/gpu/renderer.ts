@@ -28,6 +28,7 @@
  * worth.
  */
 
+import { viewFit } from "../render/look";
 import type { ModeStyle } from "../render/styles";
 import { STYLES } from "../render/styles";
 import type {
@@ -227,6 +228,8 @@ export class GpuRenderer implements SceneRenderer {
 
     const style = STYLES[frame.mode];
     const drawn = frame.sim ? this.stepParticles(encoder, frame.sim, style) : 0;
+    const video = frame.video ?? this.video;
+    const fit = viewFit(this.canvas.width, this.canvas.height, video);
     this.scenePass.record(
       encoder,
       this.pass,
@@ -235,9 +238,8 @@ export class GpuRenderer implements SceneRenderer {
       style,
       intensity,
       time,
-      this.canvas.width,
-      this.canvas.height,
-      this.video,
+      video,
+      fit,
     );
     if (drawn > 0)
       this.particles.record(
@@ -248,6 +250,7 @@ export class GpuRenderer implements SceneRenderer {
         intensity,
         frame.sim!,
         this.dpr * this.sceneScale * this.viewScale,
+        fit,
       );
     if (style.overlay > 0 && frame.hands)
       this.overlay.record(
@@ -256,6 +259,7 @@ export class GpuRenderer implements SceneRenderer {
         frame.hands,
         style.overlay,
         this.dpr * this.sceneScale,
+        fit,
       );
     this.chain.recordBloom(encoder, this.pass, style);
     this.drawComposite(encoder, frame, style, intensity);

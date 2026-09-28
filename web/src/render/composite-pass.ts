@@ -22,7 +22,7 @@ import type { ModeStyle } from "./styles";
 /**
  * Streams this frame's pool and draws it additively into the scene target.
  * `pixelScale` is DPR × scene scale × viewport scale, the same product the
- * WebGPU draw uses.
+ * WebGPU draw uses; `fit` is the frame's `viewFit`.
  */
 export function drawParticlePass(
   res: Resources,
@@ -30,6 +30,7 @@ export function drawParticlePass(
   style: ModeStyle,
   intensity: number,
   pixelScale: number,
+  fit: readonly [number, number],
 ): void {
   if (style.particles <= 0) return;
   const count = ParticleStream.countFor(frame.particles, frame.particleCount);
@@ -41,6 +42,7 @@ export function drawParticlePass(
   p.f1("u_gain", particleGain(style, count));
   p.f1("u_size", particleSize(pixelScale, count));
   p.f1("u_intensity", intensity);
+  p.f2("u_viewFit", fit[0], fit[1]);
 
   res.scene.bind();
   res.particles.draw(count);

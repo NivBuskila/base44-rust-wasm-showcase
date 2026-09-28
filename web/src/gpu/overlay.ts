@@ -26,7 +26,7 @@ export class HandOverlay {
   private readonly vertices: GPUBuffer;
   private readonly lineBind: GPUBindGroup;
   private readonly pointBind: GPUBindGroup;
-  private readonly scratch = new Float32Array(8);
+  private readonly scratch = new Float32Array(OVERLAY_UNIFORM_FLOATS);
   private readonly verts = new Float32Array(OVERLAY_CAPACITY * OVERLAY_STRIDE);
 
   constructor(
@@ -59,7 +59,8 @@ export class HandOverlay {
   /**
    * Records the bones and joints over `target`. `strength` is the style's
    * overlay weight and `pointScale` folds dpr and the scene scale into the
-   * joint radius, so the dots keep their on-screen size.
+   * joint radius, so the dots keep their on-screen size. `fit` is the frame's
+   * `viewFit` (`render/look.ts`).
    */
   record(
     encoder: GPUCommandEncoder,
@@ -67,6 +68,7 @@ export class HandOverlay {
     hands: Float32Array,
     strength: number,
     pointScale: number,
+    fit: readonly [number, number],
   ): void {
     const mesh = buildHandMesh(hands, this.verts);
     const total = mesh.lineVertices + mesh.pointVertices;
@@ -81,6 +83,8 @@ export class HandOverlay {
     u[4] = 0.55;
     u[5] = 0.88;
     u[6] = 1.0;
+    u[8] = fit[0];
+    u[9] = fit[1];
 
     const begin = (label: string): GPURenderPassEncoder =>
       encoder.beginRenderPass({

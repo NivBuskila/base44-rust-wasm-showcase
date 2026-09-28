@@ -60,6 +60,7 @@ export class ParticlePass {
     intensity: number,
     sim: GpuSimFrame,
     pixelScale: number,
+    fit: readonly [number, number],
   ): void {
     const d = this.scratch;
     d[0] = particleSize(pixelScale, count);
@@ -70,6 +71,8 @@ export class ParticlePass {
     d[5] = scene.height;
     d[6] = Math.max(1, sim.gridW - 1);
     d[7] = Math.max(1, sim.gridH - 1);
+    d[8] = fit[0];
+    d[9] = fit[1];
     this.device.queue.writeBuffer(this.uniform, 0, d);
 
     const p = encoder.beginRenderPass({

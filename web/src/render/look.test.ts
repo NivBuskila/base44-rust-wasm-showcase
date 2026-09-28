@@ -9,6 +9,7 @@ import {
   particleSize,
   rushFocus,
   usesCamera,
+  viewFit,
 } from "./look";
 import { STYLES } from "./styles";
 
@@ -54,6 +55,44 @@ describe("cameraFit", () => {
 
   it("does not scale at all without a stream aspect", () => {
     expect(cameraFit(8 / 3, 0)).toEqual([1, 1]);
+  });
+});
+
+describe("viewFit", () => {
+  const stream = (videoWidth: number, videoHeight: number) => ({
+    videoWidth,
+    videoHeight,
+  });
+
+  it("crops the sides of a 16:9 camera on a 16:10 laptop in full screen", () => {
+    // A 14" MacBook Pro's full-screen drawing buffer.
+    const [x, y] = viewFit(3024, 1964, stream(1280, 720));
+    expect(x).toBeCloseTo(3024 / 1964 / (16 / 9), 6);
+    expect(x).toBeLessThan(0.9);
+    expect(y).toBe(1);
+  });
+
+  it("crops the top and bottom of a 4:3 webcam on a 16:9 canvas", () => {
+    const [x, y] = viewFit(1280, 720, stream(640, 480));
+    expect(x).toBe(1);
+    expect(y).toBeCloseTo(0.75, 6);
+  });
+
+  it("leaves a canvas the camera's shape alone", () => {
+    const [x, y] = viewFit(1920, 1080, stream(1280, 720));
+    expect(x).toBeCloseTo(1, 6);
+    expect(y).toBe(1);
+  });
+
+  it("follows a phone's portrait stream on a portrait screen", () => {
+    const [x, y] = viewFit(393 * 3, 852 * 3, stream(720, 1280));
+    expect(x).toBeCloseTo(393 / 852 / (720 / 1280), 6);
+    expect(y).toBe(1);
+  });
+
+  it("fills the canvas when there is no stream, or no frame size yet", () => {
+    expect(viewFit(3024, 1964, null)).toEqual([1, 1]);
+    expect(viewFit(3024, 1964, stream(0, 0))).toEqual([1, 1]);
   });
 });
 

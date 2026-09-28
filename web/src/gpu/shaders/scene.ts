@@ -4,7 +4,7 @@
  *
  * Uniform layout (`SceneUniforms`, six vec4s):
  *   0 dye:     dyeSize.xy, dyeTexel.xy
- *   1 cam:     camScale.xy, videoTexel.xy
+ *   1 cam:     viewFit.xy, videoTexel.xy
  *   2 camTint: rgb, camToe
  *   3 camEdge: rgb, camRaw
  *   4 amounts: dyeAmount, bgAmount, hasVideo, intensity
@@ -141,7 +141,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
   }
 
   if (dyeAmount > 0.0) {
-    radiance += dyeRadiance(uv, in.pos.xy) * dyeAmount;
+    // The dye is in the camera frame's space, so it takes the camera's crop
+    // (viewFit in render/look.ts); the background above is screen decoration.
+    radiance += dyeRadiance((uv - 0.5) * U.cam.xy + 0.5, in.pos.xy) * dyeAmount;
   }
 
   return vec4<f32>(radiance, 1.0);

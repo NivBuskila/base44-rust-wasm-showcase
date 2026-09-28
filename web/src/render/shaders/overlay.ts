@@ -15,11 +15,15 @@ layout(location = 1) in float a_glow;
 
 uniform float u_alpha;
 uniform float u_size;
+uniform vec2 u_viewFit;     // the camera crop the canvas shows; see viewFit in look.ts
 
 out float v_glow;
 
 void main() {
-  gl_Position = vec4(vec2(a_pos.x, 1.0 - a_pos.y) * 2.0 - 1.0, 0.0, 1.0);
+  // Landmarks are normalised to the whole camera frame, so they take the
+  // feed's crop: that is what keeps the skeleton on the hand the screen shows.
+  vec2 view = (a_pos - 0.5) / u_viewFit + 0.5;
+  gl_Position = vec4(vec2(view.x, 1.0 - view.y) * 2.0 - 1.0, 0.0, 1.0);
   gl_PointSize = max(1.0, u_size);
   v_glow = a_glow * u_alpha;
 }`;

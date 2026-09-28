@@ -11,7 +11,7 @@ export const PARTICLE_FLOATS = 8;
 export const PARTICLE_BYTES = PARTICLE_FLOATS * 4;
 export const STEP_WORKGROUP = 256;
 export const SIM_UNIFORM_FLOATS = 24;
-export const DRAW_UNIFORM_FLOATS = 8;
+export const DRAW_UNIFORM_FLOATS = 12;
 
 /**
  * The op kinds as WGSL constants, generated from `PARTICLE_OP` so the shader

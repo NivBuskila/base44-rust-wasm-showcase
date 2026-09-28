@@ -19,9 +19,9 @@ export interface SceneUniformInput {
   /** Fluid grid size, and its reciprocal, as the shader samples the dye. */
   fluidW: number;
   fluidH: number;
-  /** Camera uv scales; see `render/look.ts`'s `cameraFit`. */
-  camScaleX: number;
-  camScaleY: number;
+  /** The crop the camera and the dye share; see `render/look.ts`'s `viewFit`. */
+  viewFitX: number;
+  viewFitY: number;
   /** Allocated camera texture size, zero when there is none yet. */
   videoTexW: number;
   videoTexH: number;
@@ -39,8 +39,8 @@ export function packSceneUniform(f: Float32Array, i: SceneUniformInput): void {
   f[1] = i.fluidH;
   f[2] = 1 / i.fluidW;
   f[3] = 1 / i.fluidH;
-  f[4] = i.camScaleX;
-  f[5] = i.camScaleY;
+  f[4] = i.viewFitX;
+  f[5] = i.viewFitY;
   f[6] = 1 / Math.max(1, i.videoTexW);
   f[7] = 1 / Math.max(1, i.videoTexH);
   f[8] = s.camTint[0];

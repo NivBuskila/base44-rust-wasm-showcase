@@ -11,8 +11,8 @@ const SCENE = {
   gridH: 1,
   invGridW: 2,
   invGridH: 3,
-  camScaleX: 4,
-  camScaleY: 5,
+  viewFitX: 4,
+  viewFitY: 5,
   invTexW: 6,
   invTexH: 7,
   dye: 16,
@@ -44,8 +44,8 @@ const scene = (over: Record<string, unknown> = {}): Float32Array => {
     style,
     fluidW: 200,
     fluidH: 120,
-    camScaleX: 1,
-    camScaleY: 0.5,
+    viewFitX: 1,
+    viewFitY: 0.5,
     videoTexW: 640,
     videoTexH: 480,
     hasVideo: true,
@@ -72,8 +72,8 @@ describe("packSceneUniform", () => {
     expect(f[SCENE.gridH]).toBe(120);
     expect(f[SCENE.invGridW]).toBeCloseTo(1 / 200, 8);
     expect(f[SCENE.invGridH]).toBeCloseTo(1 / 120, 8);
-    expect(f[SCENE.camScaleX]).toBe(1);
-    expect(f[SCENE.camScaleY]).toBe(0.5);
+    expect(f[SCENE.viewFitX]).toBe(1);
+    expect(f[SCENE.viewFitY]).toBe(0.5);
     expect(f[SCENE.invTexW]).toBeCloseTo(1 / 640, 8);
     expect(f[SCENE.invTexH]).toBeCloseTo(1 / 480, 8);
     expect(f[SCENE.dye]).toBeCloseTo(style.dye, 6);
@@ -96,8 +96,8 @@ describe("packSceneUniform", () => {
         style,
         fluidW: 1,
         fluidH: 1,
-        camScaleX: 1,
-        camScaleY: 1,
+        viewFitX: 1,
+        viewFitY: 1,
         videoTexW: 1,
         videoTexH: 1,
         hasVideo: false,
