@@ -11,8 +11,9 @@
  *
  * Two rules the HUD depends on:
  * - `sample` runs every frame, `paintHeader`/`paintBody` at 10 Hz — the meters
- *   and the frame timer are peak-hold, so the worst frame in the window is what
- *   gets shown, never the sample that happened to land on the tick;
+ *   and the sparkline are peak-hold, so the worst frame in the window is what
+ *   gets shown, never the sample that happened to land on the tick (the fps
+ *   digits are the delivered rate instead; see `hud-frame-timer.ts`);
  * - while the panel is collapsed or hidden the body is not painted but the
  *   peaks are still `drain`ed, so expanding it never shows a spike from
  *   whenever it happened to be closed.
@@ -83,21 +84,19 @@ export class Telemetry {
   }
 
   /**
-   * The two readouts that stay visible while the panel is collapsed: the worst
-   * frame in the window as fps (plus its tone and the sparkline sample) and the
-   * ambient badge. See `hud-frame-timer.ts` for why an unmeasurable window
-   * reports nothing at all.
+   * The two readouts that stay visible while the panel is collapsed: the
+   * delivered fps over the last second (plus its tone), with the worst frame in
+   * the window going to the sparkline, and the ambient badge. See
+   * `hud-frame-timer.ts` for why the digits are not the worst frame, and why an
+   * unmeasurable window reports nothing at all.
    */
   paintHeader(s: HudStats): void {
-    const frameMs = this.frameTimer.read(finite(s.fps));
-    if (frameMs > 0.001) {
-      this.spark.push(frameMs);
-      const worstFps = 1000 / frameMs;
-      this.setText(
-        this.fpsEl,
-        worstFps >= 10 ? worstFps.toFixed(0) : worstFps.toFixed(1),
-      );
-      const fpsTone = frameTone(frameMs);
+    const { meanMs, worstMs } = this.frameTimer.read(finite(s.fps));
+    if (meanMs > 0.001) {
+      this.spark.push(worstMs);
+      const fps = 1000 / meanMs;
+      this.setText(this.fpsEl, fps >= 10 ? fps.toFixed(0) : fps.toFixed(1));
+      const fpsTone = frameTone(meanMs);
       if (fpsTone !== this.lastFpsTone) {
         this.lastFpsTone = fpsTone;
         this.fpsEl.dataset.tone = fpsTone;
