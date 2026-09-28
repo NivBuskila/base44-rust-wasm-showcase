@@ -39,6 +39,8 @@ interface AetherDiagnostics {
   modelMs: number;
   /** The models run on the worker rather than inline. */
   perceptionWorker: boolean;
+  /** Which engine build is running, and on how many threads. */
+  engine: { name: 'threads' | 'single'; threads: number; reason: string };
 }
 
 interface AetherTestHooks {
