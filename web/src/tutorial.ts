@@ -19,6 +19,7 @@
  * straight from `AetherEngine.spell_name`.
  */
 
+import { coarsePointer } from './device-hints';
 import { HandMirror } from './hand-mirror';
 import { GoalPose } from './goal-pose';
 import { HandSkeleton } from './hand-skeleton';
@@ -295,8 +296,8 @@ export class GestureTutorial {
     this.paintGoal('release');
     this.hand.textContent = 'you know the spells';
     this.effect.textContent = 'combos are live again — chain the poses together';
-    this.how.textContent = 'the spellbook in the panel shows every sequence';
-    this.setNote('press ? for two-hand duets and thrown bolts');
+    this.how.textContent = 'the spellbook (bottom right) tracks every sequence';
+    this.setNote(coarsePointer() ? 'tap ? for the full reference' : 'press ? for the full reference');
     this.next.textContent = 'done';
     this.setCharge(1);
   }

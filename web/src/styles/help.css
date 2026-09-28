@@ -3,6 +3,9 @@
 .hud-help {
   position: absolute;
   inset: 0;
+  /* Over the spellbook, tutorial card and overdrive strip, which come later in
+     `#hud` and would paint on top; still inside `#hud`, so under `#boot`. */
+  z-index: 2;
   display: grid;
   place-items: center;
   padding: 18px;

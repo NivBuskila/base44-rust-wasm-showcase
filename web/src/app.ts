@@ -15,6 +15,7 @@
 
 import type { AetherEngine } from './wasm/aether';
 import { Camera, CameraError } from './camera';
+import { coarsePointer, inAppBrowser, touchDevice } from './device-hints';
 import { DEFAULT_PRESSURE_ITERS, EnginePool } from './engine-pool';
 import { EngineViews } from './engine-views';
 import { FrameClock } from './frame-clock';
@@ -24,12 +25,20 @@ import { Hud } from './hud';
 import { OverdriveBanner } from './overdrive';
 import { PerceptionPump } from './perception-pump';
 import { PerformanceGovernor } from './performance-governor';
+import { PointerStir } from './pointer-stir';
 import { QaRecorder, type QaSession } from './qa-recorder';
 import { STAT, assertOpLayout } from './constants';
 import type { PerceptionSource, RenderFrame, SceneRenderer, ViewMode } from './types';
 
 // WebGPU renders from its own pool; it never reads the Rust particle stream.
 const NO_CPU_PARTICLES = new Float32Array(0);
+
+/**
+ * Where a phone starts on the governor's ladder. Judged from the top, its
+ * first seconds (the welcome, the vision models warming) ran at a quality it
+ * could not hold; it still climbs back when there is headroom.
+ */
+const PHONE_START_TIER = 2;
 
 export class App {
   private readonly engine: AetherEngine;
@@ -54,6 +63,8 @@ export class App {
   /** Every pool resize goes through here; see `engine-pool.ts`. */
   private readonly pool: EnginePool;
   private readonly camera = new Camera();
+  /** The finger or mouse stands in for the camera when there is none. */
+  private readonly stir = new PointerStir();
   private readonly perception: PerceptionPump;
 
   private readonly views: EngineViews;
@@ -64,7 +75,14 @@ export class App {
   private readonly clock = new FrameClock();
   private lastCameraTime = -1;
   private lastCameraMs = 0;
+  /** Stream size last seen; a phone rotation flips it. */
+  private lastVideoW = 0;
+  private lastVideoH = 0;
   private cameraAvailable = false;
+  /** Why this render backend was chosen; see `gpu/index.ts`. */
+  renderGate = '';
+  private staged = false;
+  private wakeLock: WakeLockSentinel | null = null;
 
   private mode: ViewMode = 'aether';
   private showCamera = true;
@@ -125,9 +143,11 @@ export class App {
       DEFAULT_PRESSURE_ITERS,
       engine.particle_count(),
     );
+    if (coarsePointer()) this.governor.startAt(PHONE_START_TIER);
     // After the HUD, which owns and rewrites #hud's markup.
     this.overdrive = new OverdriveBanner(document.getElementById('hud')!, tier);
     this.hud.setEngineTier(tier);
+    document.addEventListener('visibilitychange', this.onVisibility);
   }
 
   /**
@@ -147,7 +167,7 @@ export class App {
     const disabled = new URLSearchParams(location.search).get('perception') === 'off';
     if (!disabled) void this.perception.attach();
 
-    setStatus('opening the camera…');
+    setStatus('opening the camera · nothing is uploaded…');
     try {
       await this.camera.start();
       this.cameraAvailable = true;
@@ -156,13 +176,15 @@ export class App {
       const message =
         err instanceof CameraError
           ? err.denied
-            ? 'Camera denied — running in ambient mode.'
-            : 'No camera found — running in ambient mode.'
+            ? 'Camera access was denied.'
+            : 'No usable camera.'
           : `Camera failed: ${String(err)}`;
-      console.warn(`[aether] ${message}`);
+      console.warn(`[aether] ${message}`, err);
       this.perception.close();
-      this.perception.status = { kind: 'unavailable', reason: message };
+      this.perception.status = { kind: 'unavailable', reason: message, noCamera: true };
+      this.stir.enable();
     }
+    this.hud.setCameraAvailable(this.cameraAvailable, inAppBrowser());
 
     // `?perception=off` keeps model loading out of the headless optical-flow
     // suite, where a software inference would stall unrelated assertions.
@@ -196,7 +218,8 @@ export class App {
       // Start the worker's asynchronous bitmap decode before the synchronous
       // luma readback; both inputs still reach the engine before step().
       this.perception.pump(nowMs);
-      this.pumpCamera(nowMs);
+      if (this.cameraAvailable) this.pumpCamera(nowMs);
+      else this.pumpStir(nowMs);
     });
     t.measure('stepMs', () => this.engine.step(simDt));
 
@@ -241,6 +264,17 @@ export class App {
     const t = this.camera.video.currentTime;
     if (t === this.lastCameraTime) return;
 
+    // A phone rotated: the stream flipped between portrait and landscape, so
+    // every pixel changed at once and the last landmarks are in the old frame.
+    // Without this the flow reads the flip as a full-screen splash.
+    const w = this.camera.width;
+    const h = this.camera.height;
+    if (this.lastVideoW !== 0 && (w !== this.lastVideoW || h !== this.lastVideoH)) {
+      this.engine.clear_perception();
+    }
+    this.lastVideoW = w;
+    this.lastVideoH = h;
+
     const luma = this.camera.readLuma(true);
     if (!luma) return;
     this.views.luma.set(luma);
@@ -249,6 +283,11 @@ export class App {
     this.engine.push_luma(dt);
     this.lastCameraTime = t;
     this.lastCameraMs = nowMs;
+  }
+
+  /** No camera: the pointer's blob is the luma plane. */
+  private pumpStir(nowMs: number): void {
+    this.stir.pump(nowMs, this.views.luma, (dt) => this.engine.push_luma(dt));
   }
 
   private buildFrame(stats: Float32Array): RenderFrame {
@@ -278,7 +317,33 @@ export class App {
     cancelAnimationFrame(this.rafId);
     this.perception.close();
     this.camera.stop();
+    this.stir.dispose();
+    document.removeEventListener('visibilitychange', this.onVisibility);
+    void this.wakeLock?.release().catch(() => {});
   }
+
+  /**
+   * Keeps a phone's screen on once the visitor is in: they gesture at the
+   * camera without touching the glass, so auto-lock would otherwise dim it
+   * mid-spell. Best effort; the lock is dropped whenever the page is hidden.
+   */
+  private async keepAwake(): Promise<void> {
+    // A desktop display should still sleep on its own schedule.
+    if (!touchDevice() || !('wakeLock' in navigator)) return;
+    if (document.visibilityState !== 'visible') return;
+    try {
+      const lock = await navigator.wakeLock.request('screen');
+      // `stop()` may have run while the request was pending.
+      if (!this.running) void lock.release().catch(() => {});
+      else this.wakeLock = lock;
+    } catch {
+      /* Denied or unsupported (some webviews): the screen may dim, nothing else. */
+    }
+  }
+
+  private readonly onVisibility = (): void => {
+    if (this.staged && document.visibilityState === 'visible') void this.keepAwake();
+  };
 
   // ------------------------------------------------------------ test hooks
 
@@ -327,12 +392,15 @@ export class App {
       qualityTier: this.governor.level,
       /** Which graphics API drew the last frame, and who owns the pool. */
       renderBackend: this.renderer.backend,
+      renderGate: this.renderGate,
     };
   }
 
   /** The intro has opened: first-run HUD moments may start now. */
   stage(): void {
+    this.staged = true;
     this.hud.stage();
+    void this.keepAwake();
   }
 
   /**

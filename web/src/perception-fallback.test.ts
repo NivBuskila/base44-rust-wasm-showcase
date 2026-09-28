@@ -3,15 +3,22 @@ import type { AetherEngine } from './wasm/aether';
 
 const { workers, inlines, behavior } = vi.hoisted(() => ({
   workers: [] as any[], inlines: [] as any[],
-  behavior: { constructorFails: false, inlineFails: false },
+  behavior: { constructorFails: false, inlineFails: false, holdInit: false },
 }));
 vi.mock('./perception-worker-client', () => ({
   WorkerPerception: class {
     status: { kind: 'ready'; delegate: 'GPU' } | { kind: 'unavailable'; reason: string } = { kind: 'ready', delegate: 'GPU' };
     close = vi.fn();
-    init = vi.fn(async () => {});
+    private reject: ((e: Error) => void) | null = null;
+    init = vi.fn(() =>
+      behavior.holdInit
+        ? new Promise<void>((_, reject) => (this.reject = reject))
+        : Promise.resolve(),
+    );
     process = vi.fn(() => null);
     constructor() {
+      // Like the real client: closing mid-boot rejects the pending init.
+      this.close = vi.fn(() => this.reject?.(new Error('Perception was closed.')));
       if (behavior.constructorFails) throw new Error('workers unavailable');
       workers.push(this);
     }
@@ -35,6 +42,7 @@ afterEach(() => {
   inlines.length = 0;
   behavior.constructorFails = false;
   behavior.inlineFails = false;
+  behavior.holdInit = false;
   vi.restoreAllMocks();
 });
 
@@ -72,4 +80,17 @@ it('does not resurrect inline perception after the pump closes', async () => {
   await Promise.resolve();
   expect(pump.attached).toBe(false);
   expect(inlines[0].close).toHaveBeenCalledOnce();
+});
+
+it('stops a worker that is still loading the models when the pump closes', async () => {
+  behavior.holdInit = true;
+  const { pump } = makePump();
+  const attaching = pump.attach();
+  await Promise.resolve();
+  expect(workers).toHaveLength(1);
+  pump.close();
+  await attaching;
+  expect(workers[0].close).toHaveBeenCalled();
+  expect(inlines).toHaveLength(0);
+  expect(pump.attached).toBe(false);
 });

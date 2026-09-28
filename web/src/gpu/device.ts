@@ -5,9 +5,14 @@
  * (SwiftShader, llvmpipe, the browser's fallback adapter) is slower than the
  * WebGL2 path it would replace and — worse — makes the headless test suite
  * measure a rasteriser the user never sees, so those are refused and the app
- * falls back to the Rust/WASM pool plus WebGL2. `?gpu=off` forces that path on
- * any machine, `?gpu=on` accepts whatever adapter the browser offers.
+ * falls back to the Rust/WASM pool plus WebGL2. Phones and tablets get WebGL2
+ * too: it is the path the test suite grades, and on iOS the WebGPU camera upload
+ * arrives unrotated (a sideways 720x720 block of a portrait stream) while WebGL2
+ * shows it upright. `?gpu=off` forces WebGL2 on any machine, `?gpu=on` accepts
+ * whatever adapter the browser offers.
  */
+
+import { touchDevice } from '../device-hints';
 
 export interface GpuGate {
   ok: boolean;
@@ -55,6 +60,9 @@ function looksSoftware(adapter: GPUAdapter): boolean {
 export async function acquireGpu(): Promise<{ ctx: GpuContext | null; gate: GpuGate }> {
   const want = requested();
   if (want === 'off') return { ctx: null, gate: { ok: false, reason: 'disabled by ?gpu=off' } };
+  if (want === 'auto' && touchDevice()) {
+    return { ctx: null, gate: { ok: false, reason: 'touch device: WebGL2 by default (?gpu=on for WebGPU)' } };
+  }
 
   const gpu = (navigator as Navigator & { gpu?: GPU }).gpu;
   if (!gpu) return { ctx: null, gate: { ok: false, reason: 'WebGPU unavailable in this browser' } };

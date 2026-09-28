@@ -116,6 +116,78 @@ describe('Camera', () => {
     expect(cam.video.srcObject).toBeNull();
   });
 
+  it('gives up on a stream that never shows a picture, and turns the camera off', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const track = { stop: vi.fn() };
+      const stream = { getTracks: () => [track] } as unknown as MediaStream;
+      mediaDevices(() => Promise.resolve(stream));
+      const cam = new Camera();
+      vi.spyOn(cam.video, 'play').mockResolvedValue();
+
+      const started = cam.start().catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(11_000);
+      const err = (await started) as CameraError;
+
+      expect(err).toBeInstanceOf(CameraError);
+      expect(err.denied).toBe(false);
+      expect(track.stop).toHaveBeenCalledOnce();
+      expect(cam.video.srcObject).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not count time the page spends hidden against the deadline', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    const hidden = vi.spyOn(document, 'hidden', 'get').mockReturnValue(true);
+    try {
+      mediaDevices(() => Promise.resolve({ getTracks: () => [] } as unknown as MediaStream));
+      const cam = new Camera();
+      vi.spyOn(cam.video, 'play').mockResolvedValue();
+
+      const started = cam.start();
+      // The visitor switched apps right after allowing the camera.
+      await vi.advanceTimersByTimeAsync(30_000);
+      hidden.mockReturnValue(false);
+      giveFrame(cam.video);
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(started).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a play() that fails as no picture, and turns the camera off', async () => {
+    const track = { stop: vi.fn() };
+    mediaDevices(() => Promise.resolve({ getTracks: () => [track] } as unknown as MediaStream));
+    const cam = new Camera();
+    vi.spyOn(cam.video, 'play').mockRejectedValue(new DOMException('no autoplay', 'NotAllowedError'));
+    const err = (await cam.start().catch((e: unknown) => e)) as CameraError;
+    expect(err).toBeInstanceOf(CameraError);
+    expect(err.denied).toBe(false);
+    expect(track.stop).toHaveBeenCalledOnce();
+  });
+
+  it('does not time out while the permission prompt is still open', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      let grant: (s: MediaStream) => void = () => {};
+      mediaDevices(() => new Promise<MediaStream>((resolve) => (grant = resolve)));
+      const cam = new Camera();
+      vi.spyOn(cam.video, 'play').mockResolvedValue();
+
+      const started = cam.start();
+      // The visitor takes a long time to decide.
+      await vi.advanceTimersByTimeAsync(30_000);
+      giveFrame(cam.video);
+      grant({ getTracks: () => [] } as unknown as MediaStream);
+      await expect(started).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('returns no luma before the first frame has pixels', () => {
     const cam = new Camera();
     expect(cam.hasFrame).toBe(false);

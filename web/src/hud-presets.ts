@@ -1,7 +1,7 @@
 /**
  * Named starting points for the engine parameters.
  *
- * The nine sliders interact — vorticity fights the dissipations, spawn rate
+ * The ten sliders interact — vorticity fights the dissipations, spawn rate
  * only reads as density against particle lifetime — so finding a look by
  * dragging one at a time means passing through a lot of combinations that just
  * look broken. These are the combinations worth seeing: each one moves the

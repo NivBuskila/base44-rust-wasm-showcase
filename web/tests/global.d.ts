@@ -16,7 +16,13 @@ interface AetherDiagnostics {
   perception:
     | { kind: 'loading' }
     | { kind: 'ready'; delegate: 'GPU' | 'CPU' }
-    | { kind: 'unavailable'; reason: string };
+    | { kind: 'unavailable'; reason: string; noCamera?: true };
+  /** Which graphics API drew the last frame. */
+  renderBackend: 'webgl2' | 'webgpu';
+  /** Why that backend was chosen. */
+  renderGate: string;
+  /** Adaptive quality rung; 0 is full quality. */
+  qualityTier: number;
   /** Packed engine stats; indices mirror `STAT` in `web/src/constants.ts`. */
   stats: number[];
   /** Latched spell name per hand slot. */

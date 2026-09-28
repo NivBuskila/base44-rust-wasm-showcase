@@ -112,6 +112,16 @@ export class PerformanceGovernor {
   }
 
   /**
+   * Starts a session further down the ladder, for devices known to be slow
+   * before a single frame is measured. The normal rules still apply from
+   * there, so it climbs back up when the frame rate allows.
+   */
+  startAt(tier: number): void {
+    const clamped = Math.max(0, Math.min(TIERS.length - 1, Math.round(tier)));
+    if (clamped !== this.tier) this.apply(clamped);
+  }
+
+  /**
    * Re-reads the settings the tiers are relative to.
    *
    * Called when the user changes the pool or the solver from the HUD: their new

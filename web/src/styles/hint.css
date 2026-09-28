@@ -73,3 +73,15 @@
   color: var(--faint);
 }
 
+
+.hint-note {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  text-shadow: 0 2px 18px rgba(0, 0, 0, 0.9);
+}
+
+/* Without a camera the gesture chips describe spells nobody can cast. */
+#hud[data-camera='off'] .hud-hint .chips {
+  display: none;
+}

@@ -11,6 +11,7 @@ import { loadEngine } from './engine-loader';
 import { mountIntro } from './landing';
 import { clearQaSession, readQaSession, type QaSession } from './qa-recorder';
 import { createRenderer } from './gpu';
+import { coarsePointer } from './device-hints';
 import { assertLayout } from './constants';
 import type { PerceptionSource, ViewMode } from './types';
 
@@ -67,9 +68,10 @@ async function boot(): Promise<void> {
     if (!(canvas instanceof HTMLCanvasElement)) throw new Error('#stage canvas missing');
 
     setStatus('starting the renderer…');
-    const { renderer } = await createRenderer(canvas);
+    const { renderer, reason } = await createRenderer(canvas);
 
     const app = new App(engine, loaded.memory, renderer, loaded.tier);
+    app.renderGate = reason;
     window.__aether = {
       app,
       diagnostics: () => app.diagnostics,
@@ -93,7 +95,9 @@ async function boot(): Promise<void> {
     // nobody enters mid-stutter and the wait reads as calibration.
     intro.reveal();
     setStatus('calibrating hand tracking…');
-    await app.settled();
+    // A phone on a mobile connection can take the full half minute to warm the
+    // models; letting it in sooner costs a few stuttering seconds, not a visitor.
+    await app.settled(coarsePointer() ? 10_000 : undefined);
     intro.ready({
       hands: app.diagnostics.cameraAvailable ? () => app.handsPresent : undefined,
       onOpen: () => app.stage(),

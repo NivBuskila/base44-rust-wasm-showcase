@@ -8,8 +8,8 @@
 
 [![Aether](web/public/og.png)](https://aether-physics.xyz)
 
-A gesture-driven fluid reality engine. Stand in front of a webcam and move smoke
-with your hands.
+A real-time fluid simulation that runs entirely in the browser, steered through
+your webcam.
 
 An incompressible Navier–Stokes solver and a particle system of 120,000 (up to
 a million in overdrive), written in Rust and compiled to WebAssembly, driven in
@@ -22,8 +22,9 @@ into combos and cast with both hands for duets.
 Everything runs locally in the browser. No server, no upload, no video leaving
 the machine.
 
-**Live demo: [aether-physics.xyz](https://aether-physics.xyz)** — open it in its own tab in a current Chrome, Edge
-or Firefox and allow camera access.
+**Live demo: [aether-physics.xyz](https://aether-physics.xyz)** — open it in its own tab in a current Chrome, Edge,
+Firefox or Safari and allow camera access. On a phone it works too; hold it
+sideways.
 
 ## Why it is built this way
 
@@ -33,12 +34,12 @@ fighting for the same frame.
 
 **The physics is in Rust, the perception is in the browser.** Neural inference
 is already a solved, GPU-accelerated problem in the browser via MediaPipe; the
-fluid solver is not, and it is the part that benefits from a real language with
-real control over memory layout. So `aether-core` is a dependency-free Rust
-crate holding the entire simulation, and the browser layer does capture,
-inference and rendering.
+fluid solver is not, and it is the part that benefits from a systems language
+with control over memory layout. So `aether-core` is a Rust crate with no
+dependencies by default (rayon only behind the `parallel` feature) holding the
+entire simulation, and the browser layer does capture, inference and rendering.
 
-**Two models, not five.** `GestureRecognizer` returns hand landmarks *and* a
+**Two models, not four.** `GestureRecognizer` returns hand landmarks *and* a
 canned gesture label from one inference. `PoseLandmarker` with
 `outputSegmentationMasks` returns body joints *and* the silhouette from one
 inference. Naively you would reach for four separate tasks — hands, gestures,
@@ -48,10 +49,11 @@ pose, segmentation — and spend the whole frame budget on inference.
 with `ImageBitmap`s, so a slow inference costs latency, never a dropped frame.
 An inline fallback keeps the app working where the worker cannot start.
 
-**Nothing is serialised per frame.** Camera luma goes *into* a Rust-owned buffer
-and the dye texture and particle buffer come *out* of Rust-owned buffers, all as
-typed-array views over WASM linear memory. The only per-frame copies are the two
-the hardware forces: the camera readback and the texture upload.
+**No bulk data is serialised per frame.** Camera luma goes *into* a Rust-owned
+buffer and the dye texture and particle buffer come *out* of Rust-owned buffers,
+all as typed-array views over WASM linear memory. Past the camera readback and
+the texture upload, the per-frame copies are small: the luma plane into WASM,
+the packed landmarks, and a handful of scalars and spell names for the HUD.
 
 **The engine does not depend on the models.** A dense multi-scale Horn–Schunck
 optical flow solver runs over the camera's luma plane in Rust, so the fluid
@@ -64,10 +66,12 @@ WebGPU adapter a second backend takes over and also *simulates* the particles in
 a compute pass, replaying the engine's per-frame op log so both backends see the
 same spells. The colour grading, bloom and sizing arithmetic are shared
 TypeScript, so a look change is made once — only the shader packing is per
-backend. `?gpu=off` / `?gpu=on` override the gate.
+backend. Phones and tablets stay on WebGL2 by default. `?gpu=off` / `?gpu=on`
+override the gate.
 
 **The simulation is testable on the host.** `aether-core` compiles for x86 and
-wasm32 from the same source with no `cfg` divergence in the algorithms, so the
+wasm32 from the same source with no `cfg` divergence in the algorithms (the
+SIMD128 kernels are cross-checked against their scalar twins), so the
 fluid solver's incompressibility, the optical flow's sign and scale, and the
 gesture state machine's hysteresis are all asserted by `cargo test` on the
 machine that built it — not eyeballed through a canvas. `visual.rs` even scores
@@ -117,11 +121,12 @@ What you should see:
   engine is running. Which renderer won is in
   `window.__aether.diagnostics().renderBackend` (`webgl2` or `webgpu`).
 - The moment a hand is seen, the gesture tutorial opens by itself and walks you
-  through each spell. Reopen it any time with `T` or the panel's book button;
-  `H` or `?` shows the key reference.
+  through each spell. Reopen it any time with `T` or the panel's tutorial button;
+  `?` shows the key reference and `H` hides the panel.
 
 Without a camera (or with permission denied) the app still runs: the fluid
-drives itself and the HUD says why perception is off.
+drives itself, a finger or the mouse stirs it, and the HUD says why hand
+tracking is off.
 
 <details>
 <summary>No local Rust or Node? Run it in Docker</summary>
@@ -142,6 +147,7 @@ The first boot takes a few minutes while the toolchains download.
 | `?gpu=off` / `?gpu=on` | force the WebGL2 or the WebGPU renderer |
 | `?rscale=0.5` | pin the internal render scale (WebGL2 path) |
 | `?perception=off` | skip the models entirely — optical flow only |
+| `?welcome` | replay the first-visit welcome |
 
 ### The multithreaded engine
 
@@ -158,10 +164,11 @@ otherwise, so nothing breaks in an embedded frame or an old browser. The HUD
 shows the tier and thread count either way.
 
 The threaded build needs the nightly toolchain, because `std` itself has to be
-recompiled with atomics. The script installs it on demand
-(`rustup toolchain install nightly -c rust-src -t wasm32-unknown-unknown`) and
+recompiled with atomics. The script installs a pinned nightly on demand
+(`nightly-2026-09-19` with `rust-src`, overridable with `AETHER_NIGHTLY`) and
 treats a failed threaded build as a warning, so a machine without it still gets
-a working app.
+a working app. Safari does not support the `credentialless` embedder policy the
+site uses, so there it runs the baseline engine.
 
 Isolation is the part that usually bites. `SharedArrayBuffer` requires both
 `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy`,
@@ -214,20 +221,23 @@ into a nova by accident.
 A performance governor watches the smoothed frame rate and steps quality down —
 internal resolution first, then pressure iterations, then pool size — and back
 up as headroom returns. Overdrive (`O`) jumps to the full million-particle pool
-and shows a throughput strip. A set of parameter presets gives the nine sliders
-starting points worth seeing. `window.__aether.diagnostics()` exposes the
+and shows a throughput strip. A set of parameter presets gives the ten sliders
+starting points worth seeing. A phone starts two rungs down and climbs from
+there. `window.__aether.diagnostics()` exposes the
 engine tier, render backend, quality tier and perception state for debugging.
 
 ## Architecture
 
 ```
-web/                              TypeScript, no framework
+web/src/                          TypeScript, no framework
 ├── main.ts                       boot + the window.__aether test hooks
 ├── app.ts                        the App object and the frame loop
 ├── frame-clock.ts / frame-timings.ts
 ├── engine-loader.ts              picks threaded vs baseline wasm at boot
 ├── engine-views.ts               typed-array views over WASM memory
 ├── camera.ts                     getUserMedia + Rec. 709 luma downscale
+├── pointer-stir.ts               no camera: the pointer drives the optical flow
+├── landing.ts                    the loader and first-visit welcome
 ├── perception.ts                 MediaPipe session: GestureRecognizer + PoseLandmarker
 ├── perception.worker.ts          the same, in a module worker
 ├── perception/                   graphs, duty-cycle limiter, result packing
@@ -240,7 +250,7 @@ web/                              TypeScript, no framework
 ├── constants.ts                  mirror of the Rust layout, asserted at boot
 └── styles/                       CSS, one file per concern
 
-crates/aether-core/               zero dependencies, native + wasm32
+crates/aether-core/               no dependencies by default, native + wasm32
 ├── field/                        Grid / VecField, bilinear sampling
 ├── fluid/                        Stable Fluids: advect, diffuse, project, SIMD kernels
 ├── flow/                         multi-scale Horn–Schunck optical flow
@@ -262,8 +272,8 @@ Three clocks, deliberately decoupled — conflating them is what makes this clas
 of app stutter:
 
 - **Render, ~60 Hz.** `engine.step(dt)` then draw. Never waits on anything.
-- **Camera, ~30 Hz.** Luma readback for optical flow, and only when the video
-  element has actually advanced.
+- **Camera, 30–60 Hz, whatever the webcam delivers.** Luma readback for optical
+  flow, and only when the video element has actually advanced.
 - **Inference, adaptive.** Runs in the worker, one frame in flight at a time,
   so its cost never lands in a render frame. Where the worker is unavailable
   the inline fallback is synchronous, and its cadence is then derived from
@@ -285,7 +295,7 @@ in a pipeline like this:
   through `math::decay(rate, dt)`, so a 30 fps and a 144 fps session look
   identical.
 - Normalised `[0, 1]` coordinates appear **only** at the engine boundary, where
-  landmarks come in. Hand-relative distances (duets, bolts) are in hand widths.
+  landmarks come in. Hand-relative distances (duets) are in hand widths.
 - The user sees a **mirrored** camera view, so landmarks and the luma plane are
   mirrored to match. Otherwise moving your hand right would push the fluid left.
 
@@ -337,10 +347,13 @@ Two numbers that are *not* the engine, recorded so they are not misread:
 ## Testing
 
 ```bash
-cargo test --workspace     # 237 tests: the simulation, on the host
-cd web && npm run typecheck
-cd web && npm run test:unit # 206 tests: the TypeScript that needs no browser (vitest)
-cd web && npm run test:e2e  # 36 tests: the browser, headless, no webcam (Playwright)
+cargo test --workspace  # 237 tests: the simulation, on the host
+cd web
+npm run typecheck
+npm run test:unit       # 222 tests: the TypeScript that needs no browser (vitest)
+npx vite build          # the browser suite runs against the production build
+npx playwright install --no-shell chromium
+npm run test:e2e        # 43 tests: the browser, headless, no webcam (Playwright)
 ```
 
 The unit suite covers what used to be reachable only through a canvas: the
@@ -361,11 +374,15 @@ no GPU**:
   exercises the whole chain from landmarks to latched spells to pixels without
   needing a real hand in front of a real camera.
 - WebGL2 runs on SwiftShader.
+- The phone suite runs the app on five iPhone-sized touch screens, upright and
+  sideways, with and without Safari's bars: the welcome must fit and Enter
+  must not wrap, and no overlay may leave the screen or cover another. With the
+  camera denied, a drag must stir the fluid the way it moved and let go.
 
 The suite runs against the production build (`vite preview`), so build first
 (`npx vite build`, after the WASM engines). The perception suite also needs the
 vendored runtime (`npm run sync:mp`, part of `npm install`) and the models
-(`npm run fetch:models`). A full run takes about 15 minutes on a 4-core machine,
+(`npm run fetch:models`). A full run takes about 12 minutes on a 4-core machine,
 most of it SwiftShader. On a machine where Playwright's own browser download is
 unavailable, point it at an existing Chromium with
 `AETHER_CHROMIUM=/path/to/chromium`.
@@ -376,7 +393,7 @@ CI (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `cargo clippy
 is bit-identical on any thread count), both WASM builds, the typecheck and the
 unit suite on every pull request. A third job then runs the Playwright suite
 against a production build of those same engines, in headless Chromium on
-SwiftShader with the real models; it takes 7 to 12 minutes, and a push to
+SwiftShader with the real models; it takes about 17 to 18 minutes, and a push to
 `main` deploys only once it has passed too.
 
 ## Deploying

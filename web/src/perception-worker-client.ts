@@ -16,7 +16,11 @@ import type { FromWorker, ToWorker } from './perception-protocol';
 import type { MaskFrame, PerceptionFrame, PerceptionSource, PerceptionStatus } from './types';
 
 /**
- * Width the camera frame is decoded down to before inference, in pixels.
+ * Long edge the camera frame is decoded down to before inference, in pixels.
+ *
+ * The long edge rather than the width: a phone held upright streams 720x1280,
+ * and scaling that by width alone decoded 480x853, three times the pixels (and
+ * mask samples) of the same camera held sideways, for no better landmarks.
  *
  * The camera runs at 1280x720 but MediaPipe's hand and pose graphs resize their
  * input to a couple of hundred pixels on the way in, so the extra detail is
@@ -25,7 +29,7 @@ import type { MaskFrame, PerceptionFrame, PerceptionSource, PerceptionStatus } f
  * which is latency off the front of every gesture — and it stays comfortably
  * above the models' own input size, so the landmarks do not move.
  */
-const INFERENCE_WIDTH = 480;
+const INFERENCE_LONG_EDGE = 480;
 /** Model downloads can be slow, but a silent worker must not hang forever. */
 const INIT_TIMEOUT_MS = 60_000;
 /**
@@ -166,7 +170,7 @@ export class WorkerPerception implements PerceptionSource {
 
     this.decoding = true;
     const decodeStarted = performance.now();
-    const scale = Math.min(1, INFERENCE_WIDTH / video.videoWidth);
+    const scale = Math.min(1, INFERENCE_LONG_EDGE / Math.max(video.videoWidth, video.videoHeight));
     createImageBitmap(video, {
       resizeWidth: Math.round(video.videoWidth * scale),
       resizeHeight: Math.round(video.videoHeight * scale),

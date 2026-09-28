@@ -39,6 +39,14 @@ const DEFAULTS: CameraOptions = {
   facingMode: 'user',
 };
 
+/**
+ * How long an opened stream may take to show its first frame. Only visible
+ * time after the permission prompt is answered counts: someone deciding
+ * whether to allow the camera, or who switched away before the first frame,
+ * is not a stalled camera.
+ */
+const FIRST_FRAME_MS = 10_000;
+
 export class CameraError extends Error {
   constructor(
     message: string,
@@ -101,22 +109,42 @@ export class Camera {
       );
     }
 
+    // A stream that never plays (some webviews) must not hold the boot
+    // forever: past the deadline the app carries on as if there were no camera,
+    // and the light goes off.
     this.video.srcObject = this.stream;
-    await this.video.play();
-    await this.waitForFrame();
+    let playFailed: unknown = null;
+    this.video.play().catch((err: unknown) => {
+      playFailed = err ?? new Error('play() failed');
+    });
+    try {
+      await this.waitForFrame(() => playFailed);
+    } catch (err) {
+      this.stop();
+      throw new CameraError(`The camera opened but showed no picture (${String(err)}).`, false);
+    }
   }
 
   /**
    * Resolves once the video actually has pixels. `play()` resolving is not
    * enough — the first frames can still be 0x0, and drawing one of those
-   * throws in some browsers.
+   * throws in some browsers. A timer rather than rAF, so a `play()` that never
+   * settles still reaches the deadline; the deadline restarts while the page
+   * is hidden, since a hidden page may get no frames at all.
    */
-  private waitForFrame(): Promise<void> {
+  private waitForFrame(failed: () => unknown): Promise<void> {
     if (this.hasFrame) return Promise.resolve();
-    return new Promise((resolve) => {
+    let deadline = performance.now() + FIRST_FRAME_MS;
+    return new Promise((resolve, reject) => {
       const check = () => {
+        const err = failed();
         if (this.hasFrame) resolve();
-        else requestAnimationFrame(check);
+        else if (err) reject(err);
+        else if (typeof document !== 'undefined' && document.hidden) {
+          deadline = performance.now() + FIRST_FRAME_MS;
+          setTimeout(check, 100);
+        } else if (performance.now() >= deadline) reject(new Error('no frame arrived'));
+        else setTimeout(check, 30);
       };
       check();
     });

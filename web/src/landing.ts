@@ -15,6 +15,7 @@
  * `.done` (hidden, no pointer events) so it can never eat a gesture.
  */
 
+import { coarsePointer } from './device-hints';
 import { watchHand, type HandWatch } from './landing-hand';
 
 const SEEN_KEY = 'aether.landing.seen';
@@ -77,8 +78,18 @@ function remember(): void {
 
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-/** Decodes `text` into `node` through a short glyph scramble. */
+/** The scramble running on each node; a newer one replaces it. */
+const scrambling = new WeakMap<HTMLElement, number>();
+
+/**
+ * Decodes `text` into `node` through a short glyph scramble. A second scramble
+ * on the same node cancels the first: on a slow main thread two overlapping
+ * intervals can land in either order, which left the armed button reading
+ * CALIBRATING.
+ */
 function scramble(node: HTMLElement, text: string, ms = 520): void {
+  window.clearInterval(scrambling.get(node));
+  scrambling.delete(node);
   if (reducedMotion()) {
     node.textContent = text;
     return;
@@ -94,8 +105,12 @@ function scramble(node: HTMLElement, text: string, ms = 520): void {
       out += text[i] === ' ' ? ' ' : glyphs[(Math.random() * glyphs.length) | 0];
     }
     node.textContent = out;
-    if (p === 1) window.clearInterval(timer);
+    if (p === 1) {
+      window.clearInterval(timer);
+      scrambling.delete(node);
+    }
   }, 30);
+  scrambling.set(node, timer);
 }
 
 /**
@@ -179,7 +194,17 @@ function build(root: HTMLElement, full: boolean) {
     );
     const cta = el('div', 'landing-cta');
     cta.append(enter, el('span', 'landing-hand', 'or raise a hand to the camera'));
-    foot.append(cta, el('p', 'landing-note', 'camera optional · H controls · T tutorial'));
+    // Keys mean nothing on a phone; what a phone visitor needs to know is that
+    // declining the camera still leaves something to play with.
+    const note = coarsePointer()
+      ? 'camera optional · no camera? drag to stir'
+      : 'camera optional · H controls · T tutorial';
+    foot.append(
+      cta,
+      el('p', 'landing-note', note),
+      // Shown by the stylesheet only on a phone held upright: the field is 16:9.
+      el('p', 'landing-rotate', 'turn your phone sideways — the field is widescreen'),
+    );
   }
   frame.append(foot);
   root.append(frame);
