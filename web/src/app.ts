@@ -254,6 +254,7 @@ export class App {
         duetProgress: this.engine.duet_progress(),
         hands: stats[STAT.HANDS_PRESENT] > 0 ? this.perception.hands : null,
         perception: this.perception.status,
+        frameTimeMs: nowMs,
       }),
     );
     t.end();
