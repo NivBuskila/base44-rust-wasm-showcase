@@ -350,7 +350,7 @@ Two numbers that are *not* the engine, recorded so they are not misread:
 cargo test --workspace  # 237 tests: the simulation, on the host
 cd web
 npm run typecheck
-npm run test:unit       # 223 tests: the TypeScript that needs no browser (vitest)
+npm run test:unit       # 227 tests: the TypeScript that needs no browser (vitest)
 npx vite build          # the browser suite runs against the production build
 npx playwright install --no-shell chromium
 npm run test:e2e        # 44 tests: the browser, headless, no webcam (Playwright)

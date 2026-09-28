@@ -187,28 +187,85 @@ describe('PerformanceGovernor', () => {
     expect(governor.level).toBe(1);
   });
 
-  it('a warm-up hold keeps the tier through slow frames, then settles before judging', () => {
+  it('a warm-up hold keeps adapting, then restores the tier it began at', () => {
     const { knobs, governor, feed } = settled();
     governor.setHold(true);
-    // ~10 s of a cold MediaPipe start at 20 fps: would otherwise hit the bottom rung.
-    feed(20, framesFor(10_000, 20));
+    // A cold MediaPipe start at 20 fps: the ladder still answers it.
+    feed(20, framesFor(DOWN_MS, 20));
+    expect(governor.level).toBe(2);
+    feed(20, settleAt(20) + framesFor(DOWN_MS, 20));
+    expect(governor.level).toBe(3);
+    expect(knobs.setRenderScale).toHaveBeenLastCalledWith(0.6);
+
+    // Warm: straight back to where it started, not a 4 s climb per rung.
+    governor.setHold(false);
     expect(governor.level).toBe(0);
-    expect(knobs.setRenderScale).not.toHaveBeenCalled();
+    expect(knobs.setRenderScale).toHaveBeenLastCalledWith(1);
+    expect(knobs.setPressureIters).toHaveBeenLastCalledWith(BASE_PRESSURE);
+    expect(knobs.setParticleCount).toHaveBeenLastCalledWith(BASE_PARTICLES);
+
+    // A machine that holds it keeps it.
+    feed(62.5, settleAt(62.5) + framesFor(UP_MS, 62.5));
+    expect(governor.level).toBe(0);
+  });
+
+  it('a restored tier is judged afresh, so a device that cannot hold it drops again', () => {
+    const { governor, feed } = settled();
+    governor.setHold(true);
+    feed(20, framesFor(DOWN_MS, 20));
+    expect(governor.level).toBe(2);
 
     governor.setHold(false);
+    expect(governor.level).toBe(0);
     feed(40, settleAt(40) + framesFor(DOWN_MS, 40) - 1);
     expect(governor.level).toBe(0);
     feed(40, 1);
     expect(governor.level).toBe(1);
   });
 
-  it('a warm-up hold is bounded, so a device that never finishes still adapts', () => {
+  it('a phone that started down the ladder returns there after warm-up, not to the top', () => {
+    const { governor, feed } = rig();
+    governor.startAt(2);
+    governor.setHold(true);
+    feed(10, settleAt(10) + framesFor(DOWN_MS, 10));
+    expect(governor.level).toBe(3);
+
+    governor.setHold(false);
+    expect(governor.level).toBe(2);
+  });
+
+  it('ending a hold never lowers quality', () => {
+    const { knobs, governor, feed } = rig();
+    governor.startAt(2);
+    governor.setHold(true);
+    // Headroom during the warm-up is headroom: the rung climbed was earned.
+    feed(62.5, settleAt(62.5) + framesFor(UP_MS, 62.5));
+    expect(governor.level).toBe(1);
+
+    governor.setHold(false);
+    expect(governor.level).toBe(1);
+    expect(knobs.setRenderScale).toHaveBeenLastCalledWith(0.85);
+  });
+
+  it('a hold that never ends still adapts', () => {
     const { governor, feed } = settled();
     governor.setHold(true);
     feed(20, framesFor(30_000, 20));
-    expect(governor.level).toBe(0);
-    feed(20, settleAt(20) + framesFor(DOWN_MS, 20));
+    expect(governor.level).toBe(3);
+  });
+
+  it('a hold released while paused leaves the user settings alone', () => {
+    const { knobs, governor, feed } = settled();
+    governor.setHold(true);
+    feed(20, framesFor(DOWN_MS, 20));
     expect(governor.level).toBe(2);
+
+    governor.setPaused(true);
+    expect(governor.level).toBe(0);
+    const writes = vi.mocked(knobs.setRenderScale).mock.calls.length;
+    governor.setHold(false);
+    expect(governor.level).toBe(0);
+    expect(vi.mocked(knobs.setRenderScale).mock.calls.length).toBe(writes);
   });
 
   it('rebasing re-applies the current tier on top of the new 100%', () => {
