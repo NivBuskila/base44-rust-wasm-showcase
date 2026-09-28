@@ -62,11 +62,6 @@ export class SceneSources {
     this.videoTime = -1;
   }
 
-  /** Camera aspect ratio, or 0 before the first allocation. */
-  get videoAspect(): number {
-    return this.videoTexW / Math.max(1, this.videoTexH);
-  }
-
   /**
    * True when the video texture holds a usable frame.
    *

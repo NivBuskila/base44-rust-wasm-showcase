@@ -30,6 +30,7 @@ import { STYLES } from "./styles";
 import { drawCompositePass, drawParticlePass } from "./composite-pass";
 import { RendererError } from "./gl";
 import { LumaProbe } from "./luma-probe";
+import { viewFit } from "./look";
 import type { Resources } from "./resources";
 import { createResources, releaseResources } from "./resources";
 import { drawDebugPass, drawScenePass } from "./scene-pass";
@@ -240,6 +241,8 @@ export class Renderer implements SceneRenderer {
     }
 
     const style = STYLES[frame.mode];
+    const video = frame.video ?? this.video;
+    const fit = viewFit(this.canvas.width, this.canvas.height, video);
     drawScenePass(
       gl,
       res.programs,
@@ -249,9 +252,8 @@ export class Renderer implements SceneRenderer {
       style,
       intensity,
       time,
-      this.canvas.width,
-      this.canvas.height,
-      this.video,
+      video,
+      fit,
     );
     drawParticlePass(
       res,
@@ -259,6 +261,7 @@ export class Renderer implements SceneRenderer {
       style,
       intensity,
       this.dpr * this.sceneScale * this.viewScale,
+      fit,
     );
     if (style.overlay > 0 && frame.hands)
       res.overlay.draw(
@@ -267,6 +270,7 @@ export class Renderer implements SceneRenderer {
         frame.hands,
         style.overlay,
         this.dpr * this.sceneScale,
+        fit,
       );
     // The overlay left its own VAO bound; the ladder draws fullscreen strips.
     gl.bindVertexArray(res.quadVao);

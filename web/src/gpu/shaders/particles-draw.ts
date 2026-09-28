@@ -10,7 +10,7 @@
  * index and the fragment gets the `[-1, 1]` corner the GL shader derived from
  * `gl_PointCoord`.
  *
- * Uniform: size, gain, intensity, 0 | viewport.xy, maxx, maxy.
+ * Uniform: size, gain, intensity, 0 | viewport.xy, maxx, maxy | viewFit.xy, 0, 0.
  */
 export const PARTICLE_DRAW_WGSL = /* wgsl */ `
 struct Particle {
@@ -21,6 +21,7 @@ struct Particle {
 struct DrawUniforms {
   a: vec4<f32>, // size, gain, intensity, 0
   b: vec4<f32>, // viewport.x, viewport.y, maxx, maxy
+  c: vec4<f32>, // viewFit.x, viewFit.y (render/look.ts), 0, 0
 };
 
 @group(0) @binding(0) var<uniform> U: DrawUniforms;
@@ -61,7 +62,9 @@ fn vs_main(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> 
   }
 
   let corner = CORNERS[vi];
-  let centre = vec2<f32>(px, 1.0 - py) * 2.0 - 1.0;
+  // The pool is in the camera frame's space, so it takes the feed's crop.
+  let view = (vec2<f32>(px, py) - 0.5) / U.c.xy + 0.5;
+  let centre = vec2<f32>(view.x, 1.0 - view.y) * 2.0 - 1.0;
   let heat = clamp(p.heat, 0.0, 1.0);
   let fade = smoothstep(0.0, 0.16, life) * (0.22 + 0.78 * pow(life, 0.65));
   let want = U.a.x * (0.72 + 0.65 * heat) * (0.58 + 0.42 * life);

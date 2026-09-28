@@ -11,7 +11,7 @@
 import { FLUID_H, FLUID_W } from "../constants";
 import type { RenderFrame } from "../types";
 import type { RenderTarget } from "./gl";
-import { aspectOf, cameraFit, usesCamera } from "./look";
+import { usesCamera } from "./look";
 import type { ScenePrograms } from "./programs";
 import type { SceneSources } from "./sources";
 import type { ModeStyle } from "./styles";
@@ -26,6 +26,9 @@ import type { ModeStyle } from "./styles";
  * the body and the rim to black, so running the layer there costs a full-frame
  * `texSubImage2D` plus five fetches per pixel to add exactly zero. On a
  * software rasteriser that was a quarter of the frame.
+ *
+ * `fit` is the frame's `viewFit` (`look.ts`): the dye is sampled through the
+ * same crop as the camera, so the fluid stays on the person the feed shows.
  */
 export function drawScenePass(
   gl: WebGL2RenderingContext,
@@ -36,9 +39,8 @@ export function drawScenePass(
   style: ModeStyle,
   intensity: number,
   time: number,
-  canvasW: number,
-  canvasH: number,
   video: HTMLVideoElement | null,
+  fit: readonly [number, number],
 ): void {
   const p = programs.scene;
   sources.uploadGrid(sources.dyeTex, frame.dye);
@@ -70,11 +72,7 @@ export function drawScenePass(
     1 / Math.max(1, sources.videoTexH),
   );
 
-  const [camScaleX, camScaleY] = cameraFit(
-    aspectOf(canvasW, canvasH, 1),
-    sources.videoAspect,
-  );
-  p.f2("u_camScale", camScaleX, camScaleY);
+  p.f2("u_viewFit", fit[0], fit[1]);
 
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }

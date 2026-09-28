@@ -12,7 +12,7 @@
  */
 
 import { FLUID_H, FLUID_W } from "../constants";
-import { aspectOf, cameraFit, usesCamera } from "../render/look";
+import { usesCamera } from "../render/look";
 import type { ModeStyle } from "../render/styles";
 import type { RenderFrame } from "../types";
 import { packSceneUniform } from "./frame-uniforms";
@@ -70,9 +70,10 @@ export class ScenePass {
    * Uploads this frame's dye and camera textures and records the scene pass
    * into `view`.
    *
-   * `video` is the fallback stream the renderer holds; `frame.video` wins. The
+   * `video` is this frame's stream (`frame.video`, else the renderer's). The
    * camera layer is skipped outright in a mode whose style tints it to black —
-   * running it would cost a full-frame upload to add exactly zero.
+   * running it would cost a full-frame upload to add exactly zero. `fit` is the
+   * frame's `viewFit` (`render/look.ts`), shared by the camera and the dye.
    */
   record(
     encoder: GPUCommandEncoder,
@@ -82,9 +83,8 @@ export class ScenePass {
     style: ModeStyle,
     intensity: number,
     time: number,
-    canvasW: number,
-    canvasH: number,
     video: HTMLVideoElement | null,
+    fit: readonly [number, number],
   ): void {
     const src = this.sources;
     src.uploadGrid(src.dyeTex, frame.dye);
@@ -92,20 +92,14 @@ export class ScenePass {
     const wantCamera =
       usesCamera(style) &&
       (frame.mode === "camera" || frame.mode === "blend" || frame.showCamera);
-    const v = frame.video ?? video;
-    const hasVideo = wantCamera && this.uploadVideo(v);
-
-    const [camScaleX, camScaleY] = cameraFit(
-      aspectOf(canvasW, canvasH, 1),
-      hasVideo && v ? aspectOf(v.videoWidth, v.videoHeight, 0) : 0,
-    );
+    const hasVideo = wantCamera && this.uploadVideo(video);
 
     packSceneUniform(this.scratch, {
       style,
       fluidW: FLUID_W,
       fluidH: FLUID_H,
-      camScaleX,
-      camScaleY,
+      viewFitX: fit[0],
+      viewFitY: fit[1],
       videoTexW: src.videoTexW,
       videoTexH: src.videoTexH,
       hasVideo,

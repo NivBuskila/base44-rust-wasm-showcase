@@ -40,7 +40,8 @@ export function aspectOf(w: number, h: number, fallback: number): number {
  * Cover fit: crop the long axis so the feed fills the canvas at its own aspect
  * ratio, as the pair of scales the scene shader multiplies its camera uv by.
  * Letterboxing would put black bars inside the simulation, and stretching would
- * make gestures land off their landmarks.
+ * distort the person in it. See {@link viewFit} for why the crop applies to more
+ * than the camera.
  */
 export function cameraFit(
   canvasAspect: number,
@@ -49,6 +50,36 @@ export function cameraFit(
   const canvas = Math.max(1e-6, canvasAspect);
   const video = videoAspect > 0 ? videoAspect : canvas;
   return video > canvas ? [canvas / video, 1] : [1, video / canvas];
+}
+
+/**
+ * The part of the camera frame the canvas shows, as {@link cameraFit} scales,
+ * applied to every layer rather than to the camera alone.
+ *
+ * The dye, the particles, the skeleton and the obstacle all live in the camera
+ * frame's normalised space: the mask, the landmarks and the flow plane are
+ * each taken from the whole frame. Cropping only the camera layer shows a hand
+ * magnified away from the centre, while the skeleton, the spell it casts and
+ * the fluid it parts stay where the uncropped frame put them, so whenever the
+ * canvas is not the camera's shape (a 16:10 laptop in full screen, a phone,
+ * a 4:3 webcam) the hand on screen and the hand the engine sees drift apart,
+ * the most at the edges. Every layer therefore samples or places through this
+ * one crop: a screen uv `s` shows the frame at `(s - 0.5) * fit + 0.5`, and a
+ * point `p` in the frame is drawn at `(p - 0.5) / fit + 0.5`.
+ *
+ * The crop follows the stream, not the camera layer: with no camera there is
+ * nothing to line up with and the field fills the canvas, and hiding the feed
+ * must not move the field.
+ */
+export function viewFit(
+  canvasW: number,
+  canvasH: number,
+  video: { readonly videoWidth: number; readonly videoHeight: number } | null,
+): [number, number] {
+  return cameraFit(
+    aspectOf(canvasW, canvasH, 1),
+    video ? aspectOf(video.videoWidth, video.videoHeight, 0) : 0,
+  );
 }
 
 /**

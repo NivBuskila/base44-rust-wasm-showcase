@@ -30,8 +30,12 @@ uniform sampler2D u_noise;
 /** Dye grid dimensions in cells, and their reciprocal. */
 uniform vec2 u_dyeSize;
 uniform vec2 u_dyeTexel;
-/** Cover-fit crop for the camera, applied around the centre of the frame. */
-uniform vec2 u_camScale;
+/**
+ * The crop of the camera frame the canvas shows (\`viewFit\` in \`look.ts\`),
+ * around the centre. The camera and the dye both sample through it, so the
+ * fluid stays on the person the feed shows.
+ */
+uniform vec2 u_viewFit;
 uniform vec2 u_videoTexel;
 uniform vec3 u_camTint;
 uniform vec3 u_camEdge;
@@ -163,7 +167,10 @@ void main() {
   // Row 0 of the dye field is the top of the screen, but GL samples with y up.
   // Every source is read with v flipped here rather than flipping the uploads,
   // which would cost a copy per frame.
-  vec2 duv = vec2(v_uv.x, 1.0 - v_uv.y);
+  vec2 suv = vec2(v_uv.x, 1.0 - v_uv.y);
+  // The dye is in the camera frame's space, so it takes the camera's crop; the
+  // background below is screen decoration and does not.
+  vec2 duv = (suv - 0.5) * u_viewFit + 0.5;
   vec3 radiance = vec3(0.0);
 
   if (u_bgAmount > 0.0) {
@@ -174,7 +181,7 @@ void main() {
     vec3 base = mix(vec3(0.00120, 0.00185, 0.00460), vec3(0.00016, 0.00024, 0.00070),
                     smoothstep(0.06, 0.78, r));
     // A slow nebula keeps an idle frame from reading as a dead flat gradient.
-    float neb = texture(u_noise, duv * vec2(0.22, 0.13) + vec2(u_time * 0.004, -u_time * 0.003)).r;
+    float neb = texture(u_noise, suv * vec2(0.22, 0.13) + vec2(u_time * 0.004, -u_time * 0.003)).r;
     base += vec3(0.00035, 0.00110, 0.00330) * neb * (0.3 + 1.2 * u_intensity);
     radiance += base * u_bgAmount;
   }
@@ -184,7 +191,7 @@ void main() {
     // view the user sees, so a raw feed would make every gesture land on the
     // wrong side of the screen.
     vec2 iuv = vec2(1.0 - v_uv.x, 1.0 - v_uv.y);
-    radiance += treatedCamera((iuv - 0.5) * u_camScale + 0.5);
+    radiance += treatedCamera((iuv - 0.5) * u_viewFit + 0.5);
   }
 
   if (u_dyeAmount > 0.0) radiance += dyeRadiance(duv) * u_dyeAmount;

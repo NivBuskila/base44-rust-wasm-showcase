@@ -15,6 +15,7 @@ layout(location = 0) in vec4 a_particle; // x, y in [0,1]; heat in [0,1]; life i
 uniform float u_size;      // base point diameter, device pixels
 uniform float u_gain;      // energy normalisation for the pool size
 uniform float u_intensity;
+uniform vec2 u_viewFit;    // the camera crop the canvas shows; see viewFit in look.ts
 
 out vec4 v_col;            // rgb = premultiplied radiance, a = spark weight
 
@@ -47,8 +48,10 @@ void main() {
     return;
   }
 
-  // Grid row 0 is the top of the screen; clip space has y up.
-  gl_Position = vec4(vec2(p.x, 1.0 - p.y) * 2.0 - 1.0, 0.0, 1.0);
+  // Grid row 0 is the top of the screen; clip space has y up. The pool is in
+  // the camera frame's space, so it takes the same crop as the feed.
+  vec2 view = (p - 0.5) / u_viewFit + 0.5;
+  gl_Position = vec4(vec2(view.x, 1.0 - view.y) * 2.0 - 1.0, 0.0, 1.0);
 
   float heat = clamp(a_particle.z, 0.0, 1.0);
   // Life runs 1 -> 0. The smoothstep gives the last instants a fast fade and

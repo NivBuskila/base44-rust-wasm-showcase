@@ -44,7 +44,7 @@ export class HandOverlay {
   /**
    * Draws the bones and joints into `target`. `strength` is the style's overlay
    * weight and `pointScale` folds dpr and the scene scale into the joint size,
-   * so the dots keep their on-screen size.
+   * so the dots keep their on-screen size. `fit` is the frame's `viewFit`.
    */
   draw(
     program: Program,
@@ -52,6 +52,7 @@ export class HandOverlay {
     hands: Float32Array,
     strength: number,
     pointScale: number,
+    fit: readonly [number, number],
   ): void {
     const mesh = buildHandMesh(hands, this.scratch);
     const vertices = mesh.lineVertices + mesh.pointVertices;
@@ -71,6 +72,7 @@ export class HandOverlay {
 
     program.use();
     program.f1("u_alpha", strength);
+    program.f2("u_viewFit", fit[0], fit[1]);
     program.f3("u_tint", 0.55, 0.88, 1.0);
 
     target.bind();
