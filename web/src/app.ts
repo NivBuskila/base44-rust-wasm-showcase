@@ -237,6 +237,8 @@ export class App {
       this.engine.set_particles_alive(this.renderer.particlesAlive?.() ?? 0);
     }
 
+    // Warm-up frames still move the ladder; the tier from before them comes
+    // back once the models are warm. See `PerformanceGovernor.setHold`.
     this.governor.setHold(this.perception.warming);
     this.governor.update(this.clock.fps, realDt * 1000);
     this.overdrive.update(stats, this.clock.fps, t.stepMs);

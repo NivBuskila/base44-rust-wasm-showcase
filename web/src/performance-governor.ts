@@ -75,14 +75,6 @@ const SETTLE_MS = 750;
 const SETTLE_FRAMES = 20;
 /** One stalled frame (tab switch, GC) counts for no more than this. */
 const MAX_DT_MS = 250;
-/**
- * Longest a warm-up hold is honoured. MediaPipe's cold start (model load plus
- * lazy GPU shader compilation) steals frames for ~10 s on a first visit; judged
- * on those, the governor dropped to the bottom rung and then spent 4 s per rung
- * climbing back, so first-time visitors saw ~15 s of degraded frames. The cap
- * keeps a device whose perception never finishes from going unadapted.
- */
-const MAX_HOLD_MS = 30000;
 
 export class PerformanceGovernor {
   private readonly knobs: QualityKnobs;
@@ -98,7 +90,8 @@ export class PerformanceGovernor {
   private settleFrames = SETTLE_FRAMES;
   private paused = false;
   private held = false;
-  private heldMs = 0;
+  /** The tier in effect when the current hold began; see `setHold`. */
+  private restoreTier = 0;
 
   constructor(knobs: QualityKnobs, basePressure: number, baseParticles: number) {
     this.knobs = knobs;
@@ -150,26 +143,37 @@ export class PerformanceGovernor {
   }
 
   /**
-   * Holds judgment (without changing the tier) while a transient load such as
-   * the vision models' warm-up is stealing frames. Bounded by `MAX_HOLD_MS`.
+   * Marks a transient load, such as the vision models' warm-up, that steals
+   * frames for seconds and then stops.
+   *
+   * The ladder keeps moving through it: a frame dropped to a cold start is
+   * still a dropped frame, and a rung the device can hold under that load is a
+   * better first impression than a stutter at one it cannot. What the hold
+   * changes is the way back. Judged on warm-up frames alone, the governor fell
+   * to the bottom rung and then needed `UP_MS` per rung to climb, so a machine
+   * that keeps 60 fps once warm spent ~15 s degraded — and a phone, which never
+   * reaches `UP_FPS`, stayed at the bottom for good. So the tier in effect when
+   * the hold began is restored when it ends and judged afresh: a device that can
+   * hold it keeps it at once, one that cannot is back down within `DOWN_MS` and
+   * a settle window.
    */
   setHold(hold: boolean): void {
     if (hold === this.held) return;
     this.held = hold;
-    // Releasing starts a fresh settle window, so the fps average left over
-    // from the warm-up is not judged.
-    if (!hold) this.resetWindows();
+    if (hold) {
+      this.restoreTier = this.tier;
+      return;
+    }
+    // Only ever back up the ladder: a rung climbed during the hold was earned
+    // under the extra load. Paused means the user's own settings, untouched.
+    if (!this.paused && this.tier > this.restoreTier) this.apply(this.restoreTier);
+    else this.resetWindows();
   }
 
   /** Once per frame, with the loop's smoothed frame rate and the real delta. */
   update(fps: number, dtMs: number): void {
     if (this.paused) return;
     const dt = Math.min(MAX_DT_MS, Math.max(0, dtMs));
-    if (this.held && this.heldMs < MAX_HOLD_MS) {
-      this.heldMs += dt;
-      this.resetWindows();
-      return;
-    }
     // The first frames of a session are dominated by shader compilation and
     // the first WASM step; judging quality on them drops tiers for nothing.
     if (this.settleMs > 0 || this.settleFrames > 0) {
