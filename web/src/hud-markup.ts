@@ -67,7 +67,10 @@ function legendRow(g: GestureSpec, live: boolean): string {
 function paramRow(p: ParamSpec): string {
   return `
     <label class="p-row">
-      <span class="p-key">${esc(p.label)}</span>
+      <span class="p-key"
+        >${esc(p.label)}<span class="p-help" tabindex="0" aria-label="${esc(p.hint)}">?</span
+        ><span class="p-tip" role="tooltip">${esc(p.hint)}</span></span
+      >
       <input
         type="range"
         data-param="${p.key}"

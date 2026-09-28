@@ -56,6 +56,8 @@ export const CELLS: readonly CellSpec[] = [
 export interface ParamSpec {
   readonly key: string;
   readonly label: string;
+  /** One sentence shown when hovering the row's (?) mark. */
+  readonly hint: string;
   readonly min: number;
   readonly max: number;
   readonly step: number;
@@ -82,36 +84,36 @@ export function thousands(v: number): string {
  * state at construction, and sending these on boot would be a pointless write.
  */
 export const PARAMS: readonly ParamSpec[] = [
-  { key: 'vorticity', label: 'vorticity', min: 0, max: 60, step: 0.5, value: 14, fmt: d1 },
+  { key: 'vorticity', label: 'vorticity', hint: 'Amplifies small swirls in the flow so the fluid curls and eddies more.', min: 0, max: 60, step: 0.5, value: 14, fmt: d1 },
   // Both dissipations clamp to 0..10 in Rust, but past ~3 per second the field
   // is gone inside a frame or two and the whole top of the travel is the same
   // black screen, so the slider stops where the range is still expressive.
-  { key: 'dye_dissipation', label: 'dye decay', min: 0, max: 3, step: 0.01, value: 1, fmt: d2 },
+  { key: 'dye_dissipation', label: 'dye decay', hint: 'How fast the coloured dye fades away after it is painted.', min: 0, max: 3, step: 0.01, value: 1, fmt: d2 },
   {
     key: 'velocity_dissipation',
-    label: 'flow decay',
+    label: 'flow decay', hint: 'How fast motion in the fluid dies down when nothing is stirring it.',
     min: 0,
     max: 2,
     step: 0.01,
     value: 0.3,
     fmt: d2,
   },
-  { key: 'hand_force', label: 'hand force', min: 0, max: 8, step: 0.05, value: 1, fmt: d2 },
-  { key: 'flow_force', label: 'flow force', min: 0, max: 8, step: 0.05, value: 0.45, fmt: d2 },
-  { key: 'curl_influence', label: 'curl swirl', min: 0, max: 20, step: 0.1, value: 2.2, fmt: d1 },
+  { key: 'hand_force', label: 'hand force', hint: 'How strongly your hand movements push the fluid.', min: 0, max: 8, step: 0.05, value: 1, fmt: d2 },
+  { key: 'flow_force', label: 'flow force', hint: 'How strongly camera motion (optical flow) pushes the fluid.', min: 0, max: 8, step: 0.05, value: 0.45, fmt: d2 },
+  { key: 'curl_influence', label: 'curl swirl', hint: 'How much particles are twisted along the swirling curl of the flow.', min: 0, max: 20, step: 0.1, value: 2.2, fmt: d1 },
   {
     key: 'time_scale',
-    label: 'time scale',
+    label: 'time scale', hint: 'Speeds up or slows down the whole simulation.',
     min: 0.05,
     max: 4,
     step: 0.05,
     value: 1,
     fmt: (v) => `${v.toFixed(2)}×`,
   },
-  { key: 'body_push', label: 'body push', min: 0, max: 4, step: 0.05, value: 1, fmt: d2 },
+  { key: 'body_push', label: 'body push', hint: 'How strongly your body silhouette shoves the fluid aside.', min: 0, max: 4, step: 0.05, value: 1, fmt: d2 },
   {
     key: 'spawn_rate',
-    label: 'spawn rate',
+    label: 'spawn rate', hint: 'How many new particles are emitted every second.',
     min: 0,
     max: 400_000,
     step: 2_000,
@@ -123,7 +125,7 @@ export const PARAMS: readonly ParamSpec[] = [
   // instead of dissolving under the hand holding it.
   {
     key: 'particle_life',
-    label: 'particle life',
+    label: 'particle life', hint: 'How long each particle lives before it respawns somewhere random.',
     min: 0.2,
     max: 30,
     step: 0.1,
