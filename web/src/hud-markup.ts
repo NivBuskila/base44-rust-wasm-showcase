@@ -68,7 +68,7 @@ function paramRow(p: ParamSpec): string {
   return `
     <label class="p-row">
       <span class="p-key"
-        >${esc(p.label)}<span class="p-help" tabindex="0" aria-label="${esc(p.hint)}">?</span
+        >${esc(p.label)}<button type="button" class="p-help" aria-label="${esc(p.hint)}">?</button
         ><span class="p-tip" role="tooltip">${esc(p.hint)}</span></span
       >
       <input

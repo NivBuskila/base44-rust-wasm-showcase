@@ -128,7 +128,12 @@
   width: 11px;
   height: 11px;
   margin-left: 4px;
+  padding: 0;
+  position: relative;
   border: 1px solid currentColor;
+  background: none;
+  color: inherit;
+  font-family: inherit;
   border-radius: 50%;
   font-size: 7.5px;
   line-height: 1;
@@ -138,8 +143,15 @@
   pointer-events: auto;
 }
 
+/* Larger invisible tap target for fingers. */
+.p-help::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+}
+
 .p-help:hover,
-.p-help:focus-visible {
+.p-help:focus {
   opacity: 1;
   color: var(--accent);
 }
@@ -165,7 +177,7 @@
 }
 
 .p-help:hover + .p-tip,
-.p-help:focus-visible + .p-tip {
+.p-help:focus + .p-tip {
   opacity: 1;
   visibility: visible;
 }
