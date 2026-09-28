@@ -7,7 +7,8 @@
  *   costs more than the whole simulation step, so the panel repaints at 10 Hz
  *   and every timing accumulates its **peak** between paints. Peak-hold, not
  *   the sample that happened to land on the paint tick: a 40 ms hitch every
- *   300 ms is precisely what a frame-budget readout must not hide.
+ *   300 ms is precisely what a frame-budget readout must not hide. The fps
+ *   digits are the exception, the delivered rate; see `hud-frame-timer.ts`.
  * - The DOM is built exactly once, in the constructor. `update` only writes
  *   `textContent`, `data-*` flags and CSS custom properties, and only when the
  *   value changed — no `innerHTML`, no element creation, no layout reads.
