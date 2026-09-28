@@ -50,6 +50,13 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* iOS inflates text after a rotation to landscape unless told not to, which
+   would undo every size the responsive rules tune. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
 #stage {
   position: fixed;
   inset: 0;

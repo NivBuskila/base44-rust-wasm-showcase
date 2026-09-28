@@ -141,6 +141,25 @@ describe('PerformanceGovernor', () => {
     expect(knobs.setParticleCount).toHaveBeenLastCalledWith(BASE_PARTICLES);
   });
 
+  it('a phone can start down the ladder and still climb back', () => {
+    const { knobs, governor, feed } = rig();
+    governor.startAt(2);
+    expect(governor.level).toBe(2);
+    expect(knobs.setRenderScale).toHaveBeenLastCalledWith(0.72);
+    expect(knobs.setParticleCount).toHaveBeenLastCalledWith(Math.round(BASE_PARTICLES * 0.7));
+
+    feed(62.5, settleAt(62.5) + framesFor(UP_MS, 62.5));
+    expect(governor.level).toBe(1);
+  });
+
+  it('clamps a start tier to the ladder', () => {
+    const { governor } = rig();
+    governor.startAt(99);
+    expect(governor.level).toBe(3);
+    governor.startAt(-4);
+    expect(governor.level).toBe(0);
+  });
+
   it('ignores garbage frame rates', () => {
     const { governor } = settled();
     for (const fps of [NaN, Infinity, -Infinity, 0, -5]) {

@@ -51,6 +51,13 @@ export async function ensureCrossOriginIsolation(): Promise<void> {
   // localhost cannot register one.
   if (!window.isSecureContext) return;
 
+  // The worker exists to restore a header a proxy stripped. If the header
+  // arrived and the page is still not isolated, the browser cannot honour it
+  // (Safari has no `credentialless`), and a reload would only cost every
+  // iPhone visitor a second boot for the same single-threaded result.
+  // Only without a controller: a controlling worker adds the header itself.
+  if (!navigator.serviceWorker.controller && (await embedderPolicyArrived())) return;
+
   try {
     const existing = await navigator.serviceWorker.getRegistration('/');
 
@@ -84,5 +91,19 @@ export async function ensureCrossOriginIsolation(): Promise<void> {
     await new Promise<void>(() => {});
   } catch (err) {
     console.warn('[aether] could not enable cross-origin isolation', err);
+  }
+}
+
+/**
+ * Whether this document's origin already sends `Cross-Origin-Embedder-Policy`.
+ * A HEAD of the current URL is the only way to read response headers from the
+ * page; any failure answers "no", which keeps the Service Worker path.
+ */
+async function embedderPolicyArrived(): Promise<boolean> {
+  try {
+    const res = await fetch(location.href, { method: 'HEAD', cache: 'no-store' });
+    return res.headers.has('cross-origin-embedder-policy');
+  } catch {
+    return false;
   }
 }

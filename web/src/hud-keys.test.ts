@@ -58,4 +58,12 @@ describe('statusLine', () => {
     expect(line.tone).toBe('warn');
     expect(line.why).toContain('No camera.');
   });
+
+  it('does not promise optical flow without a camera', () => {
+    const line = statusLine({ kind: 'unavailable', reason: 'Camera denied.', noCamera: true });
+    expect(line.head).toBe('no camera');
+    expect(line.why).toContain('Camera denied.');
+    expect(line.why).toContain('Drag to stir');
+    expect(line.why).not.toContain('Move, and the fluid still answers');
+  });
 });

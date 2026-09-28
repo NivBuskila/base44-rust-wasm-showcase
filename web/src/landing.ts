@@ -15,6 +15,7 @@
  * `.done` (hidden, no pointer events) so it can never eat a gesture.
  */
 
+import { coarsePointer } from './device-hints';
 import { watchHand, type HandWatch } from './landing-hand';
 
 const SEEN_KEY = 'aether.landing.seen';
@@ -179,7 +180,17 @@ function build(root: HTMLElement, full: boolean) {
     );
     const cta = el('div', 'landing-cta');
     cta.append(enter, el('span', 'landing-hand', 'or raise a hand to the camera'));
-    foot.append(cta, el('p', 'landing-note', 'camera optional · H controls · T tutorial'));
+    // Keys mean nothing on a phone; what a phone visitor needs to know is that
+    // declining the camera still leaves something to play with.
+    const note = coarsePointer()
+      ? 'camera optional · no camera? drag to stir'
+      : 'camera optional · H controls · T tutorial';
+    foot.append(
+      cta,
+      el('p', 'landing-note', note),
+      // Shown by the stylesheet only on a phone held upright: the field is 16:9.
+      el('p', 'landing-rotate', 'turn your phone sideways — the field is widescreen'),
+    );
   }
   frame.append(foot);
   root.append(frame);

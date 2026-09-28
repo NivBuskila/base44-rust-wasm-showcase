@@ -72,6 +72,8 @@ export class PerceptionPump {
   private fallingBack = false;
   private sourceVersion = 0;
   status: PerceptionStatus = { kind: 'loading' };
+  /** The worker whose models are still loading, so `close` can stop it. */
+  private booting: WorkerPerception | null = null;
   /**
    * The most recent packed hand buffer, kept for the renderer's landmark
    * overlay. Held by reference — perception reuses its own arrays, so this
@@ -276,12 +278,16 @@ export class PerceptionPump {
     let offloaded: WorkerPerception | null = null;
     try {
       offloaded = new WorkerPerception();
+      this.booting = offloaded;
       await offloaded.init();
       return offloaded;
     } catch (err) {
-      console.warn('[aether] perception worker unusable, running inference inline', err);
       offloaded?.close();
-      return this.closed ? null : new MediaPipePerception();
+      if (this.closed) return null;
+      console.warn('[aether] perception worker unusable, running inference inline', err);
+      return new MediaPipePerception();
+    } finally {
+      this.booting = null;
     }
   }
 
@@ -390,5 +396,9 @@ export class PerceptionPump {
     this.sourceVersion++;
     this.source?.close();
     this.source = null;
+    // A worker still loading the models (the camera was just denied) is
+    // stopped too, rather than left to download ~26 MB nobody will use.
+    this.booting?.close();
+    this.booting = null;
   }
 }

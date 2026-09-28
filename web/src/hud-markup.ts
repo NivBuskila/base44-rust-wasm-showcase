@@ -203,7 +203,8 @@ export function markup(): string {
   </aside>
 
   <div class="hud-hint" aria-hidden="true">
-    <b>show your hands</b>
+    <b data-hint-head>show your hands</b>
+    <span class="hint-note" data-hint-note hidden></span>
     <div class="chips">${chips}</div>
     <span class="hint-keys">? gesture guide &middot; H hide</span>
   </div>

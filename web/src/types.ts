@@ -34,7 +34,12 @@ export interface PerceptionFrame {
 export type PerceptionStatus =
   | { kind: 'loading' }
   | { kind: 'ready'; delegate: 'GPU' | 'CPU' }
-  | { kind: 'unavailable'; reason: string };
+  | {
+      kind: 'unavailable';
+      reason: string;
+      /** There is no camera at all, so not even optical flow can run. */
+      noCamera?: true;
+    };
 
 /**
  * Landmark + segmentation source. The real implementation wraps MediaPipe;

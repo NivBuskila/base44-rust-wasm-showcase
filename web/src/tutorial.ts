@@ -295,8 +295,8 @@ export class GestureTutorial {
     this.paintGoal('release');
     this.hand.textContent = 'you know the spells';
     this.effect.textContent = 'combos are live again — chain the poses together';
-    this.how.textContent = 'the spellbook in the panel shows every sequence';
-    this.setNote('press ? for two-hand duets and thrown bolts');
+    this.how.textContent = 'the spellbook (bottom right) tracks every sequence';
+    this.setNote('press ? for the full reference');
     this.next.textContent = 'done';
     this.setCharge(1);
   }

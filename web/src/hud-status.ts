@@ -32,6 +32,13 @@ export function statusLine(p: PerceptionStatus): StatusLine {
       tone: 'wait',
     };
   }
+  if (p.noCamera) {
+    return {
+      head: 'no camera',
+      why: `${p.reason} Drag to stir the fluid.`,
+      tone: 'warn',
+    };
+  }
   return {
     head: 'optical flow only',
     why: `${p.reason} Move, and the fluid still answers.`,

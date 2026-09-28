@@ -1,5 +1,11 @@
 /* Responsive ------------------------------------------------------------- */
 
+/* The welcome's rotate prompt is for portrait phones only (last block). It is
+   in flow, so it can never cover the Enter button. */
+.landing-rotate {
+  display: none;
+}
+
 @media (max-width: 620px) {
   :root {
     --gut: 8px;
@@ -45,7 +51,7 @@
   }
 
   /* The panel spans the top on a phone, so the tutorial card moves to the
-     bottom; the spellbook it would cover is idle anyway (practice mode). */
+     bottom; the spellbook it would cover is hidden below (practice mode). */
   .tut {
     top: auto;
     left: max(var(--gut), env(safe-area-inset-left));
@@ -53,7 +59,117 @@
     width: auto;
   }
 
+  /* Capped so the book never spans the screen; a long duet wraps its pips
+     instead of running off the left edge. */
+  #hud .hud-combos {
+    max-width: calc(100% - 28px);
+  }
+
+  #hud .cb-pips {
+    flex-wrap: wrap;
+    row-gap: 3px;
+  }
+
+  #hud .cb-pip {
+    white-space: nowrap;
+  }
+
+  /* The strip is wider than a phone: the tag takes a row, the cells the next.
+     `max-content`, or `left: 50%` would shrink-wrap it to half the screen. */
+  #hud .od-banner {
+    width: max-content;
+    max-width: calc(100% - 2 * var(--gut));
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px 12px;
+  }
+
+  #hud .od-tag {
+    flex-basis: 100%;
+    padding-right: 0;
+    border-right: 0;
+    text-align: center;
+  }
+
+  #hud .od-cell {
+    min-width: 0;
+  }
+
+  #hud .od-cell i {
+    letter-spacing: 0.06em;
+  }
+
+  /* Both sit at the bottom: the book steps up over the two-row strip. */
+  #hud:has(.od-banner:not([hidden])) .hud-combos {
+    bottom: calc(max(18px, env(safe-area-inset-bottom)) + 78px);
+  }
+}
+
+/* A portrait phone: the welcome takes the full width. */
+@media (max-width: 420px) {
+  /* The hairline moves out with the content, or the lede would cross it. */
+  #boot::before {
+    inset: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right))
+      max(10px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
+  }
+
+  /* 11.8vw of side padding left ~166px for a ~216px label. The content is
+     centred, so the shorter top/bottom only matters on a short screen (SE). */
+  .landing-frame {
+    padding: max(32px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right))
+      max(32px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  }
+
+  #boot.compact .landing-foot {
+    gap: 24px;
+  }
+
+  .landing-log {
+    font-size: 13px;
+    letter-spacing: 0.04em;
+  }
+
+  /* One line, one width in every state: CALIBRATING → ENTER used to wrap and
+     grow the pill 68 → 84px. 12.3em is 15 glyphs at this tracking. */
+  .landing-enter {
+    gap: 14px;
+    padding: 18px 22px 18px 28px;
+    letter-spacing: 0.22em;
+  }
+
+  /* The clip keeps wider scramble glyphs (▚░▓) from pushing the pill. */
+  .landing-enter-label {
+    min-width: 12.3em;
+    max-width: 12.3em;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .landing-note {
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-align: center;
+  }
+}
+
+/* Any phone, either way up. */
+@media (max-width: 620px), (max-height: 520px) {
+  /* Duets are the widest rows and need two hands in frame: shown only while
+     one is cast. Unpainted rows have no state, hence the positive test. */
+  #hud .cb-section + .cb-section:not(:has(.cb-row[data-state='casting'], .cb-row[data-state='fired'])) {
+    display: none;
+  }
+
+  /* The book waits out the hint and the tutorial card: both share its bottom
+     edge, and both teach the single spells its sequences are built from. */
+  #hud:has(.hud-hint:not(.is-gone)) .hud-combos,
   #hud:has(.tut:not([hidden])) .hud-combos {
+    display: none;
+  }
+
+  /* Its own rule, so a browser without `:has()` still honours it: spells need
+     a camera, and without one the book is a list of things nobody can cast. */
+  #hud[data-camera='off'] .hud-combos {
     display: none;
   }
 }
@@ -67,5 +183,271 @@
   .hud-hint .chips {
     display: none;
   }
+
+  /* Welcome: ~340px visible under Safari's bars, and the revealed console
+     needed ~510px, so Enter fell below the fold. This fits it in ~320px. */
+  #boot::before {
+    inset: 10px max(10px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom))
+      max(10px, env(safe-area-inset-left));
+  }
+
+  .landing-frame {
+    padding: max(14px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right))
+      max(14px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
+  }
+
+  #boot.compact .landing-frame {
+    gap: 14px;
+  }
+
+  /* Title and state on one row: height is the scarce axis here. */
+  #boot.compact .landing-head {
+    flex-direction: row;
+    gap: 20px;
+  }
+
+  .landing-title {
+    gap: 14px;
+  }
+
+  .landing-title h1 {
+    font-size: 24px;
+  }
+
+  .landing-state {
+    font-size: 13px;
+  }
+
+  .landing-lede {
+    max-width: 56ch;
+    font-size: 14px;
+    line-height: 1.45;
+  }
+
+  #boot.compact .landing-foot {
+    gap: 12px;
+  }
+
+  .landing-cta {
+    gap: 8px;
+  }
+
+  .landing-enter {
+    gap: 16px;
+    padding: 14px 24px 14px 30px;
+    font-size: 14px;
+  }
+
+  /* 13.5em is 15 glyphs at .3em tracking: one width from CALIBRATING through
+     the scramble to ENTER THE FIELD. */
+  .landing-enter-label {
+    min-width: 13.5em;
+    max-width: 13.5em;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+
+  .landing-enter-arrow {
+    font-size: 18px;
+  }
+
+  .landing-hand {
+    font-size: 12px;
+  }
+
+  .landing-note {
+    font-size: 10px;
+  }
+
+  /* Spellbook: the same rows on a tighter rhythm. */
+  #hud .hud-combos {
+    gap: 2px;
+    padding: 6px 9px 7px;
+  }
+
+  #hud .cb-section {
+    gap: 2px;
+  }
+
+  #hud .cb-section + .cb-section:not([hidden]) {
+    margin-top: 4px;
+  }
+
+  #hud .cb-title,
+  #hud .cb-pip {
+    line-height: 1.2;
+  }
+
+  #hud .cb-pip {
+    padding: 2px 6px;
+  }
+
+  /* Tutorial: a short, wide card (~400×190, was ~85% of the height), the hand
+     beside the words; it scrolls rather than run off the bottom. */
+  .tut {
+    width: min(400px, 48vw);
+    max-height: calc(100dvh - 2 * var(--gut));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    gap: 6px;
+    padding: 9px 12px;
+  }
+
+  .tut-body {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .tut-pair {
+    gap: 6px;
+  }
+
+  .tut-art {
+    width: 56px;
+    height: 56px;
+  }
+
+  .tut-goal {
+    width: 46px;
+    height: 46px;
+  }
+
+  .tut-arrow svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .tut-num {
+    font-size: 44px;
+  }
+
+  .tut-text {
+    flex: 1;
+    min-width: 0;
+    gap: 4px;
+  }
+
+  .tut-text b {
+    font-size: 16px;
+  }
+
+  .tut-how {
+    font-size: 11px;
+    line-height: 1.4;
+  }
+
+  /* Overdrive: the ≤720px strip, and the book steps up over it. */
+  #hud .od-banner {
+    gap: 12px;
+    padding: 8px 12px;
+  }
+
+  #hud .od-src {
+    display: none;
+  }
+
+  #hud .od-cell b {
+    font-size: 15px;
+  }
+
+  #hud:has(.od-banner:not([hidden])) .hud-combos {
+    bottom: calc(max(18px, env(safe-area-inset-bottom)) + 58px);
+  }
 }
 
+/* Touch ------------------------------------------------------------------ */
+
+/* A fingertip, not a cursor: 40px icon buttons, 36px text buttons, fatter
+   slider thumbs. A mouse never matches. */
+@media (pointer: coarse) {
+  .hud-acts {
+    gap: 8px;
+  }
+
+  .ico-btn {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+  }
+
+  .ico-btn svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .tut-btn {
+    min-height: 36px;
+    padding: 6px 14px;
+  }
+
+  .seg-btn {
+    min-height: 36px;
+  }
+
+  .row-btn {
+    margin-top: 8px;
+    padding: 11px 12px 12px;
+  }
+
+  input[type='range'] {
+    height: 28px;
+  }
+
+  input[type='range']::-webkit-slider-thumb {
+    width: 20px;
+    height: 20px;
+    margin-top: -9px;
+  }
+
+  input[type='range']::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+  }
+
+  /* Font floor: these overlays are read in a glance at arm's length, where
+     7.5–9px is below what a phone shows legibly. */
+  #hud .cb-title,
+  #hud .cb-name,
+  #hud .cb-pip,
+  #hud .od-tag,
+  #hud .od-cell i,
+  #hud .od-src,
+  .hint-keys,
+  .tut-head,
+  .tut-btn,
+  .tut-note {
+    font-size: 10px;
+  }
+
+  /* Fits "supernova" at 10px, so every row's pips start in one column. */
+  #hud .cb-name {
+    min-width: 66px;
+  }
+}
+
+/* No hover, no keyboard: key hints are noise on a phone. */
+@media (hover: none) and (pointer: coarse) {
+  .hint-keys {
+    display: none;
+  }
+}
+
+/* The field is widescreen, so a portrait phone is nudged to turn; it unfolds
+   with the rest of the welcome, after the note. */
+@media (orientation: portrait) and (pointer: coarse) {
+  #boot.revealed .landing-rotate {
+    display: block;
+    max-width: 20em;
+    margin: 0;
+    color: #5d7189;
+    font-size: 11px;
+    line-height: 1.5;
+    letter-spacing: 0.12em;
+    text-align: center;
+    text-transform: uppercase;
+    text-wrap: balance;
+    animation: landing-reveal 900ms cubic-bezier(0.2, 0.8, 0.2, 1) 1000ms backwards;
+  }
+}

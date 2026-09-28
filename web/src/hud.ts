@@ -60,6 +60,8 @@ export class Hud {
   /** Every readout in the panel; see `hud-telemetry.ts`. */
   private readonly telemetry: Telemetry;
   private readonly hintEl: HTMLElement;
+  private readonly hintHead: HTMLElement;
+  private readonly hintNote: HTMLElement;
   private readonly helpEl: HTMLElement;
   private readonly modeBtns: HTMLButtonElement[] = [];
   private readonly camBtn: HTMLButtonElement;
@@ -89,6 +91,8 @@ export class Hud {
     this.collapseBtn = this.q('[data-act="collapse"]');
     this.telemetry = new Telemetry(this.root);
     this.hintEl = this.q(".hud-hint");
+    this.hintHead = this.q("[data-hint-head]");
+    this.hintNote = this.q("[data-hint-note]");
     this.helpEl = this.q(".hud-help");
     this.camBtn = this.q('[data-act="camera"]');
     this.camValue = this.q("[data-camera-value]");
@@ -164,6 +168,23 @@ export class Hud {
    */
   stage(): void {
     this.staged = true;
+  }
+
+  /**
+   * No camera: the hint stops asking for hands and says what does work, and
+   * `data-camera` lets the stylesheet drop what cannot (the spellbook, the
+   * gesture chips). Called once, after the camera attempt.
+   */
+  setCameraAvailable(available: boolean, inApp: boolean): void {
+    this.root.dataset.camera = available ? "on" : "off";
+    if (available) return;
+    this.hintHead.textContent = "drag to stir the fluid";
+    this.hintNote.textContent = inApp
+      ? "for hand control, open this page in Safari or Chrome"
+      : "allow the camera and reload for hand spells";
+    this.hintNote.hidden = false;
+    this.camValue.textContent = "n/a";
+    this.camBtn.disabled = true;
   }
 
   /** Shows which engine build is running; static for the session. */
