@@ -26,6 +26,7 @@ Non-obvious rules only: what the README and the manifests do not say. Each bulle
 
 - `.github/workflows/deploy.yml` builds both WASM variants in Actions, because Cloudflare's image can't run the nightly build. It self-hosts the MediaPipe runtime and models, then deploys `web/dist`. The README lists the settings it needs.
 - Deploy runs on `workflow_run` of the workflow named `CI`, only after it succeeds on a push to `main`, so it also waits on the Playwright job. Renaming `ci.yml`'s `name:` silently stops deploys, so rename both.
+- A CI run that passes uploads a `ci-passed-<tree>` artifact for the git tree it tested (a pull request tests its merge into `main`). A push to `main` whose tree has one from this repository skips every job, so a merged PR deploys in minutes. A direct push, or a PR merged after `main` moved, gets the full run. The skip keys on the tree, so any input to a job that is not in the tree (a new toolchain, the models download) is not covered by it.
 - `og:url` and `og:image` in `web/index.html` use `%VITE_SITE_URL%`, because crawlers need absolute URLs. `web/.env` holds the dev default, and the deploy workflow overrides it.
 - Production-only pitfall: the minifier turns an indirect `eval` into a direct one, which breaks the perception worker ("ModuleFactory not set"). `worker-import-scripts.ts` therefore calls `globalThis.eval`. After a build, check with `grep responseText web/dist/assets/perception.worker-*.js`.
 - `web/public/_headers` sends COOP/COEP. Pages caps files at 25 MB, and the largest dist file is about 12 MB.

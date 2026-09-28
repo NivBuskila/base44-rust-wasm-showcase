@@ -9,9 +9,55 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# `actions: read` lets the first job look up the record the last job leaves.
+permissions:
+  contents: read
+  actions: read
+
 jobs:
+  # A merged pull request usually lands on main as the exact tree its own run
+  # already passed, and running the same 20 minutes again on that tree only
+  # delays the deploy. Every run that passes records the tree it tested (for a
+  # pull request that is GitHub's merge of it into main); a push whose tree
+  # carries such a record skips the jobs below, the run still succeeds, and the
+  # deploy starts at once. Anything else is tested in full: a direct push, and
+  # a pull request whose tested merge is not what landed because main moved.
+  # Only this repository's own runs count, never a fork's.
+  tested:
+    name: Tree already tested
+    runs-on: ubuntu-latest
+    outputs:
+      tree: ${{ steps.check.outputs.tree }}
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          tree=$(git rev-parse 'HEAD^{tree}')
+          echo "tree=$tree" >> "$GITHUB_OUTPUT"
+          skip=false
+          # A failed lookup only costs the full run, never a skip.
+          if [ "$EVENT" = push ]; then
+            runs=$(gh api "repos/$REPO/actions/artifacts?name=ci-passed-$tree" --jq '
+              [.artifacts[]
+                | select(.expired | not)
+                | select(.workflow_run.head_repository_id == .workflow_run.repository_id)
+                | .workflow_run.id] | unique | map(tostring) | join(" ")') || runs=""
+            if [ -n "$runs" ]; then
+              skip=true
+              echo "Tree $tree already passed CI in run(s) $runs; skipping the jobs." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   rust:
     name: Rust (fmt, clippy, test)
+    needs: tested
+    if: needs.tested.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +77,8 @@ jobs:
 
   web:
     name: Web (wasm build, typecheck, unit tests)
+    needs: tested
+    if: needs.tested.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,7 +115,8 @@ jobs:
 
   e2e:
     name: Browser (Playwright, headless)
-    needs: web
+    needs: [tested, web]
+    if: needs.tested.outputs.skip != 'true'
     runs-on: ubuntu-latest
     # 17-18 minutes of SwiftShader when healthy (the phone suite boots the app
     # five times at 3x DPR); runners vary ~1.7x, and the cap catches a hang.
@@ -108,3 +157,19 @@ jobs:
           name: playwright-results
           path: web/test-results
           retention-days: 7
+
+  # Runs only when every job above passed, so the record means the whole run.
+  passed:
+    name: Record the tested tree
+    needs: [tested, rust, web, e2e]
+    if: needs.tested.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "${{ needs.tested.outputs.tree }}" > tested-tree.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-passed-${{ needs.tested.outputs.tree }}
+          path: tested-tree.txt
+          retention-days: 30
+          # A re-run of a failed job must be able to record the pass.
+          overwrite: true
