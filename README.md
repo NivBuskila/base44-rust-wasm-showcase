@@ -8,8 +8,8 @@
 
 [![Aether](web/public/og.png)](https://aether-physics.xyz)
 
-A gesture-driven fluid reality engine. Stand in front of a webcam and move smoke
-with your hands.
+A real-time fluid simulation in the browser, driven by hand tracking through
+your webcam.
 
 An incompressible Navier–Stokes solver and a particle system of 120,000 (up to
 a million in overdrive), written in Rust and compiled to WebAssembly, driven in
