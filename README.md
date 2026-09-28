@@ -38,7 +38,7 @@ real control over memory layout. So `aether-core` is a dependency-free Rust
 crate holding the entire simulation, and the browser layer does capture,
 inference and rendering.
 
-**Two models, not five.** `GestureRecognizer` returns hand landmarks *and* a
+**Two models, not four.** `GestureRecognizer` returns hand landmarks *and* a
 canned gesture label from one inference. `PoseLandmarker` with
 `outputSegmentationMasks` returns body joints *and* the silhouette from one
 inference. Naively you would reach for four separate tasks — hands, gestures,
@@ -64,7 +64,8 @@ WebGPU adapter a second backend takes over and also *simulates* the particles in
 a compute pass, replaying the engine's per-frame op log so both backends see the
 same spells. The colour grading, bloom and sizing arithmetic are shared
 TypeScript, so a look change is made once — only the shader packing is per
-backend. `?gpu=off` / `?gpu=on` override the gate.
+backend. Phones and tablets stay on WebGL2 by default. `?gpu=off` / `?gpu=on`
+override the gate.
 
 **The simulation is testable on the host.** `aether-core` compiles for x86 and
 wasm32 from the same source with no `cfg` divergence in the algorithms, so the
@@ -118,10 +119,11 @@ What you should see:
   `window.__aether.diagnostics().renderBackend` (`webgl2` or `webgpu`).
 - The moment a hand is seen, the gesture tutorial opens by itself and walks you
   through each spell. Reopen it any time with `T` or the panel's book button;
-  `H` or `?` shows the key reference.
+  `?` shows the key reference and `H` hides the panel.
 
 Without a camera (or with permission denied) the app still runs: the fluid
-drives itself and the HUD says why perception is off.
+drives itself, a finger or the mouse stirs it, and the HUD says why hand
+tracking is off.
 
 <details>
 <summary>No local Rust or Node? Run it in Docker</summary>
@@ -142,6 +144,7 @@ The first boot takes a few minutes while the toolchains download.
 | `?gpu=off` / `?gpu=on` | force the WebGL2 or the WebGPU renderer |
 | `?rscale=0.5` | pin the internal render scale (WebGL2 path) |
 | `?perception=off` | skip the models entirely — optical flow only |
+| `?welcome` | replay the first-visit welcome |
 
 ### The multithreaded engine
 
@@ -214,20 +217,23 @@ into a nova by accident.
 A performance governor watches the smoothed frame rate and steps quality down —
 internal resolution first, then pressure iterations, then pool size — and back
 up as headroom returns. Overdrive (`O`) jumps to the full million-particle pool
-and shows a throughput strip. A set of parameter presets gives the nine sliders
-starting points worth seeing. `window.__aether.diagnostics()` exposes the
+and shows a throughput strip. A set of parameter presets gives the ten sliders
+starting points worth seeing. A phone starts two rungs down and climbs from
+there. `window.__aether.diagnostics()` exposes the
 engine tier, render backend, quality tier and perception state for debugging.
 
 ## Architecture
 
 ```
-web/                              TypeScript, no framework
+web/src/                          TypeScript, no framework
 ├── main.ts                       boot + the window.__aether test hooks
 ├── app.ts                        the App object and the frame loop
 ├── frame-clock.ts / frame-timings.ts
 ├── engine-loader.ts              picks threaded vs baseline wasm at boot
 ├── engine-views.ts               typed-array views over WASM memory
 ├── camera.ts                     getUserMedia + Rec. 709 luma downscale
+├── pointer-stir.ts               no camera: the pointer drives the optical flow
+├── landing.ts                    the loader and first-visit welcome
 ├── perception.ts                 MediaPipe session: GestureRecognizer + PoseLandmarker
 ├── perception.worker.ts          the same, in a module worker
 ├── perception/                   graphs, duty-cycle limiter, result packing
@@ -337,10 +343,11 @@ Two numbers that are *not* the engine, recorded so they are not misread:
 ## Testing
 
 ```bash
-cargo test --workspace     # 237 tests: the simulation, on the host
-cd web && npm run typecheck
-cd web && npm run test:unit # 206 tests: the TypeScript that needs no browser (vitest)
-cd web && npm run test:e2e  # 36 tests: the browser, headless, no webcam (Playwright)
+cargo test --workspace  # 237 tests: the simulation, on the host
+cd web
+npm run typecheck
+npm run test:unit       # 220 tests: the TypeScript that needs no browser (vitest)
+npm run test:e2e        # 42 tests: the browser, headless, no webcam (Playwright)
 ```
 
 The unit suite covers what used to be reachable only through a canvas: the
@@ -361,11 +368,14 @@ no GPU**:
   exercises the whole chain from landmarks to latched spells to pixels without
   needing a real hand in front of a real camera.
 - WebGL2 runs on SwiftShader.
+- The phone suite runs the app at four iPhone sizes, upright and sideways, with
+  a touch screen: the welcome must fit, no overlay may leave the screen or
+  cover another, and a drag must stir the fluid when the camera is denied.
 
 The suite runs against the production build (`vite preview`), so build first
 (`npx vite build`, after the WASM engines). The perception suite also needs the
 vendored runtime (`npm run sync:mp`, part of `npm install`) and the models
-(`npm run fetch:models`). A full run takes about 15 minutes on a 4-core machine,
+(`npm run fetch:models`). A full run takes about 12 minutes on a 4-core machine,
 most of it SwiftShader. On a machine where Playwright's own browser download is
 unavailable, point it at an existing Chromium with
 `AETHER_CHROMIUM=/path/to/chromium`.
