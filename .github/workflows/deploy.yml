@@ -51,6 +51,14 @@ jobs:
       # self-hosted too so the app does not depend on Google's CDN.
       - run: npm ci
         working-directory: web
+      # Same key as ci.yml's e2e job. This runs on main, so the entry it saves
+      # is the one pull requests restore, including after a CI run on main that
+      # skipped its jobs. No restore-keys: fetch-models keeps any model file
+      # already present, so an older cache would be used silently.
+      - uses: actions/cache@v4
+        with:
+          path: web/public/models
+          key: mediapipe-models-${{ hashFiles('scripts/fetch-models.mjs') }}
       - run: npm run fetch:models
         working-directory: web
       - run: npm run build

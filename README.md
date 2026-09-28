@@ -397,7 +397,8 @@ SwiftShader with the real models; it takes about 17 to 18 minutes, and a push to
 `main` deploys only once it has passed too. A run that passes records the git
 tree it tested, so when a merged pull request lands on `main` as exactly the
 tree its own run passed, the push skips the jobs instead of repeating them and
-the deploy starts straight away.
+the deploy starts straight away. Any tree without that record, such as a direct
+push or a pull request merged after `main` moved on, is tested in full.
 
 ## Deploying
 

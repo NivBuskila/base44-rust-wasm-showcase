@@ -18,11 +18,15 @@ jobs:
   # A merged pull request usually lands on main as the exact tree its own run
   # already passed, and running the same 20 minutes again on that tree only
   # delays the deploy. Every run that passes records the tree it tested (for a
-  # pull request that is GitHub's merge of it into main); a push whose tree
-  # carries such a record skips the jobs below, the run still succeeds, and the
-  # deploy starts at once. Anything else is tested in full: a direct push, and
-  # a pull request whose tested merge is not what landed because main moved.
-  # Only this repository's own runs count, never a fork's.
+  # pull request, GitHub's merge of it into main as of the run's event), and
+  # the record counts for 14 days. A push whose tree has one skips every job
+  # below, the run still succeeds, and the deploy starts at once; that is
+  # usually a merge, but a revert back to a tested tree skips too. Any other
+  # tree is tested in full: a direct push, or a pull request merged after main
+  # moved (re-running its CI reuses the old merge; push to the branch to
+  # refresh it). Only this repository's own runs count, never a fork's.
+  # Every job that gates the deploy must carry `needs: tested` and the skip
+  # `if`, and be listed in `passed.needs`.
   tested:
     name: Tree already tested
     runs-on: ubuntu-latest
@@ -36,17 +40,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           REPO: ${{ github.repository }}
+          REPO_ID: ${{ github.repository_id }}
         run: |
           tree=$(git rev-parse 'HEAD^{tree}')
           echo "tree=$tree" >> "$GITHUB_OUTPUT"
           skip=false
           # A failed lookup only costs the full run, never a skip.
           if [ "$EVENT" = push ]; then
-            runs=$(gh api "repos/$REPO/actions/artifacts?name=ci-passed-$tree" --jq '
-              [.artifacts[]
-                | select(.expired | not)
-                | select(.workflow_run.head_repository_id == .workflow_run.repository_id)
-                | .workflow_run.id] | unique | map(tostring) | join(" ")') || runs=""
+            # A record whose producing run is missing or not this repository's
+            # own (a fork's pull request) never counts.
+            runs=$(gh api "repos/$REPO/actions/artifacts?name=ci-passed-$tree&per_page=100" --jq '
+              ($ENV.REPO_ID | tonumber) as $repo
+              | [.artifacts[]
+                | select(.expired == false)
+                | select(.workflow_run != null
+                    and .workflow_run.repository_id == $repo
+                    and .workflow_run.head_repository_id == $repo)
+                | .workflow_run.id
+                | select(. != null)] | unique | map(tostring) | join(" ")') || runs=""
             if [ -n "$runs" ]; then
               skip=true
               echo "Tree $tree already passed CI in run(s) $runs; skipping the jobs." >> "$GITHUB_STEP_SUMMARY"
@@ -170,6 +181,9 @@ jobs:
         with:
           name: ci-passed-${{ needs.tested.outputs.tree }}
           path: tested-tree.txt
-          retention-days: 30
-          # A re-run of a failed job must be able to record the pass.
+          retention-days: 14
+          # Re-running a run that already passed uploads this name again.
           overwrite: true
+        # A missing record only costs a full run later; it must not fail a
+        # run that passed, which would hold back that tree's deploy.
+        continue-on-error: true
