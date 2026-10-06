@@ -100,16 +100,8 @@
   font-size: 19px;
   font-weight: 400;
   line-height: 1;
-  color: var(--accent);
+  color: #c4b5fd;
   transition: color 200ms ease;
-}
-
-.hud-fps b[data-tone='warn'] {
-  color: var(--warn);
-}
-
-.hud-fps b[data-tone='over'] {
-  color: var(--over);
 }
 
 .hud-fps span {
