@@ -1,0 +1,24 @@
+/* Shared styles for the static info pages (home/, about/). */
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 17px/1.65 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  background: radial-gradient(ellipse at top, #0b1430, #040510 70%);
+  color: #d8e2f0;
+  min-height: 100vh;
+}
+.site-nav {
+  display: flex; align-items: center; gap: 1.5rem;
+  max-width: 880px; margin: 0 auto; padding: 1.25rem 1.5rem;
+}
+.site-nav .brand { font-weight: 700; letter-spacing: 0.2em; color: #00d0ff; text-decoration: none; margin-right: auto; }
+.site-nav a { color: #aab6c8; text-decoration: none; }
+.site-nav a:hover, .site-nav a[aria-current='page'] { color: #fff; }
+.site-nav .cta { color: #040510; background: #00d0ff; padding: 0.4rem 0.9rem; border-radius: 999px; font-weight: 600; }
+.site-nav .cta:hover { color: #040510; background: #5fe3ff; }
+main { max-width: 880px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+h1 { font-size: clamp(2rem, 5vw, 3.2rem); line-height: 1.15; margin: 1rem 0 1.5rem; color: #fff; }
+h2 { color: #fff; margin-top: 2.5rem; }
+a { color: #00d0ff; }
+.lead { font-size: 1.2rem; color: #e6edf7; }

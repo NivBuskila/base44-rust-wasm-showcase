@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="How Aether works: Rust and WebAssembly fluid physics with in-browser hand tracking." />
+    <title>Aether — About</title>
+    <link rel="stylesheet" href="/src/site.css" />
+  </head>
+  <body>
+    <nav class="site-nav" aria-label="Main">
+      <a class="brand" href="/home/">AETHER</a>
+      <a href="/home/">Home</a>
+      <a href="/about/" aria-current="page">About</a>
+      <a class="cta" href="/">Launch Aether</a>
+    </nav>
+    <main>
+      <h1>About Aether</h1>
+      <p class="lead">
+        Aether began as an experiment in making physics feel tangible: what if a fluid simulation
+        responded to your body as naturally as water responds to a hand trailing through it?
+      </p>
+      <h2>How it works</h2>
+      <p>
+        The core engine is written in Rust. Each frame it advects velocity and dye through a grid,
+        diffuses them, and projects the result so the fluid stays incompressible. Compiled to
+        WebAssembly, the same code runs in a single thread everywhere and, on browsers that allow
+        cross-origin isolation, across several Web Workers in parallel for extra detail.
+      </p>
+      <p>
+        A separate perception worker runs hand-tracking models locally to find your fingertips and
+        palms, and recognises gestures such as pinches and open hands. Those signals become forces and
+        colour sources inside the simulation. A performance governor watches the frame rate and quietly
+        trades resolution for smoothness when your device needs it.
+      </p>
+      <h2>Privacy</h2>
+      <p>
+        Aether has no server-side processing and no accounts. Your camera images never leave your
+        device, and no tracking data is collected. Close the tab, and everything is gone.
+      </p>
+    </main>
+  </body>
+</html>

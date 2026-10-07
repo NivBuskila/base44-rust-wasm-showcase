@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Aether is a real-time, gesture-driven fluid simulation that runs entirely in your browser." />
+    <title>Aether — Home</title>
+    <link rel="stylesheet" href="/src/site.css" />
+  </head>
+  <body>
+    <nav class="site-nav" aria-label="Main">
+      <a class="brand" href="/home/">AETHER</a>
+      <a href="/home/" aria-current="page">Home</a>
+      <a href="/about/">About</a>
+      <a class="cta" href="/">Launch Aether</a>
+    </nav>
+    <main>
+      <h1>Paint with light and liquid, using only your hands</h1>
+      <p class="lead">
+        Aether is a real-time fluid simulation that lives in your browser tab. Point your webcam at
+        yourself, move your hands, and watch glowing currents of colour swirl, split and merge in
+        response to every gesture you make.
+      </p>
+      <p>
+        Under the surface, a physics engine written in Rust and compiled to WebAssembly solves the
+        equations of an incompressible fluid many times per second, while on-device hand tracking
+        turns your fingers into brushes, emitters and obstacles. Nothing is uploaded: the camera feed
+        and every calculation stay on your own device, so it is private by design.
+      </p>
+      <h2>What you can do</h2>
+      <p>
+        Stir the field with an open palm, pinch to pour bright dye, or bring both hands together to
+        create vortices that spin off across the screen. No camera? Aether falls back to an ambient
+        simulation you can stir with your mouse or finger. It adapts its quality to your hardware,
+        using multithreading and WebGPU where available, so it stays smooth on laptops and phones alike.
+      </p>
+      <p><a href="/">Launch Aether now</a> or <a href="/about/">learn how it works</a>.</p>
+    </main>
+  </body>
+</html>

@@ -66,6 +66,14 @@ export default defineConfig({
     // the JS chunk and defeat browser caching of the models.
     assetsInlineLimit: 4096,
     sourcemap: true,
+    // Multi-page: the simulation at / plus the static info pages.
+    rollupOptions: {
+      input: {
+        main: 'index.html',
+        home: 'home/index.html',
+        about: 'about/index.html',
+      },
+    },
   },
   // wasm-pack's `--target web` output fetches aether_bg.wasm via
   // `new URL(..., import.meta.url)`, which Vite handles natively. Excluding it
