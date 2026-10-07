@@ -29,6 +29,7 @@ jobs:
     permissions:
       contents: read
       deployments: write
+      issues: write
     steps:
       # The commit CI tested, not whatever main points at by the time this runs.
       - uses: actions/checkout@v4
@@ -47,6 +48,40 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
+      # Performance gate: holds the deploy when the median per-frame engine
+      # step of the baseline build exceeds 50 ms (BENCH_LIMIT_MS).
+      - name: Benchmark WASM engine step
+        id: bench
+        continue-on-error: true
+        run: node scripts/benchmark-wasm.mjs wasm-benchmark.json
+      - name: Report benchmark
+        if: always()
+        run: |
+          {
+            echo "## WASM engine step benchmark"
+            echo
+            echo '| frames | median ms | p95 ms | max ms | mean ms | limit ms | result |'
+            echo '|---|---|---|---|---|---|---|'
+            jq -r '"| \(.frames) | \(.medianMs) | \(.p95Ms) | \(.maxMs) | \(.meanMs) | \(.limitMs) | \(if .passed then "pass" else "**FAIL: deploy held**" end) |"' wasm-benchmark.json
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wasm-benchmark
+          path: wasm-benchmark.json
+      - name: Alert engineering team
+        if: steps.bench.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create urgent --color B60205 --description "Needs immediate attention" 2>/dev/null || true
+          gh label create performance --color FBCA04 2>/dev/null || true
+          gh issue create --label urgent --label performance \
+            --title "URGENT: deploy held, WASM engine step over 50 ms (${SHA:0:7})" \
+            --body "$(printf 'The deploy of `%s` was held because the WASM performance benchmark failed.\n\n```json\n%s\n```\n\nRun: %s' "$SHA" "$(cat wasm-benchmark.json 2>/dev/null || echo 'benchmark did not produce metrics')" "$RUN_URL")"
+          exit 1
       # `npm ci` vendors the MediaPipe runtime (postinstall); the models are
       # self-hosted too so the app does not depend on Google's CDN.
       - run: npm ci
